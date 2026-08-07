@@ -1,5 +1,9 @@
 package com.bingbaihanji.bdec.decompiler;
 
+import com.bingbaihanji.bdec.BdecConfig;
+import com.bingbaihanji.bdec.BdecResult;
+import com.bingbaihanji.bdec.DecompileContext;
+
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.Map;
@@ -47,8 +51,8 @@ public interface Decompiler extends AutoCloseable {
      * @param classBytes   字节码数据
      * @return 反编译结果对象
      */
-    default DecompileResult decompile(String internalName, byte[] classBytes) {
-        return decompile(internalName, classBytes, DecompileContext.EMPTY);
+    default BdecResult decompile(String internalName, byte[] classBytes) {
+        return decompile(internalName, classBytes, DecompileContext.empty(BdecConfig.defaults()));
     }
 
     /**
@@ -59,7 +63,7 @@ public interface Decompiler extends AutoCloseable {
      * @param context      反编译上下文（包含依赖加载器、自定义选项等）
      * @return 反编译结果对象
      */
-    DecompileResult decompile(String internalName, byte[] classBytes, DecompileContext context);
+    BdecResult decompile(String internalName, byte[] classBytes, DecompileContext context);
 
     /**
      * 便捷方法：直接从本地文件系统反编译 Class 文件
@@ -68,7 +72,7 @@ public interface Decompiler extends AutoCloseable {
      * @param context   反编译上下文
      * @return 反编译结果对象
      */
-    default DecompileResult decompile(Path classFile, DecompileContext context) {
+    default BdecResult decompile(Path classFile, DecompileContext context) {
         try {
             byte[] bytes = java.nio.file.Files.readAllBytes(classFile);
             // 简单从文件推导类名的默认处理，具体可由具体实现重写解析
@@ -78,7 +82,7 @@ public interface Decompiler extends AutoCloseable {
                     : fileName;
             return decompile(nameWithoutExt, bytes, context);
         } catch (Exception e) {
-            return DecompileResult.error(e);
+            return BdecResult.error(e);
         }
     }
 

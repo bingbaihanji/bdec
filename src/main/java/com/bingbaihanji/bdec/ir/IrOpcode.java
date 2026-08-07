@@ -1,0 +1,33 @@
+package com.bingbaihanji.bdec.ir;
+
+public enum IrOpcode {
+    CONST,
+    CONST_STRING,
+    LOAD,
+    STORE,
+    PHI,
+    STACK_LOAD,
+    STACK_STORE,
+    UNARY,
+    BINARY,
+    COMPARE,
+    CAST,
+    INSTANCE_OF,
+    FIELD_LOAD,
+    FIELD_STORE,
+    ARRAY_LOAD,
+    ARRAY_STORE,
+    ARRAY_LENGTH,
+    INVOKE,
+    NEW,
+    NEW_ARRAY,
+    NEW_PRIMITIVE_ARRAY,
+    CONDITION,
+    SWITCH,
+    RETURN,
+    THROW,
+    TERNARY,
+    INC,
+    MONITOR_ENTER,
+    MONITOR_EXIT
+}

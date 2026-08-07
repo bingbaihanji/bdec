@@ -5,8 +5,8 @@
  * 大对象或创建成本高的对象的生命周期管理等需要控制资源分配的场景 
  *
  * <ul>
- * <li>{@link com.bingbaihanji.common.framework.utils.pool.ObjectPool} — 通用对象池</li>
- * <li>{@link com.bingbaihanji.common.framework.utils.pool.FixedSizePool} — 固定大小对象池</li>
+ * <li>{@link ObjectPool} — 通用对象池</li>
+ * <li>{@link FixedSizePool} — 固定大小对象池</li>
  * </ul>
  *
  * @author 冰白寒祭
