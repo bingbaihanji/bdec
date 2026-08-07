@@ -1,12 +1,5 @@
 package com.bingbaihanji.bdec.decompiler.ast;
 
-import java.util.List;
-
+/** Stub — to be implemented in later phases. */
 public interface AstNode {
-
-    AstKind kind();
-
-    List<AstNode> children();
-
-    <R, C> R accept(AstVisitor<R, C> visitor, C context);
 }
