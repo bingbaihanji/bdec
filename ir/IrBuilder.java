@@ -451,6 +451,12 @@ public final class IrBuilder {
         if (v == null) {
             v = lookupReadVar(variables, idx, type);
         }
+        // Ensure the variable has its LVT name even if it came from a predecessor's
+        // frame state (where createWriteVar may have missed it for non-zero versions)
+        if (v instanceof Variable var && currentLvtNames.containsKey(idx)
+                && (var.name() == null || var.name().startsWith("var"))) {
+            var.setName(currentLvtNames.get(idx));
+        }
         emitLoad(v, instructions, offset, blockId);
         stack.push(v);
     }
@@ -879,17 +885,36 @@ public final class IrBuilder {
 
     private void handleCondition(Opcode op, Deque<Value> stack,
                                  List<IrInstruction> instructions, int offset, int blockId) {
-        Value right = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
-        Value left = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
-        instructions.add(new IrInstruction(nextId(), IrOpcode.CONDITION,
-                JavaType.INT, List.of(left, right), offset, blockId, op.code(), null));
+        // Distinguish zero-comparisons (IFEQ..IFLE: one operand vs 0)
+        // from int-comparisons (IF_ICMPxx: two operands).
+        // For IFxx, the stack has ONE value and we compare it against 0.
+        // Make the stack value the LEFT operand so "capacity > 0" reads correctly.
+        boolean isIfCmp = switch (op) {
+            case IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE,
+                 IF_ACMPEQ, IF_ACMPNE -> true;
+            default -> false;
+        };
+        if (isIfCmp) {
+            // Two-operand pop order: right first, then left (standard JVM semantics)
+            Value right = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
+            Value left = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
+            instructions.add(new IrInstruction(nextId(), IrOpcode.CONDITION,
+                    JavaType.INT, List.of(left, right), offset, blockId, op.code(), null));
+        } else {
+            // IFxx — one operand: the stack value is the value being compared against 0
+            // Put value as LEFT, 0 as RIGHT so e.g. IFGT produces "capacity > 0"
+            Value val = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
+            instructions.add(new IrInstruction(nextId(), IrOpcode.CONDITION,
+                    JavaType.INT, List.of(val, new ConstantValue(0, JavaType.INT)),
+                    offset, blockId, op.code(), null));
+        }
     }
 
     private void handleNullCheck(Opcode op, Deque<Value> stack, List<IrInstruction> instructions,
                                  int offset, int blockId) {
         Value ref = !stack.isEmpty() ? stack.pop() : ConstantValue.NULL;
         instructions.add(new IrInstruction(nextId(), IrOpcode.CONDITION,
-                JavaType.INT, List.of(ref), offset, blockId, op.code(), null));
+                JavaType.INT, List.of(ref, ConstantValue.NULL), offset, blockId, op.code(), null));
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -929,6 +954,10 @@ public final class IrBuilder {
             }
         }
         Variable v = new Variable(slot, maxVersion + 1, type, false, slot);
+        // Carry forward LVT name so new versions retain original parameter names
+        if (currentLvtNames.containsKey(slot)) {
+            v.setName(currentLvtNames.get(slot));
+        }
         variables.add(v);
         return v;
     }

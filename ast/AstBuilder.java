@@ -125,11 +125,31 @@ public class AstBuilder {
         return new CompilationUnit(pkg, importList, List.of(td));
     }
 
-    /** Build parameter names from slot indices. Uses local var table when available. */
+    /** Build parameter names from the local variable table when available,
+     *  falling back to sequential "paramN" names. */
     private String[] buildParameterNames(MethodModel method) {
-        String[] names = new String[method.parameterTypes().length];
-        for (int i = 0; i < names.length; i++) {
-            names[i] = "param" + i;
+        int paramCount = method.parameterTypes().length;
+        String[] names = new String[paramCount];
+        var lvt = method.localVarNames();
+
+        // In non-static methods, slot 0 is "this", so parameters start at slot 1.
+        // In static methods, parameters start at slot 0.
+        // Category-2 types (long/double) take two slots.
+        int slot = method.isStatic() ? 0 : 1;
+
+        for (int i = 0; i < paramCount; i++) {
+            // Try LVT name first
+            String lvtName = lvt.get(slot);
+            if (lvtName != null && !lvtName.isEmpty()) {
+                names[i] = lvtName;
+            } else {
+                names[i] = "param" + i;
+            }
+            // Advance past this parameter's slot(s)
+            JavaType pt = method.parameterTypes()[i];
+            boolean cat2 = pt != null && (pt.kind() == com.bingbaihanji.bdec.type.TypeKind.LONG
+                    || pt.kind() == com.bingbaihanji.bdec.type.TypeKind.DOUBLE);
+            slot += cat2 ? 2 : 1;
         }
         return names;
     }
