@@ -209,7 +209,7 @@ public final class BlockReducer {
 
             // if-else: build proper IfStatement with both then and else bodies
             if (ifInfo != null) {
-                Expression cond = extractCondition(group, ir);
+                Expression cond = simplifyCondition(extractCondition(group, ir));
 
                 // Translate then-body: find the group(s) containing then-blocks
                 Statement thenBody = translateBranchBody(ifInfo.thenBlocks(), groups, ir, consumed);
@@ -220,6 +220,11 @@ public final class BlockReducer {
                     elseBody = translateBranchBody(ifInfo.elseBlocks(), groups, ir, consumed);
                 }
 
+                // Eliminate empty else blocks — don't emit "else { }"
+                if (elseBody != null && isEmptyBlock(elseBody)) {
+                    elseBody = null;
+                }
+
                 s = new IfStatement(cond != null ? cond : new VarExpr("/*condition*/"),
                         thenBody != null ? thenBody : new BlockStatement(List.of()),
                         elseBody);
@@ -228,7 +233,7 @@ public final class BlockReducer {
             else if (loopInfo != null) {
                 s = translateGroup(group, ir);
                 if (s != null && !isEmptyBlock(s)) {
-                    Expression cond = extractCondition(group, ir);
+                    Expression cond = simplifyCondition(extractCondition(group, ir));
                     s = new LoopStatement(LoopStatement.LoopKind.WHILE,
                             cond != null ? cond : new VarExpr("true"), s);
                 }
@@ -404,6 +409,58 @@ public final class BlockReducer {
             }
         }
         return null;
+    }
+
+    /** Simplify common boolean redundancy patterns:
+     *  {@code x == true} → {@code x}, {@code x != false} → {@code x},
+     *  {@code x == false} → {@code !x}, {@code x != true} → {@code !x}. */
+    private Expression simplifyCondition(Expression cond) {
+        if (cond == null) return null;
+        if (cond instanceof BinExpr bin) {
+            // Simplify left side: x == true → x, x != false → x
+            Expression left = simplifyCondition(bin.left());
+            Expression right = simplifyCondition(bin.right());
+            BinaryOperator op = bin.operator();
+
+            // Check for boolean literal comparisons
+            boolean rightIsTrue = isBooleanLit(right, true);
+            boolean rightIsFalse = isBooleanLit(right, false);
+            boolean leftIsTrue = isBooleanLit(left, true);
+            boolean leftIsFalse = isBooleanLit(left, false);
+
+            if ((op == BinaryOperator.EQ && rightIsTrue)
+                    || (op == BinaryOperator.NE && rightIsFalse)) {
+                // x == true → x,  x != false → x
+                return left;
+            }
+            if ((op == BinaryOperator.EQ && rightIsFalse)
+                    || (op == BinaryOperator.NE && rightIsTrue)) {
+                // x == false → !x,  x != true → !x
+                return new UnExpr(UnaryOperator.NOT, left);
+            }
+            if ((op == BinaryOperator.EQ && leftIsTrue)
+                    || (op == BinaryOperator.NE && leftIsFalse)) {
+                return right;
+            }
+            if ((op == BinaryOperator.EQ && leftIsFalse)
+                    || (op == BinaryOperator.NE && leftIsTrue)) {
+                return new UnExpr(UnaryOperator.NOT, right);
+            }
+
+            // Rebuild with simplified children
+            if (left != bin.left() || right != bin.right()) {
+                return new BinExpr(op, left, right);
+            }
+        }
+        return cond;
+    }
+
+    private static boolean isBooleanLit(Expression e, boolean expected) {
+        if (e instanceof LitExpr lit) {
+            Object v = lit.value();
+            return v instanceof Boolean b && b == expected;
+        }
+        return false;
     }
 
     // ── Group → Statement translation ──────────────────────────────

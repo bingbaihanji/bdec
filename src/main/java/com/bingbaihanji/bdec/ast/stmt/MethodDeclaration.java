@@ -19,15 +19,24 @@ public final class MethodDeclaration extends Statement {
 
     private final JavaType[] parameterTypes;
 
+    private final List<String> typeParameters;
+
     private final Statement body;
 
     public MethodDeclaration(int accessFlags, String name, JavaType returnType,
                              String[] paramNames, JavaType[] paramTypes, Statement body) {
+        this(accessFlags, name, returnType, paramNames, paramTypes, List.of(), body);
+    }
+
+    public MethodDeclaration(int accessFlags, String name, JavaType returnType,
+                             String[] paramNames, JavaType[] paramTypes,
+                             List<String> typeParameters, Statement body) {
         this.accessFlags = accessFlags;
         this.name = name;
         this.returnType = returnType;
         this.parameterNames = paramNames;
         this.parameterTypes = paramTypes;
+        this.typeParameters = List.copyOf(typeParameters);
         this.body = body;
     }
 
@@ -40,6 +49,8 @@ public final class MethodDeclaration extends Statement {
     public String[] parameterNames() {return parameterNames;}
 
     public JavaType[] parameterTypes() {return parameterTypes;}
+
+    public List<String> typeParameters() {return typeParameters;}
 
     public Statement body() {return body;}
 

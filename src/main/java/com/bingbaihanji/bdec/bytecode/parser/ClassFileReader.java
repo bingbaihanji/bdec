@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec.bytecode.parser;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
+import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.RecordComponentEntry;
 
 import java.io.ByteArrayInputStream;
@@ -74,6 +75,28 @@ public final class ClassFileReader {
         return classes;
     }
 
+    /** Parse the InnerClasses attribute. */
+    private List<InnerClassEntry> parseInnerClasses(DataInputStream in,
+                                                     ConstantPoolEntry[] pool)
+            throws IOException {
+        int count = in.readUnsignedShort();
+        List<InnerClassEntry> entries = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            int innerClassIdx = in.readUnsignedShort();
+            int outerClassIdx = in.readUnsignedShort();
+            int innerNameIdx = in.readUnsignedShort();
+            int innerAccess = in.readUnsignedShort();
+            String innerClass = innerClassIdx != 0
+                    ? ConstantPoolParser.className(pool, innerClassIdx) : null;
+            String outerClass = outerClassIdx != 0
+                    ? ConstantPoolParser.className(pool, outerClassIdx) : null;
+            String innerName = innerNameIdx != 0
+                    ? ConstantPoolParser.utf8(pool, innerNameIdx) : null;
+            entries.add(new InnerClassEntry(innerClass, outerClass, innerName, innerAccess));
+        }
+        return entries;
+    }
+
     public ClassFileModel read(String internalName, byte[] bytes) throws IOException {
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
 
@@ -113,6 +136,7 @@ public final class ClassFileReader {
         List<BootstrapMethodEntry> bootstrapMethods = Collections.emptyList();
         List<RecordComponentEntry> recordComponents = Collections.emptyList();
         List<String> permittedSubclasses = Collections.emptyList();
+        List<InnerClassEntry> innerClasses = Collections.emptyList();
         for (int i = 0; i < attrCount; i++) {
             int attrNameIdx = in.readUnsignedShort();
             int attrLen = in.readInt();
@@ -131,12 +155,15 @@ public final class ClassFileReader {
                 case "PermittedSubclasses" -> {
                     permittedSubclasses = parsePermittedSubclasses(in, pool);
                 }
+                case "InnerClasses" -> {
+                    innerClasses = parseInnerClasses(in, pool);
+                }
                 default -> in.skipBytes(attrLen);
             }
         }
 
         return new ClassFileModel(major, minor, accessFlags,
                 thisClassName, superName, interfaces, fields, methods, pool, signature,
-                bootstrapMethods, recordComponents, permittedSubclasses);
+                bootstrapMethods, recordComponents, permittedSubclasses, innerClasses);
     }
 }

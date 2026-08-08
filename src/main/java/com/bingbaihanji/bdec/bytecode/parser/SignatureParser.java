@@ -58,6 +58,16 @@ public final class SignatureParser {
     }
 
     /**
+     * Extract method-level type parameters from a method signature.
+     *
+     * Example: {@code <T:Ljava/lang/Object;>(TT;)TT;}
+     * → returns {@code ["T"]}
+     */
+    public static List<String> extractMethodTypeParams(String signature) {
+        return extractTypeParams(signature); // same format: <...> at start
+    }
+
+    /**
      * Convert a field or method parameter signature to a readable generic type name.
      *
      * Example: {@code Ljava/util/List<Ljava/lang/String;>;}
