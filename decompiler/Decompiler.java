@@ -75,15 +75,47 @@ public interface Decompiler extends AutoCloseable {
     default BdecResult decompile(Path classFile, DecompileContext context) {
         try {
             byte[] bytes = java.nio.file.Files.readAllBytes(classFile);
-            // 简单从文件推导类名的默认处理，具体可由具体实现重写解析
-            String fileName = classFile.getFileName().toString();
-            String nameWithoutExt = fileName.endsWith(".class")
-                    ? fileName.substring(0, fileName.length() - 6)
-                    : fileName;
-            return decompile(nameWithoutExt, bytes, context);
+            String internalName = deriveInternalName(classFile);
+            return decompile(internalName, bytes, context);
         } catch (Exception e) {
             return BdecResult.error(e);
         }
+    }
+
+    /** Derive internal name from a class file path, walking up for package directories. */
+    private String deriveInternalName(Path classFile) {
+        Path absolute = classFile.toAbsolutePath().normalize();
+        String fileName = absolute.getFileName().toString();
+        String baseName = fileName.endsWith(".class")
+                ? fileName.substring(0, fileName.length() - 6) : fileName;
+
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        parts.add(baseName);
+        Path parent = absolute.getParent();
+        while (parent != null) {
+            String dirName = parent.getFileName().toString();
+            if (dirName.isEmpty() || !isJavaIdentifier(dirName)) {
+                break;
+            }
+            parts.addFirst(dirName);
+            parent = parent.getParent();
+        }
+        return String.join("/", parts);
+    }
+
+    private boolean isJavaIdentifier(String s) {
+        if (s.isEmpty()) {
+            return false;
+        }
+        if (!Character.isJavaIdentifierStart(s.charAt(0))) {
+            return false;
+        }
+        for (int i = 1; i < s.length(); i++) {
+            if (!Character.isJavaIdentifierPart(s.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

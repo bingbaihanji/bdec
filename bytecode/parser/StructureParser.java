@@ -34,12 +34,16 @@ class StructureParser {
             JavaType type = TypeResolver.parseFieldDescriptor(desc);
 
             Object constValue = null;
+            String signature = "";
             int attrCount = in.readUnsignedShort();
             for (int a = 0; a < attrCount; a++) {
                 int attrNameIdx = in.readUnsignedShort();
                 int attrLen = in.readInt();
                 String attrName = ConstantPoolParser.utf8(pool, attrNameIdx);
-                if ("ConstantValue".equals(attrName)) {
+                if ("Signature".equals(attrName)) {
+                    int sigIdx = in.readUnsignedShort();
+                    signature = ConstantPoolParser.utf8(pool, sigIdx);
+                } else if ("ConstantValue".equals(attrName)) {
                     int cvIdx = in.readUnsignedShort();
                     ConstantPoolEntry entry = pool[cvIdx];
                     constValue = switch (entry) {
@@ -54,7 +58,7 @@ class StructureParser {
                     in.skipBytes(attrLen);
                 }
             }
-            fields.add(new FieldModel(accessFlags, name, type, constValue));
+            fields.add(new FieldModel(accessFlags, name, type, constValue, signature));
         }
         return fields;
     }
@@ -75,6 +79,7 @@ class StructureParser {
             List<Instruction> instructions = null;
             List<ExceptionHandlerModel> handlers = List.of();
             int maxStack = 0, maxLocals = 0;
+            String signature = "";
 
             int attrCount = in.readUnsignedShort();
             for (int a = 0; a < attrCount; a++) {
@@ -82,7 +87,10 @@ class StructureParser {
                 int attrLen = in.readInt();
                 String attrName = ConstantPoolParser.utf8(pool, attrNameIdx);
 
-                if ("Code".equals(attrName)) {
+                if ("Signature".equals(attrName)) {
+                    int sigIdx = in.readUnsignedShort();
+                    signature = ConstantPoolParser.utf8(pool, sigIdx);
+                } else if ("Code".equals(attrName)) {
                     maxStack = in.readUnsignedShort();
                     maxLocals = in.readUnsignedShort();
                     int codeLength = in.readInt();
@@ -113,7 +121,7 @@ class StructureParser {
                 }
             }
             methods.add(new MethodModel(accessFlags, name, desc, returnType, paramTypes,
-                    instructions, handlers, maxStack, maxLocals));
+                    instructions, handlers, maxStack, maxLocals, signature));
         }
         return methods;
     }

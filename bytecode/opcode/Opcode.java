@@ -240,10 +240,13 @@ public enum Opcode {
 
     // Switch (variable-length, decoded specially in InstructionDecoder)
     TABLESWITCH(170, "tableswitch", 0, -1, false, true, false, -1),
-    LOOKUPSWITCH(171, "lookupswitch", 0, -1, false, true, false, -1);
+    LOOKUPSWITCH(171, "lookupswitch", 0, -1, false, true, false, -1),
+
+    // InvokeDynamic (Java 7+ lambdas, string concat, method refs)
+    INVOKEDYNAMIC(186, "invokedynamic", 4, 0, false, false, false, -1);
 
     // Phase 1b adds: RET(169), WIDE(196),
-    // MULTIANEWARRAY(197), GOTO_W(200), INVOKEDYNAMIC(186)
+    // MULTIANEWARRAY(197), GOTO_W(200)
 
     private static final Map<Integer, Opcode> BY_CODE = new HashMap<>();
 

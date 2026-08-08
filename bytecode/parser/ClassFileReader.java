@@ -52,17 +52,20 @@ public final class ClassFileReader {
         var methods = structParser.parseMethods(in, pool, methodCount);
 
         int attrCount = in.readUnsignedShort();
+        String signature = "";
         for (int i = 0; i < attrCount; i++) {
-            skipAttribute(in);
+            int attrNameIdx = in.readUnsignedShort();
+            int attrLen = in.readInt();
+            String attrName = ConstantPoolParser.utf8(pool, attrNameIdx);
+            if ("Signature".equals(attrName)) {
+                int sigIdx = in.readUnsignedShort();
+                signature = ConstantPoolParser.utf8(pool, sigIdx);
+            } else {
+                in.skipBytes(attrLen);
+            }
         }
 
         return new ClassFileModel(major, minor, accessFlags,
-                thisClassName, superName, interfaces, fields, methods, pool);
-    }
-
-    private void skipAttribute(DataInputStream in) throws IOException {
-        in.readUnsignedShort();
-        int length = in.readInt();
-        in.skipBytes(length);
+                thisClassName, superName, interfaces, fields, methods, pool, signature);
     }
 }

@@ -161,7 +161,13 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             return;
         }
 
-        w.write(m.returnType().displayName()).space().write(methodName).write("(");
+        // Detect if this is a constructor (method name == class name)
+        boolean isConstructor = methodName.equals(className);
+        if (isConstructor) {
+            w.write(methodName).write("(");
+        } else {
+            w.write(m.returnType().displayName()).space().write(methodName).write("(");
+        }
 
         // Parameters
         for (int i = 0; i < m.parameterNames().length; i++) {

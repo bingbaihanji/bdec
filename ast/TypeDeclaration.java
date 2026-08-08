@@ -14,16 +14,26 @@ public final class TypeDeclaration implements AstNode {
 
     private final List<String> interfaceNames;
 
+    private final List<String> typeParameters;
+
     private final List<AstNode> members;
 
     public TypeDeclaration(int af, String sn, String kn, String superName,
-                           List<String> interfaceNames, List<AstNode> m) {
+                           List<String> interfaceNames, List<String> typeParams,
+                           List<AstNode> m) {
         this.accessFlags = af;
         this.simpleName = sn;
         this.kindName = kn;
         this.superName = superName;
         this.interfaceNames = List.copyOf(interfaceNames);
+        this.typeParameters = List.copyOf(typeParams);
         this.members = List.copyOf(m);
+    }
+
+    /** Backward-compatible constructor without type parameters. */
+    public TypeDeclaration(int af, String sn, String kn, String superName,
+                           List<String> interfaceNames, List<AstNode> m) {
+        this(af, sn, kn, superName, interfaceNames, List.of(), m);
     }
 
     public int accessFlags() {return accessFlags;}
@@ -35,6 +45,8 @@ public final class TypeDeclaration implements AstNode {
     public String superName() {return superName;}
 
     public List<String> interfaceNames() {return interfaceNames;}
+
+    public List<String> typeParameters() {return typeParameters;}
 
     public boolean isInterface() {return (accessFlags & 0x0200) != 0;}
 

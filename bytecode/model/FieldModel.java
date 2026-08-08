@@ -6,5 +6,12 @@ public record FieldModel(
         int accessFlags,
         String name,
         JavaType type,
-        Object constantValue
-) {}
+        Object constantValue,
+        String signature
+) {
+
+    /** Backward-compatible constructor without signature. */
+    public FieldModel(int accessFlags, String name, JavaType type, Object constantValue) {
+        this(accessFlags, name, type, constantValue, "");
+    }
+}
