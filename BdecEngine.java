@@ -5,9 +5,11 @@ import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.rewrite.AstRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.BoxingRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.EnumRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.LambdaRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.RewriteRule;
 import com.bingbaihanji.bdec.ast.rewrite.StringConcatRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.TernaryRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.TryResourceRewriter;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
 import com.bingbaihanji.bdec.bytecode.parser.ClassFileReader;
@@ -61,7 +63,8 @@ public class BdecEngine implements Decompiler {
     private final AstBuilder astBuilder = new AstBuilder();
 
     private final AstRewriter astRewriter = new AstRewriter(
-            List.of(new StringConcatRewriter(), new TernaryRewriter(),
+            List.of(new LambdaRewriter(), new StringConcatRewriter(),
+                    new TryResourceRewriter(), new TernaryRewriter(),
                     new BoxingRewriter(), new EnumRewriter()));
 
     private final SourceEmitter sourceEmitter = new SourceEmitter();
@@ -88,6 +91,12 @@ public class BdecEngine implements Decompiler {
                     "parsed v" + classFile.majorVersion() + ", "
                             + classFile.methods().size() + " methods, "
                             + classFile.fields().size() + " fields"));
+
+            // Enrich context with parsed bootstrap methods (needed by LambdaRewriter)
+            if (!classFile.bootstrapMethods().isEmpty()) {
+                context = new DecompileContext(context.config(), context::loadClassBytes,
+                        classFile.bootstrapMethods());
+            }
 
             // Phase 2-4: Per-method decompilation
             List<StructuredMethod> structuredMethods = new ArrayList<>();
