@@ -19,7 +19,22 @@ import java.util.Set;
 
 public class AstBuilder {
 
-    /** Extract simple class name from internal name. */
+    /** Extract simple class name from internal name, using inner-class info
+     *  when available. For {@code com/example/Outer$Inner} with inner-class
+     *  entry name {@code "Inner"}, returns {@code "Inner"}. */
+    private static String simpleName(String internal, List<com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry> innerClasses) {
+        int idx = internal.lastIndexOf('/');
+        String raw = idx >= 0 ? internal.substring(idx + 1) : internal;
+        // Check inner class table for a friendly simple name
+        for (var ice : innerClasses) {
+            if (internal.equals(ice.innerClass()) && ice.simpleName() != null) {
+                return ice.simpleName();
+            }
+        }
+        return raw;
+    }
+
+    /** Extract simple class name from internal name (no inner-class info). */
     private static String simpleName(String internal) {
         int idx = internal.lastIndexOf('/');
         return idx >= 0 ? internal.substring(idx + 1) : internal;
@@ -33,7 +48,7 @@ public class AstBuilder {
         Set<String> imports = new LinkedHashSet<>();
 
         // Collect imports from field types and method signatures
-        String simpleName = simpleName(classFile.internalName());
+        String simpleName = simpleName(classFile.internalName(), classFile.innerClasses());
 
         // Add fields
         for (FieldModel field : classFile.fields()) {
@@ -59,12 +74,19 @@ public class AstBuilder {
             String methodName = resolveMethodName(method.name(), simpleName,
                     classFile.accessFlags());
 
+            // Extract method-level type parameters from signature
+            List<String> methodTypeParams = method.signature() != null
+                    && !method.signature().isEmpty()
+                    ? SignatureParser.extractMethodTypeParams(method.signature())
+                    : List.of();
+
             MethodDeclaration decl = new MethodDeclaration(
                     method.accessFlags(),
                     methodName,
                     method.returnType(),
                     paramNames,
                     method.parameterTypes(),
+                    methodTypeParams,
                     sm.body()
             );
             members.add(decl);

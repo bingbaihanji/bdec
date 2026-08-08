@@ -2,6 +2,7 @@ package com.bingbaihanji.bdec.bytecode.model;
 
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
+import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.RecordComponentEntry;
 
 import java.util.ArrayList;
@@ -21,7 +22,8 @@ public record ClassFileModel(
         String signature,
         List<BootstrapMethodEntry> bootstrapMethods,
         List<RecordComponentEntry> recordComponents,
-        List<String> permittedSubclasses
+        List<String> permittedSubclasses,
+        List<InnerClassEntry> innerClasses
 ) {
 
     /** Backward-compatible constructor without signature and bootstrap methods. */
@@ -31,7 +33,8 @@ public record ClassFileModel(
                           List<MethodModel> methods, ConstantPoolEntry[] constantPool) {
         this(majorVersion, minorVersion, accessFlags, internalName, superInternalName,
                 interfaceInternalNames, fields, methods, constantPool, "",
-                Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyList(),
+                Collections.emptyList());
     }
 
     /** Constructor with signature but no bootstrap methods. */
@@ -42,6 +45,7 @@ public record ClassFileModel(
                           String signature) {
         this(majorVersion, minorVersion, accessFlags, internalName, superInternalName,
                 interfaceInternalNames, fields, methods, constantPool, signature,
-                Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyList(),
+                Collections.emptyList());
     }
 }

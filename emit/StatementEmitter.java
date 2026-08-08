@@ -160,6 +160,13 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         // Method modifiers
         emitMethodModifiers(m.accessFlags());
 
+        // Emit method-level type parameters: <T>
+        if (!m.typeParameters().isEmpty()) {
+            w.write("<");
+            w.write(String.join(", ", m.typeParameters()));
+            w.write(">").space();
+        }
+
         // Return type and name
         String methodName = m.name();
         if (methodName == null || methodName.isEmpty()) {
