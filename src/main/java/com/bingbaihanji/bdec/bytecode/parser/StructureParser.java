@@ -126,8 +126,9 @@ class StructureParser {
                                 int lvtDescIdx = in.readUnsignedShort();
                                 int index = in.readUnsignedShort();
                                 String varName = ConstantPoolParser.utf8(pool, lvtNameIdx);
-                                // At start_pc=0, this is a parameter or early-scope variable
-                                if (startPc == 0 && varName != null && !varName.isEmpty()) {
+                                // Capture ALL LVT entries, not just start_pc==0.
+                                // putIfAbsent ensures earliest-scope name (params) wins.
+                                if (varName != null && !varName.isEmpty()) {
                                     localVarNames.putIfAbsent(index, varName);
                                 }
                             }
