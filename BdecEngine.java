@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec;
 import com.bingbaihanji.bdec.ast.AstBuilder;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.rewrite.AstRewriter;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
 import com.bingbaihanji.bdec.bytecode.parser.ClassFileReader;
@@ -13,13 +14,23 @@ import com.bingbaihanji.bdec.decompiler.diagnostic.DecompilerDiagnostic;
 import com.bingbaihanji.bdec.decompiler.diagnostic.DiagnosticListener;
 import com.bingbaihanji.bdec.emit.SourceEmitter;
 import com.bingbaihanji.bdec.emit.SourceFile;
+import com.bingbaihanji.bdec.ir.CopyPropagation;
+import com.bingbaihanji.bdec.ir.DeadCodeElimination;
+import com.bingbaihanji.bdec.ir.ExpressionReconstructor;
+import com.bingbaihanji.bdec.ir.ForLoopRecognizer;
 import com.bingbaihanji.bdec.ir.IrBuilder;
+import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.LinearIr;
+import com.bingbaihanji.bdec.ir.SsaBuilder;
+import com.bingbaihanji.bdec.ir.SsaForm;
+import com.bingbaihanji.bdec.ir.StringConcatRecognizer;
+import com.bingbaihanji.bdec.ir.TypeInference;
 import com.bingbaihanji.bdec.structuring.ControlFlowStructurer;
 import com.bingbaihanji.bdec.structuring.StructuredMethod;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class BdecEngine implements Decompiler {
 
@@ -34,6 +45,18 @@ public class BdecEngine implements Decompiler {
     private final IrBuilder irBuilder = new IrBuilder();
 
     private final ControlFlowStructurer structurer = new ControlFlowStructurer();
+
+    private final SsaBuilder ssaBuilder = new SsaBuilder();
+
+    private final TypeInference typeInference = new TypeInference();
+
+    private final CopyPropagation copyPropagation = new CopyPropagation();
+
+    private final DeadCodeElimination dce = new DeadCodeElimination();
+
+    private final ForLoopRecognizer forLoopRecognizer = new ForLoopRecognizer();
+
+    private final StringConcatRecognizer stringConcatRecognizer = new StringConcatRecognizer();
 
     private final AstBuilder astBuilder = new AstBuilder();
 
@@ -79,7 +102,28 @@ public class BdecEngine implements Decompiler {
                     ControlFlowGraph cfg = cfgBuilder.build(method);
 
                     // Phase 3: LinearIr
-                    LinearIr ir = irBuilder.build(cfg, method);
+                    LinearIr ir = irBuilder.build(cfg, method, classFile.constantPool());
+
+                    // Phase 3b: SSA + Type Inference + Optimization
+                    if (config.ssaThreshold() > 0 && ir.instructions().size() >= config.ssaThreshold()) {
+                        try {
+                            SsaForm ssa = ssaBuilder.build(ir);
+                            Map<Integer, com.bingbaihanji.bdec.type.JavaType> inferred =
+                                    typeInference.infer(ssa);
+                            // DCE on SSA instructions
+                            List<IrInstruction> optimized =
+                                    dce.eliminate(copyPropagation.propagate(ssa.instructions()));
+                            ir = new LinearIr(method, cfg, optimized, ir.variables());
+                            ir.setSsaOptimized(true);
+                            diagnostics.report(DecompilerDiagnostic.info("ssa", internalName,
+                                    "SSA: " + ssa.instructions().size() + " insns ("
+                                            + ssa.varVersionCount().size() + " vars)"));
+                        } catch (Exception e) {
+                            diagnostics.report(DecompilerDiagnostic.warning("ssa", internalName,
+                                    method.name() + method.descriptor(), -1,
+                                    "SSA construction failed: " + e.getMessage()));
+                        }
+                    }
 
                     // Phase 4: Structuring
                     StructuredMethod sm = structurer.structure(ir, context);
@@ -90,6 +134,18 @@ public class BdecEngine implements Decompiler {
                             -1, "failed to decompile method: " + e.getMessage()));
                 }
             }
+
+            // Phase 4b: Expression reconstruction & for-loop recognition
+            ExpressionReconstructor exprReconstructor = new ExpressionReconstructor();
+            List<StructuredMethod> optimizedMethods = new ArrayList<>();
+            for (StructuredMethod sm : structuredMethods) {
+                BlockStatement optimized = exprReconstructor.reconstruct(sm.body());
+                optimized = forLoopRecognizer.recognize(optimized);
+                optimized = stringConcatRecognizer.recognize(optimized);
+                optimizedMethods.add(new StructuredMethod(sm.method(), sm.ir(), optimized,
+                        sm.loopAnnotations(), sm.ifAnnotations()));
+            }
+            structuredMethods = optimizedMethods;
 
             // Phase 5: AST
             CompilationUnit unit = astBuilder.build(classFile, structuredMethods, context);
