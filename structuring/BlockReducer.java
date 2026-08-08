@@ -84,10 +84,12 @@ public final class BlockReducer {
     }
 
     /**
-     * Post-processing: wrap groups of statements that belong to a try range
-     * in TryStatement wrappers. This runs AFTER if/else/loop structuring,
-     * so that try ranges containing conditional/loop structures are
-     * properly wrapped.
+     * Post-processing: wrap statement groups in try-catch based on CFG exception ranges.
+     * Runs AFTER if/else/loop structuring so nested control structures are preserved.
+     *
+     * <p>The key insight: we track which original blocks belong to each try range,
+     * reassemble the final statements back into their groups, find which groups
+     * have all their blocks inside a try range, and wrap only those.
      */
     private BlockStatement wrapTryCatchBlocks(BlockStatement root,
                                                List<BlockGroup> groups,
@@ -95,62 +97,54 @@ public final class BlockReducer {
                                                LinearIr ir) {
         if (tryCatchAnns.isEmpty()) return root;
 
-        // Build a map: for each group, find which try-catch it belongs to
-        Map<TryCatchInfo, List<Statement>> tryBlocks = new java.util.LinkedHashMap<>();
-        Map<BlockGroup, TryCatchInfo> groupToTry = new HashMap<>();
+        List<Statement> stmts = new ArrayList<>(root.statements());
 
-        for (int i = 0; i < groups.size(); i++) {
-            BlockGroup g = groups.get(i);
-            for (var entry : tryCatchAnns.entrySet()) {
-                BasicBlock tryEntry = entry.getKey();
-                TryCatchInfo tci = entry.getValue();
-                // Check if any block in the group is in the try range
-                for (BasicBlock b : g.blocks()) {
+        // For each try-catch annotation, find the contiguous range of groups
+        // whose blocks are all within the try range
+        for (var entry : tryCatchAnns.entrySet()) {
+            TryCatchInfo tci = entry.getValue();
+
+            // Find groups that contain ONLY try-range blocks
+            int firstTryGroup = -1;
+            int lastTryGroup = -1;
+            for (int i = 0; i < groups.size(); i++) {
+                boolean allInTry = true;
+                boolean anyInTry = false;
+                for (BasicBlock b : groups.get(i).blocks()) {
                     if (tci.tryBlocks().contains(b)) {
-                        groupToTry.put(g, tci);
-                        tryBlocks.computeIfAbsent(tci, k -> new ArrayList<>());
-                        break;
+                        anyInTry = true;
+                    } else {
+                        allInTry = false;
                     }
                 }
-                if (groupToTry.containsKey(g)) break;
+                if (anyInTry && allInTry) {
+                    if (firstTryGroup < 0) firstTryGroup = i;
+                    lastTryGroup = i;
+                }
+            }
+
+            // Wrap the contiguous range of try-group statements
+            if (firstTryGroup >= 0 && lastTryGroup >= firstTryGroup
+                    && firstTryGroup < stmts.size()) {
+                List<Statement> tryBodyStmts = new ArrayList<>();
+                for (int i = firstTryGroup; i <= lastTryGroup && i < stmts.size(); i++) {
+                    tryBodyStmts.add(stmts.get(i));
+                }
+                // Replace the first statement with wrapped version, mark rest for removal
+                if (!tryBodyStmts.isEmpty()) {
+                    Statement tryBody = tryBodyStmts.size() == 1
+                            ? tryBodyStmts.get(0)
+                            : new BlockStatement(tryBodyStmts);
+                    stmts.set(firstTryGroup, buildTryCatch(tci, tryBody, ir));
+                    // Remove subsequent try-group statements (they've been absorbed)
+                    for (int i = lastTryGroup; i > firstTryGroup; i--) {
+                        if (i < stmts.size()) stmts.remove(i);
+                    }
+                }
             }
         }
 
-        // Assign statements to try-catch groups based on the group-to-try map
-        List<Statement> stmts = root.statements();
-        Map<TryCatchInfo, List<Statement>> tryStmts = new java.util.LinkedHashMap<>();
-        List<Statement> nonTryStmts = new ArrayList<>();
-        Set<Statement> assigned = new HashSet<>();
-
-        for (int i = 0; i < groups.size() && i < stmts.size(); i++) {
-            TryCatchInfo tci = groupToTry.get(groups.get(i));
-            if (tci != null) {
-                tryStmts.computeIfAbsent(tci, k -> new ArrayList<>()).add(stmts.get(i));
-                assigned.add(stmts.get(i));
-            }
-        }
-        for (int i = 0; i < stmts.size(); i++) {
-            if (!assigned.contains(stmts.get(i))) {
-                nonTryStmts.add(stmts.get(i));
-            }
-        }
-
-        // Build result: interleave try-wrapped statements with non-try statements
-        // Try to preserve order by grouping adjacent try blocks
-        List<Statement> result = new ArrayList<>();
-        for (var entry : tryStmts.entrySet()) {
-            TryCatchInfo tci = entry.getKey();
-            List<Statement> body = entry.getValue();
-            if (!body.isEmpty()) {
-                Statement tryBody = body.size() == 1 ? body.get(0) : new BlockStatement(body);
-                result.add(buildTryCatch(tci, tryBody, ir));
-            }
-        }
-        for (Statement s : nonTryStmts) {
-            result.add(s);
-        }
-
-        return new BlockStatement(result);
+        return new BlockStatement(stmts);
     }
 
     /** Check if an expression is "ignorable" — just a naked variable or temp ref. */
