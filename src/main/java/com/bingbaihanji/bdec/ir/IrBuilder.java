@@ -35,6 +35,17 @@ public final class IrBuilder {
 
     private int nextVarId = 0;
 
+    /** Current method's LVT names (slot → name), set during simulateBlock. */
+    private java.util.Map<Integer, String> currentLvtNames = java.util.Collections.emptyMap();
+
+    /** Check if a value is category 2 (long or double, occupies two JVM stack slots). */
+    private static boolean isCategory2(Value v) {
+        return v.type() != null && (v.type().kind() == TypeKind.LONG
+                || v.type().kind() == TypeKind.DOUBLE);
+    }
+
+    // ─── Block ordering ───────────────────────────────────────────────
+
     /**
      * Build LinearIr from CFG by symbolic execution of each basic block.
      */
@@ -56,14 +67,15 @@ public final class IrBuilder {
             if (entry == null) {
                 entry = FrameState.withLocals(maxLocals);
             }
-            FrameState exit = simulateBlock(block, entry, allInstructions, variables, cfg, method, constantPool);
+            FrameState exit = simulateBlock(block, entry, allInstructions, variables, cfg, method, constantPool,
+                    method.localVarNames());
             blockOutputs.put(block, exit);
         }
 
         return new LinearIr(method, cfg, allInstructions, variables);
     }
 
-    // ─── Block ordering ───────────────────────────────────────────────
+    // ─── Predecessor merge ────────────────────────────────────────────
 
     private List<BasicBlock> orderBlocks(ControlFlowGraph cfg) {
         List<BasicBlock> result = new ArrayList<>();
@@ -87,8 +99,17 @@ public final class IrBuilder {
         return result;
     }
 
-    // ─── Predecessor merge ────────────────────────────────────────────
+    // ─── Main block simulation ────────────────────────────────────────
 
+    /**
+     * Merge states from all predecessors of a block.
+     *
+     * For variable slots: picks the latest variable version across all
+     * predecessor states so that stores from any path are visible.
+     * For the operand stack: JVM verification guarantees it's empty at
+     * merge points (exception handlers are the exception — they have
+     * exactly one element, the thrown exception).
+     */
     private FrameState mergePredecessorStates(BasicBlock block,
                                               Map<BasicBlock, FrameState> outputs,
                                               ControlFlowGraph cfg,
@@ -101,11 +122,76 @@ public final class IrBuilder {
         if (preds.size() == 1) {
             return outputs.get(preds.get(0));
         }
-        FrameState first = outputs.get(preds.get(0));
-        return first != null ? first.copy() : null;
+
+        // Collect all predecessor states
+        List<FrameState> predStates = new ArrayList<>();
+        for (BasicBlock pred : preds) {
+            FrameState state = outputs.get(pred);
+            if (state != null) {
+                predStates.add(state);
+            }
+        }
+        if (predStates.isEmpty()) {
+            return null;
+        }
+        if (predStates.size() == 1) {
+            return predStates.get(0).copy();
+        }
+
+        // Determine max locals size across all predecessors
+        int maxLocals = 0;
+        for (FrameState s : predStates) {
+            maxLocals = Math.max(maxLocals, s.locals().length);
+        }
+
+        // Merge locals: for each slot, pick the version with the highest version
+        // number from all predecessors — this ensures stores from any path
+        // contribute their latest variable version.
+        Value[] mergedLocals = new Value[maxLocals];
+        for (int slot = 0; slot < maxLocals; slot++) {
+            Variable best = null;
+            for (FrameState s : predStates) {
+                if (slot < s.locals().length && s.locals()[slot] instanceof Variable v) {
+                    if (best == null || v.version() > best.version()) {
+                        best = v;
+                    }
+                }
+            }
+            mergedLocals[slot] = best;
+        }
+
+        // Merge stack: detect if any predecessor is an exception edge.
+        // Exception handlers have stack=[thrown_exception]; normal merges
+        // have an empty stack (per JVM verification).
+        boolean hasExceptionEdge = false;
+        for (BasicBlock pred : preds) {
+            for (var edge : cfg.incomingOf(block)) {
+                if (edge.source().equals(pred)
+                        && edge.kind() == com.bingbaihanji.bdec.cfg.EdgeKind.EXCEPTION) {
+                    hasExceptionEdge = true;
+                    break;
+                }
+            }
+            if (hasExceptionEdge) break;
+        }
+
+        Deque<Value> mergedStack;
+        if (hasExceptionEdge && !predStates.get(0).stack().isEmpty()) {
+            // Exception handler: keep the exception reference on stack
+            mergedStack = new ArrayDeque<>(predStates.get(0).stack());
+        } else {
+            // Normal merge point: stack must be empty per JVM verification
+            mergedStack = new ArrayDeque<>();
+        }
+
+        return new FrameState(mergedStack, mergedLocals);
     }
 
-    // ─── Main block simulation ────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    //  Handler methods — one per opcode category
+    // ═══════════════════════════════════════════════════════════════════
+
+    // ── Stack manipulation ───────────────────────────────────────
 
     /**
      * Symbolically execute one basic block. Each opcode dispatches to a
@@ -116,7 +202,9 @@ public final class IrBuilder {
                                      List<IrInstruction> instructions,
                                      List<Variable> variables,
                                      ControlFlowGraph cfg, MethodModel method,
-                                     ConstantPoolEntry[] cp) {
+                                     ConstantPoolEntry[] cp,
+                                     java.util.Map<Integer, String> lvtNames) {
+        this.currentLvtNames = lvtNames;
         Deque<Value> stack = new ArrayDeque<>(entry.stack());
         Value[] locals = entry.locals().clone();
 
@@ -144,7 +232,7 @@ public final class IrBuilder {
                      ICONST_3, ICONST_4, ICONST_5, LCONST_0, LCONST_1,
                      FCONST_0, FCONST_1, FCONST_2, DCONST_0, DCONST_1,
                      BIPUSH, SIPUSH -> handleConstant(op, insn, stack);
-                case LDC -> handleLdc(insn, stack, cp);
+                case LDC, LDC_W, LDC2_W -> handleLdc(insn, stack, cp);
 
                 // Loads
                 case ILOAD, ILOAD_0, ILOAD_1, ILOAD_2, ILOAD_3,
@@ -163,7 +251,7 @@ public final class IrBuilder {
                         handleStore(op, insn, stack, locals, variables, instructions, offset, blockId);
 
                 // IINC
-                case IINC -> handleIinc(insn, variables, instructions, offset, blockId);
+                case IINC -> handleIinc(insn, variables, instructions, offset, blockId, locals);
 
                 // Arithmetic (int)
                 case IADD, ISUB, IMUL, IDIV, IREM, ISHL, ISHR, IUSHR, IAND, IOR, IXOR ->
@@ -194,20 +282,29 @@ public final class IrBuilder {
                 case INVOKEDYNAMIC -> handleInvokeDynamic(insn, stack, instructions, cp, offset, blockId);
 
                 // Object / Array
-                case NEW -> handleNew(stack, instructions, offset, blockId);
-                case NEWARRAY, ANEWARRAY -> handleNewArray(stack, instructions, offset, blockId);
+                case NEW -> handleNew(insn, stack, instructions, cp, offset, blockId);
+                case NEWARRAY, ANEWARRAY -> handleNewArray(op, insn, stack, instructions, cp, offset, blockId);
                 case ARRAYLENGTH -> handleArrayLength(stack, instructions, offset, blockId);
 
                 // Type
-                case CHECKCAST -> handleCheckCast(op, stack, instructions, offset, blockId);
-                case INSTANCEOF -> handleInstanceOf(op, stack, instructions, offset, blockId);
+                case CHECKCAST -> handleCheckCast(op, insn, stack, instructions, cp, offset, blockId);
+                case INSTANCEOF -> handleInstanceOf(op, insn, stack, instructions, cp, offset, blockId);
 
                 // Conversions — pass op.code() for cast type inference
                 case I2L, I2F, I2D, L2I, L2F, L2D, F2I, F2L, F2D,
                      D2I, D2L, D2F, I2B, I2C, I2S -> handleConversion(op, stack, instructions, offset, blockId);
 
-                // Monitor
-                case MONITORENTER, MONITOREXIT -> stack.pop();
+                // Monitor — emit IR instructions so SynchronizedRecognizer can detect them
+                case MONITORENTER -> {
+                    Value obj = stack.isEmpty() ? ConstantValue.NULL : stack.pop();
+                    instructions.add(new IrInstruction(nextId(), IrOpcode.MONITOR_ENTER,
+                            JavaType.VOID, List.of(obj), offset, blockId, op.code(), null));
+                }
+                case MONITOREXIT -> {
+                    Value obj = stack.isEmpty() ? ConstantValue.NULL : stack.pop();
+                    instructions.add(new IrInstruction(nextId(), IrOpcode.MONITOR_EXIT,
+                            JavaType.VOID, List.of(obj), offset, blockId, op.code(), null));
+                }
 
                 // Branches — pass op for comparison operator inference
                 case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE,
@@ -215,8 +312,9 @@ public final class IrBuilder {
                      IF_ICMPGT, IF_ICMPLE, IF_ACMPEQ, IF_ACMPNE ->
                         handleCondition(op, stack, instructions, offset, blockId);
                 case IFNULL, IFNONNULL -> handleNullCheck(op, stack, instructions, offset, blockId);
-                case GOTO -> {
-                } // CFG handles this
+                case GOTO, GOTO_W -> {
+                } // CFG handles these
+                case MULTIANEWARRAY -> handleMultiNewArray(insn, stack, instructions, offset, blockId);
                 case ATHROW -> instructions.add(new IrInstruction(nextId(), IrOpcode.THROW,
                         JavaType.VOID, List.of(stack.pop()), offset, blockId, op.code(), null));
 
@@ -236,12 +334,6 @@ public final class IrBuilder {
 
         return new FrameState(stack, locals);
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    //  Handler methods — one per opcode category
-    // ═══════════════════════════════════════════════════════════════════
-
-    // ── Stack manipulation ───────────────────────────────────────
 
     private void handlePop(Opcode op, Deque<Value> stack) {
         if (stack.isEmpty()) {
@@ -283,14 +375,25 @@ public final class IrBuilder {
                 stack.push(v1);
             }
             case DUP2 -> {
-                if (stack.size() < 2) {
+                if (stack.isEmpty()) {
                     return;
                 }
-                Value v1 = stack.pop(), v2 = stack.pop();
-                stack.push(v2);
-                stack.push(v1);
-                stack.push(v2);
-                stack.push(v1);
+                Value v1 = stack.pop();
+                if (isCategory2(v1)) {
+                    // Top value is long/double (category 2) — duplicate just it
+                    stack.push(v1);
+                    stack.push(v1);
+                } else if (!stack.isEmpty()) {
+                    // Top two values are both category 1 — duplicate both
+                    Value v2 = stack.pop();
+                    stack.push(v2);
+                    stack.push(v1);
+                    stack.push(v2);
+                    stack.push(v1);
+                } else {
+                    stack.push(v1);
+                    stack.push(v1);
+                }
             }
             case SWAP -> {
                 if (stack.size() < 2) {
@@ -346,7 +449,7 @@ public final class IrBuilder {
         JavaType type = loadType(op);
         Value v = locals[idx];
         if (v == null) {
-            v = getOrCreateVar(variables, idx, type, false);
+            v = lookupReadVar(variables, idx, type);
         }
         emitLoad(v, instructions, offset, blockId);
         stack.push(v);
@@ -373,19 +476,28 @@ public final class IrBuilder {
         int idx = varIndex(insn, op);
         Value val = stack.pop();
         locals[idx] = val;
-        Variable var = getOrCreateVar(variables, idx, val.type(), false);
+        // Create a NEW version for each store — prevents "this" slot confusion
+        Variable var = createWriteVar(variables, idx, val.type());
         instructions.add(IrInstruction.store(nextId(), var, val, offset, blockId));
     }
 
     // ── IINC ─────────────────────────────────────────────────────
 
     private void handleIinc(Instruction insn, List<Variable> variables,
-                            List<IrInstruction> instructions, int offset, int blockId) {
+                            List<IrInstruction> instructions, int offset, int blockId,
+                            Value[] locals) {
         int idx = varIndex(insn, Opcode.IINC);
         int incr = insn.rawOperands().size() > 1 ? insn.rawOperands().get(1) : 0;
-        Variable var = getOrCreateVar(variables, idx, JavaType.INT, false);
+        // IINC reads current value and writes new value — create a new version
+        Variable readVar = lookupReadVar(variables, idx, JavaType.INT);
+        Variable writeVar = createWriteVar(variables, idx, JavaType.INT);
+        // Update locals so subsequent LOADs in the same block see the new version
+        if (idx < locals.length) {
+            locals[idx] = writeVar;
+        }
         instructions.add(new IrInstruction(nextId(), IrOpcode.INC, JavaType.INT,
-                List.of(var, new ConstantValue(incr, JavaType.INT)), offset, blockId));
+                List.of(readVar, writeVar, new ConstantValue(incr, JavaType.INT)),
+                offset, blockId));
     }
 
     // ── Arithmetic ───────────────────────────────────────────────
@@ -520,15 +632,28 @@ public final class IrBuilder {
         int argCount = 0;
         JavaType returnType = JavaType.classType("java/lang/Object");
         String methodName = null;
+        String declaringClass = null; // for constructor delegation target
 
         if (cpIdx > 0 && cpIdx < cp.length) {
             try {
                 ConstantPoolEntry cpEntry = cp[cpIdx];
-                int natIdx = switch (cpEntry) {
-                    case ConstantPoolEntry.CpMethodRef ref -> ref.nameAndTypeIndex();
-                    case ConstantPoolEntry.CpInterfaceMethodRef ref -> ref.nameAndTypeIndex();
-                    default -> -1;
-                };
+                int natIdx = -1;
+                int classIdx = -1;
+                switch (cpEntry) {
+                    case ConstantPoolEntry.CpMethodRef ref -> {
+                        natIdx = ref.nameAndTypeIndex();
+                        classIdx = ref.classIndex();
+                    }
+                    case ConstantPoolEntry.CpInterfaceMethodRef ref -> {
+                        natIdx = ref.nameAndTypeIndex();
+                        classIdx = ref.classIndex();
+                    }
+                    default -> {
+                    }
+                }
+                if (classIdx > 0 && classIdx < cp.length) {
+                    declaringClass = ConstantPoolParser.className(cp, classIdx);
+                }
                 if (natIdx > 0 && natIdx < cp.length
                         && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
                     String desc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
@@ -547,13 +672,37 @@ public final class IrBuilder {
         for (int a = 0; a < argCount && !stack.isEmpty(); a++) {
             args.addFirst(stack.pop());
         }
+        // Capture receiver (for non-static calls) — preserves target for method calls
+        Value receiver = null;
         if (op != Opcode.INVOKESTATIC && !stack.isEmpty()) {
-            stack.pop(); // receiver
+            receiver = stack.pop();
         }
 
-        IrInstruction inv = IrInstruction.invoke(nextId(), null, args, returnType,
+        IrInstruction inv = IrInstruction.invoke(nextId(), receiver, args, returnType,
                 offset, blockId, methodName);
         instructions.add(inv);
+
+        // Tag static calls with declaring class (for Arrays.fill() vs fill())
+        if (op == Opcode.INVOKESTATIC && declaringClass != null) {
+            inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
+                    com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS,
+                    com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS,
+                    declaringClass));
+        }
+
+        // Tag constructor delegation calls with target class info
+        if ("<init>".equals(methodName)) {
+            if (declaringClass != null) {
+                inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
+                        com.bingbaihanji.bdec.semantic.SemanticTag.CONSTRUCTOR_DELEGATION,
+                        com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_TARGET_CLASS,
+                        declaringClass));
+            } else {
+                inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
+                        com.bingbaihanji.bdec.semantic.SemanticTag.CONSTRUCTOR_DELEGATION));
+            }
+        }
+
         if (returnType.kind() != TypeKind.VOID) {
             inv.setResultValue(new InstructionRef(inv, returnType));
             stack.push(new InstructionRef(inv, returnType));
@@ -606,22 +755,51 @@ public final class IrBuilder {
 
     // ── Object / Array ───────────────────────────────────────────
 
-    private void handleNew(Deque<Value> stack, List<IrInstruction> instructions,
-                           int offset, int blockId) {
+    private void handleNew(Instruction insn, Deque<Value> stack,
+                           List<IrInstruction> instructions,
+                           ConstantPoolEntry[] cp, int offset, int blockId) {
+        // Resolve the class type from the constant pool
+        String className = "java/lang/Object";
+        int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
+        if (cpIdx > 0 && cpIdx < cp.length) {
+            className = ConstantPoolParser.className(cp, cpIdx);
+            if (className == null) {
+                className = "java/lang/Object";
+            }
+        }
         IrInstruction n = IrInstruction.newInsn(nextId(),
-                JavaType.classType("java/lang/Object"), offset, blockId);
+                JavaType.classType(className), offset, blockId);
         instructions.add(n);
         n.setResultValue(new InstructionRef(n, n.resultType()));
         stack.push(new InstructionRef(n, n.resultType()));
     }
 
-    private void handleNewArray(Deque<Value> stack, List<IrInstruction> instructions,
+    private void handleNewArray(Opcode op, Instruction insn, Deque<Value> stack,
+                                List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                 int offset, int blockId) {
-        if (!stack.isEmpty()) {
-            stack.pop(); // size
+        Value size = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
+        IrInstruction na = new IrInstruction(nextId(), IrOpcode.NEW_ARRAY,
+                JavaType.classType("java/lang/Object"), List.of(size), offset, blockId);
+        instructions.add(na);
+        na.setResultValue(new InstructionRef(na, na.resultType()));
+        stack.push(new InstructionRef(na, na.resultType()));
+    }
+
+    private void handleMultiNewArray(Instruction insn, Deque<Value> stack,
+                                     List<IrInstruction> instructions,
+                                     int offset, int blockId) {
+        // MULTIANEWARRAY: operands = [cp_index, dimensions]
+        int dims = 1;
+        if (insn.rawOperands().size() > 1) {
+            dims = insn.rawOperands().get(1);
+        }
+        // Pop dimension sizes from stack
+        List<Value> sizes = new ArrayList<>();
+        for (int d = 0; d < dims && !stack.isEmpty(); d++) {
+            sizes.addFirst(stack.pop());
         }
         IrInstruction na = new IrInstruction(nextId(), IrOpcode.NEW_ARRAY,
-                JavaType.classType("java/lang/Object"), List.of(), offset, blockId);
+                JavaType.classType("java/lang/Object"), sizes, offset, blockId);
         instructions.add(na);
         na.setResultValue(new InstructionRef(na, na.resultType()));
         stack.push(new InstructionRef(na, na.resultType()));
@@ -642,30 +820,46 @@ public final class IrBuilder {
 
     // ── Type / Cast ──────────────────────────────────────────────
 
-    private void handleCheckCast(Opcode op, Deque<Value> stack, List<IrInstruction> instructions,
+    private void handleCheckCast(Opcode op, Instruction insn, Deque<Value> stack,
+                                 List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                  int offset, int blockId) {
         if (stack.isEmpty()) {
             return;
         }
         Value v = stack.pop();
-        IrInstruction c = IrInstruction.cast(nextId(), v,
-                JavaType.classType("java/lang/Object"), offset, blockId, op.code());
+        // Resolve target type from constant pool
+        JavaType targetType = resolveClassType(insn, cp);
+        IrInstruction c = IrInstruction.cast(nextId(), v, targetType, offset, blockId, op.code());
         instructions.add(c);
         c.setResultValue(new InstructionRef(c, c.resultType()));
         stack.push(new InstructionRef(c, c.resultType()));
     }
 
-    private void handleInstanceOf(Opcode op, Deque<Value> stack, List<IrInstruction> instructions,
+    private void handleInstanceOf(Opcode op, Instruction insn, Deque<Value> stack,
+                                  List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                   int offset, int blockId) {
         if (stack.isEmpty()) {
             return;
         }
-        stack.pop(); // obj ref
+        Value obj = stack.pop(); // preserve the object as an operand
+        JavaType targetType = resolveClassType(insn, cp);
         IrInstruction io = new IrInstruction(nextId(), IrOpcode.INSTANCE_OF,
-                JavaType.INT, List.of(), offset, blockId, op.code(), null);
-        instructions.add(io);
+                JavaType.INT, List.of(obj), offset, blockId, op.code(), null);
         io.setResultValue(new InstructionRef(io, JavaType.INT));
+        instructions.add(io);
         stack.push(new InstructionRef(io, JavaType.INT));
+    }
+
+    /** Resolve a class type from a CP-referencing instruction (checkcast, instanceof, anewarray). */
+    private JavaType resolveClassType(Instruction insn, ConstantPoolEntry[] cp) {
+        int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
+        if (cpIdx > 0 && cpIdx < cp.length) {
+            String className = ConstantPoolParser.className(cp, cpIdx);
+            if (className != null) {
+                return JavaType.classType(className);
+            }
+        }
+        return JavaType.classType("java/lang/Object");
     }
 
     private void handleConversion(Opcode op, Deque<Value> stack,
@@ -721,6 +915,40 @@ public final class IrBuilder {
             }
         }
         Variable v = new Variable(slot, 0, type, isParam, slot);
+        variables.add(v);
+        return v;
+    }
+
+    /** Create a NEW variable version for a STORE (slot is being written to).
+     *  This prevents slot 0 ('this') from being confused with a temp stored at slot 0. */
+    private Variable createWriteVar(List<Variable> variables, int slot, JavaType type) {
+        int maxVersion = 0;
+        for (Variable v : variables) {
+            if (v.slot() == slot) {
+                maxVersion = Math.max(maxVersion, v.version());
+            }
+        }
+        Variable v = new Variable(slot, maxVersion + 1, type, false, slot);
+        variables.add(v);
+        return v;
+    }
+
+    /** Find the latest version of a variable at the given slot (for LOAD). */
+    private Variable lookupReadVar(List<Variable> variables, int slot, JavaType type) {
+        Variable latest = null;
+        for (Variable v : variables) {
+            if (v.slot() == slot && (latest == null || v.version() > latest.version())) {
+                latest = v;
+            }
+        }
+        if (latest != null) {
+            return latest;
+        }
+        // First access: create version 0, apply LVT name if available
+        Variable v = new Variable(slot, 0, type, false, slot);
+        if (currentLvtNames.containsKey(slot)) {
+            v.setName(currentLvtNames.get(slot));
+        }
         variables.add(v);
         return v;
     }

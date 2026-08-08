@@ -1,0 +1,15 @@
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\BdecConfigTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\BdecEngineTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\BdecIntegrationTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\bytecode\parser\ClassFileReaderTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\bytecode\parser\ConstantPoolParserTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\bytecode\parser\InstructionDecoderTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\cfg\CfgBuilderTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\cfg\DominatorTreeTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\ControlFlowTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\DecompileContextTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\decompiler\diagnostic\DecompilerDiagnosticTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\DecompileTestHarness.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\ir\IrBuilderTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\ir\SsaBuilderTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\type\TypeResolverTest.java

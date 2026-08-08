@@ -43,7 +43,9 @@ public final class LoopAnalyzer {
                 }
             }
         }
-        return removeOuterLoops(loops);
+        // Return all loops sorted innermost-first. ControlFlowStructurer folds
+        // them in order (inner before outer), so nesting is handled correctly.
+        return sortInnermostFirst(loops);
     }
 
     private LoopInfo extractNaturalLoop(BasicBlock header, BasicBlock latch,
@@ -77,24 +79,5 @@ public final class LoopAnalyzer {
         }
 
         return new LoopInfo(header, Set.of(latch), body, exits);
-    }
-
-    /** Keep only innermost loops (remove outer loops that contain inner loops). */
-    private List<LoopInfo> removeOuterLoops(List<LoopInfo> loops) {
-        List<LoopInfo> result = new ArrayList<>();
-        for (LoopInfo loop : loops) {
-            boolean isInner = true;
-            for (LoopInfo other : loops) {
-                if (other != loop && other.body().containsAll(loop.body())
-                        && !loop.body().containsAll(other.body())) {
-                    isInner = false; // other contains loop completely
-                    break;
-                }
-            }
-            if (isInner) {
-                result.add(loop);
-            }
-        }
-        return result;
     }
 }

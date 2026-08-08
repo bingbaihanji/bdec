@@ -1,8 +1,11 @@
 package com.bingbaihanji.bdec.ir;
 
 import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
+import com.bingbaihanji.bdec.semantic.SemanticAnnotation;
 import com.bingbaihanji.bdec.type.JavaType;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class IrInstruction {
@@ -25,6 +28,9 @@ public class IrInstruction {
 
     /** Resolved name hint — field name or method name from constant pool. */
     private final String nameHint;
+
+    /** Semantic annotations attached by the SemanticReconstructor pipeline. */
+    private List<SemanticAnnotation> annotations;
 
     private Value resultValue;
 
@@ -219,6 +225,45 @@ public class IrInstruction {
 
     /** Resolved field or method name, or null if not resolved. */
     public String nameHint() {return nameHint;}
+
+    /** Semantic annotations attached by the semantic reconstruction pipeline. */
+    public List<SemanticAnnotation> annotations() {
+        return annotations != null ? annotations : Collections.emptyList();
+    }
+
+    /** Add a semantic annotation to this instruction. */
+    public void addAnnotation(SemanticAnnotation ann) {
+        if (annotations == null) {
+            annotations = new ArrayList<>(2);
+        }
+        annotations.add(ann);
+    }
+
+    /** Check if this instruction has a specific semantic tag. */
+    public boolean hasTag(com.bingbaihanji.bdec.semantic.SemanticTag tag) {
+        if (annotations == null) {
+            return false;
+        }
+        for (SemanticAnnotation a : annotations) {
+            if (a.is(tag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Get the first annotation with the given tag, or null. */
+    public SemanticAnnotation getAnnotation(com.bingbaihanji.bdec.semantic.SemanticTag tag) {
+        if (annotations == null) {
+            return null;
+        }
+        for (SemanticAnnotation a : annotations) {
+            if (a.is(tag)) {
+                return a;
+            }
+        }
+        return null;
+    }
 
     public Value resultValue() {return resultValue;}
 

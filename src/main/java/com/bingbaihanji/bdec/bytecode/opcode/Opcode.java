@@ -243,10 +243,14 @@ public enum Opcode {
     LOOKUPSWITCH(171, "lookupswitch", 0, -1, false, true, false, -1),
 
     // InvokeDynamic (Java 7+ lambdas, string concat, method refs)
-    INVOKEDYNAMIC(186, "invokedynamic", 4, 0, false, false, false, -1);
+    INVOKEDYNAMIC(186, "invokedynamic", 4, 0, false, false, false, -1),
 
-    // Phase 1b adds: RET(169), WIDE(196),
-    // MULTIANEWARRAY(197), GOTO_W(200)
+    // Extended instructions
+    RET(169, "ret", 1, 0, false, false, false, 0),
+    WIDE(196, "wide", 0, 0, true, false, false, -1),
+    MULTIANEWARRAY(197, "multianewarray", 3, -1, true, false, false, -1),
+    GOTO_W(200, "goto_w", 4, 0, false, false, true, -1),
+    JSR_W(201, "jsr_w", 4, 1, false, false, true, -1);
 
     private static final Map<Integer, Opcode> BY_CODE = new HashMap<>();
 

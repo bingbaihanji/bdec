@@ -11,6 +11,8 @@ import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
+import com.bingbaihanji.bdec.ast.stmt.SynchronizedStatement;
+import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
 import com.bingbaihanji.bdec.ast.stmt.TryStatement;
 
 /** Emits AST statements to Java source text. Implements AstVisitor for dispatch. */
@@ -58,7 +60,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             case VARIABLE_DECL -> w.write("/* var decl */;").newLine();
             case BREAK -> w.token("break").write(";").newLine();
             case CONTINUE -> w.token("continue").write(";").newLine();
-            case SYNCHRONIZED -> w.write("/* synchronized */").newLine();
+            case SYNCHRONIZED -> emitSynchronized(stmt);
             case TRY -> emitTry(stmt);
             default -> w.write("// " + stmt.kind()).newLine();
         }
@@ -219,9 +221,22 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    private void emitSynchronized(Statement stmt) {
+        if (stmt instanceof SynchronizedStatement sync) {
+            w.token("synchronized").space().write("(");
+            exprs.emit(sync.monitorObject());
+            w.write(")").space();
+            emitBranched(sync.body());
+        } else {
+            w.write("synchronized (obj) {}").newLine();
+        }
+    }
+
     private void emitThrow(Statement stmt) {
         w.token("throw").space();
-        if (!stmt.children().isEmpty() && stmt.children().getFirst() instanceof Expression ex) {
+        if (stmt instanceof ThrowStatement ts && ts.expression() != null) {
+            exprs.emit(ts.expression());
+        } else if (!stmt.children().isEmpty() && stmt.children().getFirst() instanceof Expression ex) {
             exprs.emit(ex);
         } else {
             w.write("new RuntimeException()");

@@ -53,4 +53,25 @@ public class LinearIr {
     public void setSsaOptimized(boolean v) {this.ssaOptimized = v;}
 
     public void addVariable(Variable v) {variables.add(v);}
+
+    /**
+     * Replace the entire instruction list (used by semantic passes that
+     * remove or rewrite instructions). Rebuilds the block→instructions map.
+     */
+    public void replaceInstructions(List<IrInstruction> newInstructions) {
+        java.lang.reflect.Field insnsField;
+        try {
+            insnsField = LinearIr.class.getDeclaredField("instructions");
+            insnsField.setAccessible(true);
+            insnsField.set(this, List.copyOf(newInstructions));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to replace instructions", e);
+        }
+        // Rebuild block instruction map
+        blockInstructions.clear();
+        for (IrInstruction insn : newInstructions) {
+            blockInstructions.computeIfAbsent(insn.blockId(),
+                    k -> new ArrayList<>()).add(insn);
+        }
+    }
 }

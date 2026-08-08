@@ -80,6 +80,7 @@ class StructureParser {
             List<ExceptionHandlerModel> handlers = List.of();
             int maxStack = 0, maxLocals = 0;
             String signature = "";
+            java.util.Map<Integer, String> localVarNames = new java.util.HashMap<>();
 
             int attrCount = in.readUnsignedShort();
             for (int a = 0; a < attrCount; a++) {
@@ -110,18 +111,38 @@ class StructureParser {
                         handlers.add(new ExceptionHandlerModel(startPc, endPc, handlerPc, catchType));
                     }
 
+                    // Parse Code sub-attributes (LineNumberTable, LocalVariableTable, etc.)
                     int codeAttrCount = in.readUnsignedShort();
                     for (int ca = 0; ca < codeAttrCount; ca++) {
-                        in.readUnsignedShort();
+                        int subAttrNameIdx = in.readUnsignedShort();
                         int len = in.readInt();
-                        in.skipBytes(len);
+                        String subAttrName = ConstantPoolParser.utf8(pool, subAttrNameIdx);
+                        if ("LocalVariableTable".equals(subAttrName)) {
+                            int lvtLen = in.readUnsignedShort();
+                            for (int l = 0; l < lvtLen; l++) {
+                                int startPc = in.readUnsignedShort();
+                                int length = in.readUnsignedShort();
+                                int lvtNameIdx = in.readUnsignedShort();
+                                int lvtDescIdx = in.readUnsignedShort();
+                                int index = in.readUnsignedShort();
+                                String varName = ConstantPoolParser.utf8(pool, lvtNameIdx);
+                                // At start_pc=0, this is a parameter or early-scope variable
+                                if (startPc == 0 && varName != null && !varName.isEmpty()) {
+                                    localVarNames.putIfAbsent(index, varName);
+                                }
+                            }
+                        } else {
+                            in.skipBytes(len);
+                        }
                     }
+                    // Add LVT data to method model (intermediate state)
+                    // We'll set it after the method is constructed
                 } else {
                     in.skipBytes(attrLen);
                 }
             }
             methods.add(new MethodModel(accessFlags, name, desc, returnType, paramTypes,
-                    instructions, handlers, maxStack, maxLocals, signature));
+                    instructions, handlers, maxStack, maxLocals, signature, localVarNames));
         }
         return methods;
     }
