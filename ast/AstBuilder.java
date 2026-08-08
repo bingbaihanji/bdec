@@ -53,12 +53,12 @@ public class AstBuilder {
         // Add fields
         for (FieldModel field : classFile.fields()) {
             Expression init = parseFieldInitializer(field);
-            // If the field has a signature, use it for a generic display type
+            // If the field has a signature, parse it for generic type arguments
             JavaType displayType = field.type();
             if (field.signature() != null && !field.signature().isEmpty()) {
-                String displayName = SignatureParser.signatureToDisplayName(field.signature());
-                if (displayName != null) {
-                    displayType = JavaType.classType(displayName.replace('.', '/'));
+                JavaType parsed = SignatureParser.parseGenericType(field.signature());
+                if (parsed != null) {
+                    displayType = parsed;
                 }
             }
             FieldDeclaration fd = new FieldDeclaration(

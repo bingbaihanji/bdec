@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec.emit;
 import com.bingbaihanji.bdec.ast.AstVisitor;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import java.util.List;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
@@ -274,21 +275,65 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             exprs.emit(sw.discriminant());
             w.write(")").space().write("{").newLine();
             w.indent();
+            String arrow = sw.isExpression() ? " -> " : ":";
             for (SwitchStatement.CaseGroup cg : sw.cases()) {
                 if (cg.isDefault()) {
-                    w.token("default").write(":").newLine();
+                    w.token("default").write(arrow);
+                    if (sw.isExpression() && !cg.body().isEmpty()) {
+                        Statement s = simplifyCaseBody(cg.body());
+                        if (s instanceof BlockStatement) {
+                            w.write("{").newLine();
+                            w.indent();
+                            for (Statement bs : ((BlockStatement) s).statements()) {
+                                emit(bs);
+                            }
+                            w.dedent();
+                            w.write("}").newLine();
+                        } else if (s instanceof ExpressionStatement es) {
+                            exprs.emit(es.expression());
+                            w.write(";").newLine();
+                        } else {
+                            emit(s);
+                        }
+                    } else {
+                        w.newLine();
+                        w.indent();
+                        for (Statement s : cg.body()) {
+                            emit(s);
+                        }
+                        w.dedent();
+                    }
                 } else {
                     for (Expression label : cg.labels()) {
                         w.token("case").space();
                         exprs.emit(label);
-                        w.write(":").newLine();
+                        w.write(arrow);
+                        if (sw.isExpression() && !cg.body().isEmpty()) {
+                            Statement s = simplifyCaseBody(cg.body());
+                            if (s instanceof BlockStatement) {
+                                w.write("{").newLine();
+                                w.indent();
+                                for (Statement bs : ((BlockStatement) s).statements()) {
+                                    emit(bs);
+                                }
+                                w.dedent();
+                                w.write("}").newLine();
+                            } else if (s instanceof ExpressionStatement es) {
+                                exprs.emit(es.expression());
+                                w.write(";").newLine();
+                            } else {
+                                emit(s);
+                            }
+                        } else {
+                            w.newLine();
+                            w.indent();
+                            for (Statement s : cg.body()) {
+                                emit(s);
+                            }
+                            w.dedent();
+                        }
                     }
                 }
-                w.indent();
-                for (Statement s : cg.body()) {
-                    emit(s);
-                }
-                w.dedent();
             }
             w.dedent();
             w.write("}").newLine();
@@ -306,6 +351,12 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             w.dedent();
             w.write("}").newLine();
         }
+    }
+
+    /** For switch expression cases, flatten single-statement blocks. */
+    private Statement simplifyCaseBody(List<Statement> body) {
+        if (body.size() == 1) return body.get(0);
+        return new BlockStatement(body);
     }
 
     // ── Modifier helpers ──────────────────────────────────────────

@@ -72,7 +72,20 @@ public record JavaType(
             case LONG -> "long";
             case FLOAT -> "float";
             case DOUBLE -> "double";
-            case CLASS -> internalName.replace('/', '.');
+            case CLASS -> {
+                String name = internalName != null ? internalName.replace('/', '.') : "?";
+                if (!typeArguments.isEmpty()) {
+                    StringBuilder sb = new StringBuilder(name);
+                    sb.append('<');
+                    for (int i = 0; i < typeArguments.size(); i++) {
+                        if (i > 0) sb.append(", ");
+                        sb.append(typeArguments.get(i).displayName());
+                    }
+                    sb.append('>');
+                    yield sb.toString();
+                }
+                yield name;
+            }
             case ARRAY -> {
                 String elemDesc = descriptor.replaceFirst("^\\[+", "");
                 JavaType elem = fromDescriptor(elemDesc);

@@ -873,8 +873,15 @@ public final class BlockReducer {
             // Throw
             case THROW -> !insn.operands().isEmpty() ? valueToExpr(insn.operands().getFirst()) : new VarExpr("ex");
 
-            // PHI — not handled at expression level during structuring
-            case PHI -> new VarExpr("phi");
+            // PHI — pick the first variable operand as representative name
+            case PHI -> {
+                for (Value op : insn.operands()) {
+                    if (op instanceof Variable v) {
+                        yield varToExpr(v);
+                    }
+                }
+                yield new VarExpr("merge" + insn.id());
+            }
 
             default -> new VarExpr("/* " + insn.opcode() + " */");
         };
