@@ -576,7 +576,7 @@ public final class BlockReducer {
                 Value source = insn.operands().size() > 1 ? insn.operands().get(1) : null;
                 Expression lhs;
                 if (target instanceof Variable v) {
-                    lhs = new VarExpr("var" + v.slot());
+                    lhs = varToExpr(v);
                 } else {
                     lhs = valueToExpr(target);
                 }
@@ -588,8 +588,8 @@ public final class BlockReducer {
             case FIELD_LOAD -> {
                 Expression obj = insn.operands().isEmpty() ? null : valueToExpr(insn.operands().getFirst());
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
-                // In instance methods, field load on var0 (this) → just the field name
-                if (isInstanceMethod && obj instanceof VarExpr v && "var0".equals(v.name())) {
+                // In instance methods, field load on 'this' → just the field name
+                if (isInstanceMethod && obj instanceof VarExpr v && "this".equals(v.name())) {
                     yield new VarExpr(fName);
                 }
                 yield new FieldAccessExpr(obj, fName);
@@ -600,12 +600,12 @@ public final class BlockReducer {
                 Value obj = !insn.operands().isEmpty() ? insn.operands().getFirst() : null;
                 Value val = insn.operands().size() > 1 ? insn.operands().get(1) : null;
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
-                // In instance methods, field store on var0 (this) → just the field name
+                // In instance methods, field store on 'this' → just the field name
                 Expression lhs;
                 if (isInstanceMethod && obj instanceof Variable v && v.slot() == 0) {
                     lhs = new VarExpr(fName);
                 } else if (obj instanceof Variable v) {
-                    lhs = new FieldAccessExpr(new VarExpr("var" + v.slot()), fName);
+                    lhs = new FieldAccessExpr(varToExpr(v), fName);
                 } else {
                     lhs = new FieldAccessExpr(null, fName);
                 }
@@ -634,11 +634,43 @@ public final class BlockReducer {
                 yield new VarExpr("/* compare */");
             }
 
-            // Condition — use original bytecode opcode to infer comparison operator
+            // Condition — use original bytecode opcode to infer comparison operator.
+            // When one operand is a COMPARE result (from LCMP/FCMPL/DCMPG etc.),
+            // merge: COMPARE(a,b) + CONDITION(op) → BinExpr(op, a, b).
+            // This turns "0 < (capacity == delta)" into "capacity > delta".
             case CONDITION -> {
                 if (insn.operands().size() >= 2) {
-                    Expression left = valueToExpr(insn.operands().get(0));
-                    Expression right = valueToExpr(insn.operands().get(1));
+                    Value leftOp = insn.operands().get(0);
+                    Value rightOp = insn.operands().get(1);
+
+                    // Detect COMPARE+CONDITION pattern: one operand is a COMPARE result
+                    Value cmpVal = null;
+                    boolean cmpIsLeft = false;
+                    if (rightOp instanceof InstructionRef ref
+                            && ref.instruction().opcode() == IrOpcode.COMPARE) {
+                        cmpVal = rightOp;
+                    } else if (leftOp instanceof InstructionRef ref
+                            && ref.instruction().opcode() == IrOpcode.COMPARE) {
+                        cmpVal = leftOp;
+                        cmpIsLeft = true;
+                    }
+
+                    if (cmpVal != null) {
+                        IrInstruction cmp = ((InstructionRef) cmpVal).instruction();
+                        if (cmp.operands().size() >= 2) {
+                            Expression cmpLeft = valueToExpr(cmp.operands().get(0));
+                            Expression cmpRight = valueToExpr(cmp.operands().get(1));
+                            BinaryOperator cmpBinOp = IrInstruction.binaryOpFromBytecode(
+                                    insn.originalOpcode());
+                            if (cmpBinOp != null) {
+                                yield new BinExpr(cmpBinOp, cmpLeft, cmpRight);
+                            }
+                        }
+                    }
+
+                    // Regular condition (no COMPARE merge)
+                    Expression left = valueToExpr(leftOp);
+                    Expression right = valueToExpr(rightOp);
                     BinaryOperator cmpOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
                     yield new BinExpr(cmpOp != null ? cmpOp : BinaryOperator.EQ, left, right);
                 }
@@ -807,11 +839,24 @@ public final class BlockReducer {
     }
 
     /** Convert a Variable to the appropriate VarExpr.
-     *  In instance methods, slot 0 that represents {@code this} is never written to —
-     *  if we detect slot 0 as a store target, it's actually a local temp.
-     *  We keep "var0" naming to avoid confusing assignments like {@code this = ...}. */
+     *  Uses the variable's name (from LocalVariableTable if available,
+     *  falling back to "var" + originalIndex). Versioned variables
+     *  that represent slot-0 temps are distinguished from {@code this}. */
     private VarExpr varToExpr(Variable var) {
-        return new VarExpr("var" + var.slot());
+        String name = var.name();
+        // In instance methods, slot 0 version 0 is 'this'
+        if (isInstanceMethod && var.slot() == 0 && var.version() == 0) {
+            return new VarExpr("this");
+        }
+        // For LVT-named variables, always use the name
+        if (name != null && !name.startsWith("var")) {
+            return new VarExpr(name);
+        }
+        // Fallback: distinguish versions for same-slot variables
+        if (var.version() > 0) {
+            return new VarExpr("var" + var.slot());
+        }
+        return new VarExpr(name != null ? name : "var" + var.slot());
     }
 
     /** Convert CONST IR to a LitExpr. */

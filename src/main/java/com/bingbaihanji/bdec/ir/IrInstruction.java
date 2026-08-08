@@ -205,6 +205,9 @@ public class IrInstruction {
             case 0x9c -> BinaryOperator.GE;      // IFGE
             case 0x9d -> BinaryOperator.GT;      // IFGT
             case 0x9e -> BinaryOperator.LE;      // IFLE
+            // Null comparisons
+            case 0xc6 -> BinaryOperator.EQ;      // IFNULL  (ref == null)
+            case 0xc7 -> BinaryOperator.NE;      // IFNONNULL (ref != null)
             default -> null;
         };
     }

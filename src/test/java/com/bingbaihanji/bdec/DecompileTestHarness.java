@@ -61,7 +61,7 @@ public class DecompileTestHarness {
                 throw new RuntimeException("No system Java compiler available. Run with JDK, not JRE.");
             }
             int compileResult = compiler.run(null, null, null,
-                    "-d", tmpDir.toString(),
+                    "-g", "-d", tmpDir.toString(),
                     srcFile.toString());
             if (compileResult != 0) {
                 throw new RuntimeException("Compilation failed for: " + className);
