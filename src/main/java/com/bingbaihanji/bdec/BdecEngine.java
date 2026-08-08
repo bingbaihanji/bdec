@@ -8,8 +8,12 @@ import com.bingbaihanji.bdec.ast.rewrite.EnumRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.ForEachRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.LambdaRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.MethodRefRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.PatternMatchRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.RecordRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.RewriteRule;
+import com.bingbaihanji.bdec.ast.rewrite.SealedClassRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.StringConcatRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.SwitchExprRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.TernaryRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.TryResourceRewriter;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
@@ -65,9 +69,11 @@ public class BdecEngine implements Decompiler {
     private final AstBuilder astBuilder = new AstBuilder();
 
     private final AstRewriter astRewriter = new AstRewriter(
-            List.of(new LambdaRewriter(), new MethodRefRewriter(),
+            List.of(new RecordRewriter(), new SealedClassRewriter(),
+                    new LambdaRewriter(), new MethodRefRewriter(),
                     new StringConcatRewriter(), new ForEachRewriter(),
-                    new TryResourceRewriter(), new TernaryRewriter(),
+                    new TryResourceRewriter(), new SwitchExprRewriter(),
+                    new PatternMatchRewriter(), new TernaryRewriter(),
                     new BoxingRewriter(), new EnumRewriter()));
 
     private final SourceEmitter sourceEmitter = new SourceEmitter();

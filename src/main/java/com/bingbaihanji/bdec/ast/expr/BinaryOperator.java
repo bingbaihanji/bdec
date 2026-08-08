@@ -19,7 +19,8 @@ public enum BinaryOperator {
     BIT_XOR(6),
     SHL(10),
     SHR(10),
-    USHR(10);
+    USHR(10),
+    INSTANCEOF(8);
 
     private final int prec;
 
