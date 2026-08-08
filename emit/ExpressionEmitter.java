@@ -48,6 +48,7 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             case SHL -> "<<";
             case SHR -> ">>";
             case USHR -> ">>>";
+            case INSTANCEOF -> "instanceof";
         };
     }
 

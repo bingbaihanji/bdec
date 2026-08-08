@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec.bytecode.parser;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
+import com.bingbaihanji.bdec.bytecode.model.constantpool.RecordComponentEntry;
 
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
@@ -35,6 +36,42 @@ public final class ClassFileReader {
             entries.add(new BootstrapMethodEntry(methodRef, arguments));
         }
         return entries;
+    }
+
+    /** Parse the Record class attribute (Java 16+). */
+    private List<RecordComponentEntry> parseRecordComponents(DataInputStream in,
+                                                              ConstantPoolEntry[] pool)
+            throws IOException {
+        int count = in.readUnsignedShort();
+        List<RecordComponentEntry> components = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            int nameIdx = in.readUnsignedShort();
+            int descIdx = in.readUnsignedShort();
+            String name = ConstantPoolParser.utf8(pool, nameIdx);
+            String descriptor = ConstantPoolParser.utf8(pool, descIdx);
+            // Skip component attributes
+            int compAttrCount = in.readUnsignedShort();
+            for (int j = 0; j < compAttrCount; j++) {
+                in.readUnsignedShort(); // attr name
+                int attrLen = in.readInt();
+                in.skipBytes(attrLen);
+            }
+            components.add(new RecordComponentEntry(name, descriptor));
+        }
+        return components;
+    }
+
+    /** Parse the PermittedSubclasses class attribute (Java 17+). */
+    private List<String> parsePermittedSubclasses(DataInputStream in,
+                                                   ConstantPoolEntry[] pool)
+            throws IOException {
+        int count = in.readUnsignedShort();
+        List<String> classes = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            int classIdx = in.readUnsignedShort();
+            classes.add(ConstantPoolParser.className(pool, classIdx));
+        }
+        return classes;
     }
 
     public ClassFileModel read(String internalName, byte[] bytes) throws IOException {
@@ -74,6 +111,8 @@ public final class ClassFileReader {
         int attrCount = in.readUnsignedShort();
         String signature = "";
         List<BootstrapMethodEntry> bootstrapMethods = Collections.emptyList();
+        List<RecordComponentEntry> recordComponents = Collections.emptyList();
+        List<String> permittedSubclasses = Collections.emptyList();
         for (int i = 0; i < attrCount; i++) {
             int attrNameIdx = in.readUnsignedShort();
             int attrLen = in.readInt();
@@ -86,12 +125,18 @@ public final class ClassFileReader {
                 case "BootstrapMethods" -> {
                     bootstrapMethods = parseBootstrapMethods(in, pool);
                 }
+                case "Record" -> {
+                    recordComponents = parseRecordComponents(in, pool);
+                }
+                case "PermittedSubclasses" -> {
+                    permittedSubclasses = parsePermittedSubclasses(in, pool);
+                }
                 default -> in.skipBytes(attrLen);
             }
         }
 
         return new ClassFileModel(major, minor, accessFlags,
                 thisClassName, superName, interfaces, fields, methods, pool, signature,
-                bootstrapMethods);
+                bootstrapMethods, recordComponents, permittedSubclasses);
     }
 }
