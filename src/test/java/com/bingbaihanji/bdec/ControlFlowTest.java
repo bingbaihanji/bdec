@@ -44,6 +44,24 @@ public class ControlFlowTest {
     }
 
     @Test
+    public void testSwitch() throws Exception {
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/SwitchSample.java");
+        DecompileTestHarness.assertContains(out, "class SwitchSample", "switch", "return");
+    }
+
+    @Test
+    public void testDoWhile() throws Exception {
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/DoWhileSample.java");
+        DecompileTestHarness.assertContains(out, "class DoWhileSample", "return");
+    }
+
+    @Test
+    public void testBooleanMethod() throws Exception {
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/BooleanMethodSample.java");
+        DecompileTestHarness.assertContains(out, "class BooleanMethodSample", "return", "0");
+    }
+
+    @Test
     public void testDecompileBasicClass() throws Exception {
         // Test that basic decompilation succeeds without exceptions
         String source = """

@@ -15,6 +15,7 @@ import com.bingbaihanji.bdec.ast.rewrite.SealedClassRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.StringConcatRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.SwitchExprRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.TernaryRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.TextBlockRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.TryResourceRewriter;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
@@ -71,10 +72,11 @@ public class BdecEngine implements Decompiler {
     private final AstRewriter astRewriter = new AstRewriter(
             List.of(new RecordRewriter(), new SealedClassRewriter(),
                     new LambdaRewriter(), new MethodRefRewriter(),
-                    new StringConcatRewriter(), new ForEachRewriter(),
-                    new TryResourceRewriter(), new SwitchExprRewriter(),
-                    new PatternMatchRewriter(), new TernaryRewriter(),
-                    new BoxingRewriter(), new EnumRewriter()));
+                    new StringConcatRewriter(), new TextBlockRewriter(),
+                    new ForEachRewriter(), new TryResourceRewriter(),
+                    new SwitchExprRewriter(), new PatternMatchRewriter(),
+                    new TernaryRewriter(), new BoxingRewriter(),
+                    new EnumRewriter()));
 
     private final SourceEmitter sourceEmitter = new SourceEmitter();
 
