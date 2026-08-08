@@ -689,7 +689,14 @@ public final class BlockReducer {
                     lhs = valueToExpr(target);
                 }
                 Expression rhs = source != null ? valueToExpr(source) : new VarExpr("?");
-                yield new AssignExpr(lhs, rhs);
+                // Compound assignment detection: x = x OP y → x OP= y
+                // When detected, use only the right operand (strip the duplicated left)
+                BinaryOperator compoundOp = detectCompoundOp(lhs, rhs);
+                Expression assignRhs = rhs;
+                if (compoundOp != null && rhs instanceof BinExpr bin) {
+                    assignRhs = bin.right(); // strip the duplicated left operand
+                }
+                yield new AssignExpr(lhs, assignRhs, compoundOp);
             }
 
             // Field load — on implicit 'this' (slot 0, instance method), just emit field name
@@ -963,6 +970,33 @@ public final class BlockReducer {
             }
             default -> new VarExpr("?");
         };
+    }
+
+    /** Detect compound assignment pattern: {@code x = x OP y} → {@code x OP= y}.
+     *  Returns the operator if the pattern matches, null for plain assignment. */
+    private BinaryOperator detectCompoundOp(Expression lhs, Expression rhs) {
+        if (!(rhs instanceof BinExpr bin)) {
+            return null;
+        }
+        // Match: lhs matches the left operand of the binary expression
+        if (expressionsMatch(lhs, bin.left())) {
+            return bin.operator();
+        }
+        return null;
+    }
+
+    /** Check if two expressions are structurally equivalent (same variable/field). */
+    private boolean expressionsMatch(Expression a, Expression b) {
+        if (a instanceof VarExpr va && b instanceof VarExpr vb) {
+            return va.name().equals(vb.name());
+        }
+        if (a instanceof FieldAccessExpr fa && b instanceof FieldAccessExpr fb) {
+            return fa.fieldName().equals(fb.fieldName())
+                    && (fa.target() == null && fb.target() == null
+                        || (fa.target() != null && fb.target() != null
+                            && expressionsMatch(fa.target(), fb.target())));
+        }
+        return false;
     }
 
     /** Convert a Variable to the appropriate VarExpr.

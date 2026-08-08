@@ -132,7 +132,8 @@ public class TernaryRewriter implements RewriteRule {
             if (ta.target() instanceof VarExpr tv && ea.target() instanceof VarExpr ev) {
                 if (tv.name().equals(ev.name())) {
                     return new AssignExpr(ta.target(),
-                            new CondExpr(cond, ta.value(), ea.value()));
+                            new CondExpr(cond, ta.value(), ea.value()),
+                            ta.compoundOp()); // preserve compound assignment operator
                 }
             }
         }

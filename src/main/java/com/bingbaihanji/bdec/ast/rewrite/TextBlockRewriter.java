@@ -107,7 +107,8 @@ public class TextBlockRewriter implements RewriteRule {
         }
         if (e instanceof AssignExpr assign) {
             return new AssignExpr(rewriteExpr(assign.target()),
-                    rewriteExpr(assign.value()));
+                    rewriteExpr(assign.value()),
+                    assign.compoundOp());
         }
         return e;
     }

@@ -109,7 +109,8 @@ public final class ExpressionReconstructor {
         if (expr instanceof AssignExpr assign) {
             return new AssignExpr(
                     inlineExpr(assign.target(), candidates),
-                    inlineExpr(assign.value(), candidates));
+                    inlineExpr(assign.value(), candidates),
+                    assign.compoundOp()); // preserve compound assignment operator
         }
         return expr;
     }

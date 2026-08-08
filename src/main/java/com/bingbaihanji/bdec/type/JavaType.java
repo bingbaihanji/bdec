@@ -74,6 +74,10 @@ public record JavaType(
             case DOUBLE -> "double";
             case CLASS -> {
                 String name = internalName != null ? internalName.replace('/', '.') : "?";
+                // Strip java.lang. prefix for readability (Object, String, etc.)
+                if (name.startsWith("java.lang.") && name.indexOf('.', 10) < 0) {
+                    name = name.substring(10); // "java.lang." is 10 chars
+                }
                 if (!typeArguments.isEmpty()) {
                     StringBuilder sb = new StringBuilder(name);
                     sb.append('<');
