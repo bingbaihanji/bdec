@@ -377,10 +377,23 @@ public final class BlockReducer {
         if (bodyStmts.isEmpty()) {
             return new BlockStatement(List.of());
         }
-        if (bodyStmts.size() == 1) {
+        // Flatten: merge multi-group bodies into a single flat statement list.
+        // This prevents double braces like: if(cond) { { stmts } }
+        if (bodyStmts.size() == 1 && !(bodyStmts.getFirst() instanceof BlockStatement)) {
             return bodyStmts.getFirst();
         }
-        return new BlockStatement(bodyStmts);
+        List<Statement> flat = new ArrayList<>();
+        for (Statement s : bodyStmts) {
+            if (s instanceof BlockStatement bs) {
+                flat.addAll(bs.statements());
+            } else {
+                flat.add(s);
+            }
+        }
+        if (flat.size() == 1) {
+            return flat.getFirst();
+        }
+        return new BlockStatement(flat);
     }
 
     /** Sort blocks by dominator-tree preorder. */
@@ -513,12 +526,25 @@ public final class BlockReducer {
             return null;
         }
 
-        // Build index: which instruction IDs have their results consumed
+        // Build index: which instruction IDs have their results consumed.
+        // Track via InstructionRef (standard chain) AND via Variable (for LOAD
+        // instructions whose result Variable flows through the stack directly).
         Set<Integer> consumed = new HashSet<>();
+        // Map each LOAD instruction's loaded Variable → LOAD id for back-tracking
+        Map<Variable, Integer> loadVarToId = new HashMap<>();
+        for (IrInstruction insn : allInsns) {
+            if (insn.opcode() == IrOpcode.LOAD && !insn.operands().isEmpty()
+                    && insn.operands().getFirst() instanceof Variable v) {
+                loadVarToId.put(v, insn.id());
+            }
+        }
         for (IrInstruction insn : allInsns) {
             for (Value op : insn.operands()) {
                 if (op instanceof InstructionRef ref) {
                     consumed.add(ref.instruction().id());
+                } else if (op instanceof Variable v && loadVarToId.containsKey(v)) {
+                    // The Variable from a LOAD is used directly → mark LOAD consumed
+                    consumed.add(loadVarToId.get(v));
                 }
             }
         }
@@ -582,6 +608,23 @@ public final class BlockReducer {
         if (stmts.isEmpty()) {
             return new BlockStatement(List.of());
         }
+
+        // Post-pass: suppress bare "return;" after this()/super() constructor
+        // delegation. In bytecode, constructors always end with RETURN, but
+        // Java source doesn't need "return;" after a this()/super() call.
+        if (!stmts.isEmpty()) {
+            Statement last = stmts.get(stmts.size() - 1);
+            if (last instanceof ReturnStatement r && r.value() == null) {
+                boolean hasCtorDeleg = allInsns.stream().anyMatch(i ->
+                        i.opcode() == IrOpcode.INVOKE
+                                && (i.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.THIS_CONSTRUCTOR)
+                                || i.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.SUPER_CONSTRUCTOR)));
+                if (hasCtorDeleg) {
+                    stmts.remove(stmts.size() - 1);
+                }
+            }
+        }
+
         if (stmts.size() == 1) {
             return stmts.getFirst();
         }
@@ -665,10 +708,12 @@ public final class BlockReducer {
                 Value obj = !insn.operands().isEmpty() ? insn.operands().getFirst() : null;
                 Value val = insn.operands().size() > 1 ? insn.operands().get(1) : null;
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
-                // In instance methods, field store on 'this' → just the field name
+                // Always use this.fieldName for instance field stores, so the output
+                // clearly distinguishes field assignment from local variable assignment.
+                // This prevents "capacity = x" when "this.capacity = x" was intended.
                 Expression lhs;
                 if (isInstanceMethod && obj instanceof Variable v && v.slot() == 0) {
-                    lhs = new VarExpr(fName);
+                    lhs = new FieldAccessExpr(new VarExpr("this"), fName);
                 } else if (obj instanceof Variable v) {
                     lhs = new FieldAccessExpr(varToExpr(v), fName);
                 } else {
@@ -847,7 +892,17 @@ public final class BlockReducer {
                 // NewExpr constructor is (type, dimensions, constructorArgs)
                 yield new NewExpr(insn.resultType(), List.of(), List.of());
             }
-            case NEW_ARRAY -> new NewExpr(insn.resultType(), List.of(new VarExpr("?")), List.of());
+            case NEW_ARRAY -> {
+                // Extract array size from operands (the stack value popped by NEWARRAY/ANEWARRAY)
+                List<Expression> dims = new ArrayList<>();
+                for (Value op : insn.operands()) {
+                    dims.add(valueToExpr(op));
+                }
+                if (dims.isEmpty()) {
+                    dims.add(new VarExpr("?"));
+                }
+                yield new NewExpr(insn.resultType(), dims, List.of());
+            }
 
             // instanceof
             case INSTANCE_OF -> new VarExpr("/* instanceof */");

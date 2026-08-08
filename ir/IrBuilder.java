@@ -481,9 +481,12 @@ public final class IrBuilder {
         }
         int idx = varIndex(insn, op);
         Value val = stack.pop();
-        locals[idx] = val;
         // Create a NEW version for each store — prevents "this" slot confusion
         Variable var = createWriteVar(variables, idx, val.type());
+        // Store the NEW Variable in locals so subsequent LOADs find a Variable,
+        // NOT the raw InstructionRef. This prevents expression expansion:
+        // "n = cap - 1 | cap - 1 >>> 1" → "n = n | n >>> 1"
+        locals[idx] = var;
         instructions.add(IrInstruction.store(nextId(), var, val, offset, blockId));
     }
 
