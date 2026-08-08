@@ -10,6 +10,8 @@ import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
+import com.bingbaihanji.bdec.ast.stmt.TryStatement;
 
 /** Emits AST statements to Java source text. Implements AstVisitor for dispatch. */
 public class StatementEmitter implements AstVisitor<Void, Void> {
@@ -57,7 +59,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             case BREAK -> w.token("break").write(";").newLine();
             case CONTINUE -> w.token("continue").write(";").newLine();
             case SYNCHRONIZED -> w.write("/* synchronized */").newLine();
-            case TRY -> w.write("/* try */").newLine();
+            case TRY -> emitTry(stmt);
             default -> w.write("// " + stmt.kind()).newLine();
         }
     }
@@ -98,7 +100,20 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             }
             case FOR, FOR_EACH -> {
                 w.token("for").space().write("(");
-                w.write(";;"); // placeholder for init/cond/incr
+                // Emit initializer
+                if (l.initExpr() != null) {
+                    exprs.emit(l.initExpr());
+                }
+                w.write("; ");
+                // Emit condition
+                if (l.condition() != null) {
+                    exprs.emit(l.condition());
+                }
+                w.write("; ");
+                // Emit increment
+                if (l.incrExpr() != null) {
+                    exprs.emit(l.incrExpr());
+                }
                 w.write(")").space();
                 emitBranched(l.body());
             }
@@ -180,6 +195,24 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         w.write(";").newLine();
     }
 
+    private void emitTry(Statement stmt) {
+        if (stmt instanceof TryStatement tryStmt) {
+            w.token("try").space();
+            emitBranched(tryStmt.tryBody());
+            for (TryStatement.CatchClause cc : tryStmt.catchClauses()) {
+                w.space().token("catch").space().write("(")
+                        .write(cc.exceptionType()).space().write(cc.varName()).write(")").space();
+                emitBranched(cc.body());
+            }
+            if (tryStmt.finallyBody() != null) {
+                w.space().token("finally").space();
+                emitBranched(tryStmt.finallyBody());
+            }
+        } else {
+            w.write("/* try */").newLine();
+        }
+    }
+
     private void emitThrow(Statement stmt) {
         w.token("throw").space();
         if (!stmt.children().isEmpty() && stmt.children().getFirst() instanceof Expression ex) {
@@ -191,18 +224,43 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
     }
 
     private void emitSwitch(Statement stmt) {
-        // Switch emission — delegates to structured switch AST when available
-        w.token("switch").space().write("(");
-        if (!stmt.children().isEmpty() && stmt.children().getFirst() instanceof Expression ex) {
-            exprs.emit(ex);
+        if (stmt instanceof SwitchStatement sw) {
+            w.token("switch").space().write("(");
+            exprs.emit(sw.discriminant());
+            w.write(")").space().write("{").newLine();
+            w.indent();
+            for (SwitchStatement.CaseGroup cg : sw.cases()) {
+                if (cg.isDefault()) {
+                    w.token("default").write(":").newLine();
+                } else {
+                    for (Expression label : cg.labels()) {
+                        w.token("case").space();
+                        exprs.emit(label);
+                        w.write(":").newLine();
+                    }
+                }
+                w.indent();
+                for (Statement s : cg.body()) {
+                    emit(s);
+                }
+                w.dedent();
+            }
+            w.dedent();
+            w.write("}").newLine();
         } else {
-            w.write("/* expr */");
+            // Fallback: generic switch placeholder
+            w.token("switch").space().write("(");
+            if (!stmt.children().isEmpty() && stmt.children().getFirst() instanceof Expression ex) {
+                exprs.emit(ex);
+            } else {
+                w.write("/* expr */");
+            }
+            w.write(")").space().write("{").newLine();
+            w.indent();
+            w.write("// TODO: full switch emission").newLine();
+            w.dedent();
+            w.write("}").newLine();
         }
-        w.write(")").space().write("{").newLine();
-        w.indent();
-        w.write("// switch cases").newLine();
-        w.dedent();
-        w.write("}").newLine();
     }
 
     // ── Modifier helpers ──────────────────────────────────────────

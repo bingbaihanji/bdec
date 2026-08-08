@@ -130,8 +130,15 @@ public final class ExpressionReconstructor {
             }
             countUses(loop.body(), counts);
         } else if (stmt instanceof BlockStatement block) {
+            // Process nested block independently to avoid scope leak
+            // (temp vars inside a nested block shouldn't affect outer inlining)
+            Map<String, Integer> nestedCounts = new HashMap<>();
             for (Statement s : block.statements()) {
-                countUses(s, counts);
+                countUses(s, nestedCounts);
+            }
+            // Only merge counts for variables defined outside the block
+            for (var entry : nestedCounts.entrySet()) {
+                counts.merge(entry.getKey(), entry.getValue(), Integer::sum);
             }
         }
     }

@@ -4,8 +4,10 @@ import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -14,6 +16,9 @@ import java.util.Map;
  * Propagates types through the IR using a worklist algorithm.
  * Seeds types from constants, field accesses, and method calls,
  * then propagates through assignments, PHI nodes, and arithmetic.
+ *
+ * Uses a def-use chain index for O(1) consumer lookups instead of
+ * O(n²) scanning.
  */
 public final class TypeInference {
 
@@ -39,6 +44,9 @@ public final class TypeInference {
         types.clear();
         Deque<IrInstruction> worklist = new ArrayDeque<>();
 
+        // Build def-use chain: for each instruction, find consumers of its result
+        Map<Integer, List<IrInstruction>> consumers = buildDefUse(ssa.instructions());
+
         // Seed: assign initial types from known sources
         for (IrInstruction insn : ssa.instructions()) {
             JavaType seed = seedType(insn);
@@ -56,29 +64,38 @@ public final class TypeInference {
                 continue;
             }
 
-            // Propagate to consumers
-            for (IrInstruction other : ssa.instructions()) {
-                if (other == insn) {
-                    continue;
-                }
-                // If 'other' uses this instruction's result, propagate type
-                for (Value op : other.operands()) {
-                    if (op instanceof InstructionRef ref && ref.instruction().id() == insn.id()) {
-                        JavaType propagated = propagate(insn.opcode(), currentType, other.opcode());
-                        if (propagated != null) {
-                            JavaType existing = types.get(other.id());
-                            JavaType merged = existing != null ? merge(existing, propagated) : propagated;
-                            if (!merged.equals(existing)) {
-                                types.put(other.id(), merged);
-                                worklist.add(other);
-                            }
-                        }
+            // Propagate to consumers of this instruction
+            List<IrInstruction> users = consumers.getOrDefault(insn.id(), List.of());
+            for (IrInstruction user : users) {
+                JavaType propagated = propagate(insn.opcode(), currentType, user.opcode());
+                if (propagated != null) {
+                    JavaType existing = types.get(user.id());
+                    JavaType merged = existing != null ? merge(existing, propagated) : propagated;
+                    if (!merged.equals(existing)) {
+                        types.put(user.id(), merged);
+                        worklist.add(user);
                     }
                 }
             }
         }
 
         return Map.copyOf(types);
+    }
+
+    /**
+     * Build a map from instruction ID → list of instructions that use its result.
+     */
+    private Map<Integer, List<IrInstruction>> buildDefUse(List<IrInstruction> instructions) {
+        Map<Integer, List<IrInstruction>> consumers = new HashMap<>();
+        for (IrInstruction insn : instructions) {
+            for (Value op : insn.operands()) {
+                if (op instanceof InstructionRef ref) {
+                    int defId = ref.instruction().id();
+                    consumers.computeIfAbsent(defId, k -> new ArrayList<>()).add(insn);
+                }
+            }
+        }
+        return consumers;
     }
 
     /** Determine the initial type for an instruction. */
@@ -108,7 +125,6 @@ public final class TypeInference {
         return switch (consumerOp) {
             case STORE, RETURN -> producerType;
             case BINARY -> {
-                // Binary arithmetic preserves the wider type
                 if (producerType.kind() == TypeKind.DOUBLE) {
                     yield JavaType.DOUBLE;
                 }
@@ -122,7 +138,7 @@ public final class TypeInference {
             }
             case COMPARE, CONDITION -> JavaType.INT;
             case PHI -> producerType;
-            case INVOKE -> producerType; // pass-through as argument
+            case INVOKE -> producerType;
             default -> producerType;
         };
     }
@@ -132,15 +148,13 @@ public final class TypeInference {
         if (a.equals(b)) {
             return a;
         }
-        // Numeric widening hierarchy: byte < short < int < long < float < double
         if (isNumeric(a) && isNumeric(b)) {
             return wider(a, b);
         }
-        // Object types: use common supertype (simplified: java/lang/Object)
         if (a.kind() == TypeKind.CLASS && b.kind() == TypeKind.CLASS) {
             return JavaType.classType("java/lang/Object");
         }
-        return a; // keep the first type as fallback
+        return a;
     }
 
     private boolean isNumeric(JavaType t) {

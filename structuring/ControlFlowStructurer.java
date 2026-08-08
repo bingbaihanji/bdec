@@ -113,8 +113,8 @@ public class ControlFlowStructurer {
         }
 
         // 6. Generate AST with structure annotations
-        BlockStatement body = blockReducer.reduce(graph, ir, loopAnns, ifAnns);
-        return new StructuredMethod(ir.method(), ir, body, loopAnns, ifAnns);
+        BlockStatement body = blockReducer.reduce(graph, ir, loopAnns, ifAnns, switchAnns, tryCatchAnns);
+        return new StructuredMethod(ir.method(), ir, body, loopAnns, ifAnns, switchAnns, tryCatchAnns);
     }
 
     // ── Folding operations ────────────────────────────────────────

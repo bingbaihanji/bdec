@@ -50,6 +50,9 @@ public class IndentWriter {
 
     public int currentLine() {return currentLine;}
 
+    /** Associate the current position with a bytecode offset for line mapping. */
+    public int currentPosition() {return sb.length();}
+
     private void writeIndent() {sb.append(" ".repeat(indentLevel * indentSize));}
 
     @Override

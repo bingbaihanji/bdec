@@ -93,7 +93,27 @@ public final class CfgBuilder {
             }
 
             if (last.isTerminal()) {
-                edges.add(ControlFlowEdge.returnEdge(block, exit));
+                // Check for switch before treating as return
+                if (last.mnemonic().equals("tableswitch") || last.mnemonic().equals("lookupswitch")) {
+                    int[] targets = last.jumpTargets();
+                    // First target is default
+                    if (targets.length > 0) {
+                        BasicBlock defaultBlock = offsetToBlock.get(targets[0]);
+                        if (defaultBlock != null) {
+                            edges.add(ControlFlowEdge.switchDefault(block, defaultBlock));
+                        }
+                    }
+                    // Remaining targets are cases
+                    for (int t = 1; t < targets.length; t++) {
+                        BasicBlock caseBlock = offsetToBlock.get(targets[t]);
+                        if (caseBlock != null) {
+                            edges.add(new ControlFlowEdge(block, caseBlock,
+                                    EdgeKind.SWITCH_CASE, t - 1, null));
+                        }
+                    }
+                } else {
+                    edges.add(ControlFlowEdge.returnEdge(block, exit));
+                }
             } else if (last.mnemonic().equals("goto")) {
                 BasicBlock target = offsetToBlock.get(last.jumpTargets()[0]);
                 if (target != null) {

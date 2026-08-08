@@ -9,11 +9,16 @@ import java.io.IOException;
 public final class ConstantPoolParser {
 
     public static String utf8(ConstantPoolEntry[] pool, int index) {
+        if (index <= 0 || index >= pool.length || !(pool[index] instanceof CpUtf8)) {
+            return "<invalid utf8>";
+        }
         return ((CpUtf8) pool[index]).value();
     }
 
     public static String className(ConstantPoolEntry[] pool, int classIndex) {
-        CpClass c = (CpClass) pool[classIndex];
+        if (classIndex <= 0 || classIndex >= pool.length || !(pool[classIndex] instanceof CpClass c)) {
+            return "<invalid class>";
+        }
         return utf8(pool, c.nameIndex());
     }
 
