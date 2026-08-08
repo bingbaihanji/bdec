@@ -1,10 +1,15 @@
 package com.bingbaihanji.bdec;
 
+import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
+
+import java.util.Collections;
+import java.util.List;
 import java.util.function.Function;
 
 /**
  * Per-decompilation context — carries a class byte loader for resolving
- * dependent types, and the typed config.
+ * dependent types, the typed config, and bootstrap methods data needed
+ * by RewriteRules (LambdaRewriter, MethodRefRewriter).
  */
 public class DecompileContext {
 
@@ -12,14 +17,22 @@ public class DecompileContext {
 
     private final Function<String, byte[]> classByteLoader;
 
+    private final List<BootstrapMethodEntry> bootstrapMethods;
+
     public DecompileContext(BdecConfig config, Function<String, byte[]> classByteLoader) {
+        this(config, classByteLoader, Collections.emptyList());
+    }
+
+    public DecompileContext(BdecConfig config, Function<String, byte[]> classByteLoader,
+                            List<BootstrapMethodEntry> bootstrapMethods) {
         this.config = config;
         this.classByteLoader = classByteLoader;
+        this.bootstrapMethods = Collections.unmodifiableList(bootstrapMethods);
     }
 
     /** Empty context for simple single-class decompilation */
     public static DecompileContext empty(BdecConfig config) {
-        return new DecompileContext(config, null);
+        return new DecompileContext(config, null, Collections.emptyList());
     }
 
     public BdecConfig config() {return config;}
@@ -28,4 +41,7 @@ public class DecompileContext {
     public byte[] loadClassBytes(String internalName) {
         return classByteLoader != null ? classByteLoader.apply(internalName) : null;
     }
+
+    /** Bootstrap methods from the class file (needed for lambda/method ref resolution). */
+    public List<BootstrapMethodEntry> bootstrapMethods() {return bootstrapMethods;}
 }

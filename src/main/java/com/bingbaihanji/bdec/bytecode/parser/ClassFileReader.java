@@ -1,12 +1,14 @@
 package com.bingbaihanji.bdec.bytecode.parser;
 
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
+import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
 
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public final class ClassFileReader {
@@ -16,6 +18,24 @@ public final class ClassFileReader {
     private final ConstantPoolParser cpParser = new ConstantPoolParser();
 
     private final StructureParser structParser = new StructureParser();
+
+    /** Parse the BootstrapMethods class attribute. */
+    private List<BootstrapMethodEntry> parseBootstrapMethods(DataInputStream in,
+                                                              ConstantPoolEntry[] pool)
+            throws IOException {
+        int count = in.readUnsignedShort();
+        List<BootstrapMethodEntry> entries = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            int methodRef = in.readUnsignedShort();
+            int argCount = in.readUnsignedShort();
+            List<Integer> arguments = new ArrayList<>(argCount);
+            for (int j = 0; j < argCount; j++) {
+                arguments.add(in.readUnsignedShort());
+            }
+            entries.add(new BootstrapMethodEntry(methodRef, arguments));
+        }
+        return entries;
+    }
 
     public ClassFileModel read(String internalName, byte[] bytes) throws IOException {
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
@@ -53,19 +73,25 @@ public final class ClassFileReader {
 
         int attrCount = in.readUnsignedShort();
         String signature = "";
+        List<BootstrapMethodEntry> bootstrapMethods = Collections.emptyList();
         for (int i = 0; i < attrCount; i++) {
             int attrNameIdx = in.readUnsignedShort();
             int attrLen = in.readInt();
             String attrName = ConstantPoolParser.utf8(pool, attrNameIdx);
-            if ("Signature".equals(attrName)) {
-                int sigIdx = in.readUnsignedShort();
-                signature = ConstantPoolParser.utf8(pool, sigIdx);
-            } else {
-                in.skipBytes(attrLen);
+            switch (attrName) {
+                case "Signature" -> {
+                    int sigIdx = in.readUnsignedShort();
+                    signature = ConstantPoolParser.utf8(pool, sigIdx);
+                }
+                case "BootstrapMethods" -> {
+                    bootstrapMethods = parseBootstrapMethods(in, pool);
+                }
+                default -> in.skipBytes(attrLen);
             }
         }
 
         return new ClassFileModel(major, minor, accessFlags,
-                thisClassName, superName, interfaces, fields, methods, pool, signature);
+                thisClassName, superName, interfaces, fields, methods, pool, signature,
+                bootstrapMethods);
     }
 }
