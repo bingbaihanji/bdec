@@ -24,16 +24,20 @@ public final class CfgBuilder {
                     List.of(entry, exit), List.of(), List.of());
         }
 
-        // 1. Find leaders
+        // 1. Find leaders — jump targets AND fall-through boundaries
         Set<Integer> leaders = new LinkedHashSet<>();
         leaders.add(instructions.get(0).offset());
 
-        for (Instruction insn : instructions) {
+        for (int i = 0; i < instructions.size(); i++) {
+            Instruction insn = instructions.get(i);
             for (int target : insn.jumpTargets()) {
                 leaders.add(target);
             }
-            if (!insn.canFallThrough() && !insn.isTerminal()) {
-                // Last instruction in the method
+            // For instructions that don't fall through (goto, if*, tableswitch,
+            // lookupswitch, athrow), the next instruction is only reachable via
+            // an explicit branch from elsewhere → must be a leader.
+            if (!insn.canFallThrough() && i + 1 < instructions.size()) {
+                leaders.add(instructions.get(i + 1).offset());
             }
         }
 
@@ -95,7 +99,9 @@ public final class CfgBuilder {
             if (last.isTerminal()) {
                 // Check for switch before treating as return
                 if (last.mnemonic().equals("tableswitch") || last.mnemonic().equals("lookupswitch")) {
+                    boolean isTable = last.mnemonic().equals("tableswitch");
                     int[] targets = last.jumpTargets();
+                    java.util.List<Integer> operands = last.rawOperands();
                     // First target is default
                     if (targets.length > 0) {
                         BasicBlock defaultBlock = offsetToBlock.get(targets[0]);
@@ -107,8 +113,18 @@ public final class CfgBuilder {
                     for (int t = 1; t < targets.length; t++) {
                         BasicBlock caseBlock = offsetToBlock.get(targets[t]);
                         if (caseBlock != null) {
+                            int caseValue;
+                            if (isTable) {
+                                // TABLESWITCH: operands=[defaultOffset, low, high]
+                                int low = operands.size() > 1 ? operands.get(1) : 0;
+                                caseValue = low + (t - 1);
+                            } else {
+                                // LOOKUPSWITCH: operands=[defaultOffset, npairs, match0, off0, ...]
+                                int matchIdx = 2 + (t - 1) * 2;
+                                caseValue = operands.size() > matchIdx ? operands.get(matchIdx) : t - 1;
+                            }
                             edges.add(new ControlFlowEdge(block, caseBlock,
-                                    EdgeKind.SWITCH_CASE, t - 1, null));
+                                    EdgeKind.SWITCH_CASE, caseValue, null));
                         }
                     }
                 } else {

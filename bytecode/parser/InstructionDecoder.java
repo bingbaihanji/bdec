@@ -59,16 +59,34 @@ public final class InstructionDecoder {
             }
             case 4 -> {
                 // INVOKEINTERFACE: 2 bytes index + 1 byte count + 1 byte 0
+                // INVOKEDYNAMIC: 2 bytes index + 2 bytes 0 (must be zero)
+                // GOTO_W/JSR_W: 4 bytes signed branch offset
                 if (op == Opcode.INVOKEINTERFACE) {
                     int index = in.readUnsignedShort();
                     int count = in.readUnsignedByte();
                     int zero = in.readUnsignedByte();
                     operands.add(index);
                     operands.add(count);
+                } else if (op == Opcode.INVOKEDYNAMIC) {
+                    int index = in.readUnsignedShort();
+                    int zero1 = in.readUnsignedByte();
+                    int zero2 = in.readUnsignedByte();
+                    operands.add(index); // only the CP index matters
+                } else if (op == Opcode.GOTO_W || op == Opcode.JSR_W) {
+                    int branchOffset = in.readInt();
+                    operands.add(branchOffset);
+                    jumpTargets = new int[]{offset + branchOffset};
                 } else {
                     int val = in.readInt();
                     operands.add(val);
                 }
+            }
+            case 3 -> {
+                // MULTIANEWARRAY: 2 bytes CP index + 1 byte dimensions
+                int index = in.readUnsignedShort();
+                int dims = in.readUnsignedByte();
+                operands.add(index);
+                operands.add(dims);
             }
             case 0 -> {
                 // No operands
