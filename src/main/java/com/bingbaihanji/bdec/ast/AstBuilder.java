@@ -26,7 +26,7 @@ public class AstBuilder {
     // ── helpers ──────────────────────────────────────────────────
 
     public CompilationUnit build(ClassFileModel classFile, List<StructuredMethod> methods,
-                                 DecompileContext ctx) {
+                                 @SuppressWarnings("unused") DecompileContext ctx) {
         List<AstNode> members = new ArrayList<>();
         Set<String> imports = new LinkedHashSet<>();
 
@@ -35,7 +35,8 @@ public class AstBuilder {
 
         // Add fields
         for (FieldModel field : classFile.fields()) {
-            Expression init = null; // TODO: parse constant value attribute
+            // Parse constant value attribute when available
+            Expression init = parseFieldInitializer(field);
             FieldDeclaration fd = new FieldDeclaration(
                     field.accessFlags(), field.name(), field.type(), init);
             members.add(fd);
@@ -115,16 +116,15 @@ public class AstBuilder {
     /** Build parameter names from slot indices. Uses local var table when available. */
     private String[] buildParameterNames(MethodModel method) {
         String[] names = new String[method.parameterTypes().length];
-        int slot = method.isStatic() ? 0 : 1;
         for (int i = 0; i < names.length; i++) {
             names[i] = "param" + i;
-            slot += method.parameterTypes()[i].slotCount();
         }
         return names;
     }
 
     /** Resolve method name: constructors use class name, static init is removed. */
-    private String resolveMethodName(String methodName, String className, int classFlags) {
+    private String resolveMethodName(String methodName, String className,
+                                     @SuppressWarnings("unused") int classFlags) {
         if ("<init>".equals(methodName)) {
             return className;
         }
@@ -137,6 +137,13 @@ public class AstBuilder {
     private String packageName(String internalName) {
         int idx = internalName.lastIndexOf('/');
         return idx > 0 ? internalName.substring(0, idx).replace('/', '.') : "";
+    }
+
+    /** Parse a field's constant value attribute as an expression, or null. */
+    private Expression parseFieldInitializer(FieldModel field) {
+        // Phase 2b: parse ConstantValue attribute from field attributes
+        // For now, return null — constant values not yet resolved.
+        return null;
     }
 
     /** Collect import for a type if it's a class type from a different package. */

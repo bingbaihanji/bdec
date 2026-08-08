@@ -39,11 +39,10 @@ public record JavaType(
     }
 
     public static JavaType array(JavaType elementType, int dimensions) {
-        StringBuilder desc = new StringBuilder();
-        desc.append("[".repeat(Math.max(0, dimensions)));
-        desc.append(elementType.descriptor());
+        String desc = "[".repeat(Math.max(0, dimensions)) +
+                elementType.descriptor();
         return new JavaType(TypeKind.ARRAY, null,
-                desc.toString(), Collections.emptyList(), dimensions);
+                desc, Collections.emptyList(), dimensions);
     }
 
     private static JavaType fromDescriptor(String desc) {

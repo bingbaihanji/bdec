@@ -32,6 +32,11 @@ public final class InstructionDecoder {
         int[] jumpTargets = new int[0];
         int varIndex = op.implicitVarIndex();
 
+        // Tableswitch/Lookupswitch: variable-length, special handling
+        if (op == Opcode.TABLESWITCH || op == Opcode.LOOKUPSWITCH) {
+            return decodeSwitch(in, offset, op);
+        }
+
         switch (op.operandBytes()) {
             case 1 -> {
                 int val = in.readUnsignedByte();
@@ -75,6 +80,54 @@ public final class InstructionDecoder {
 
         return new Instruction(offset, opcodeByte, op.mnemonic(),
                 operands, op.canFallThrough(), op.isTerminal(), jumpTargets, varIndex);
+    }
+
+    /** Decode a tableswitch or lookupswitch instruction. */
+    private Instruction decodeSwitch(DataInputStream in, int offset, Opcode op) throws IOException {
+        // Skip 0-3 padding bytes to reach 4-byte alignment from method start
+        int alignedOffset = (offset + 4) & ~3;
+        int skipBytes = alignedOffset - offset - 1; // -1 because we already read the opcode byte
+        if (skipBytes > 0) {
+            in.skipBytes(skipBytes);
+        }
+
+        int defaultTarget = in.readInt();
+        List<Integer> operands = new ArrayList<>();
+        List<Integer> jumpTargetsList = new ArrayList<>();
+        jumpTargetsList.add(offset + defaultTarget);
+
+        if (op == Opcode.TABLESWITCH) {
+            int low = in.readInt();
+            int high = in.readInt();
+            operands.add(defaultTarget);
+            operands.add(low);
+            operands.add(high);
+            int count = high - low + 1;
+            for (int i = 0; i < count; i++) {
+                int caseOffset = in.readInt();
+                jumpTargetsList.add(offset + caseOffset);
+            }
+        } else {
+            // LOOKUPSWITCH
+            int npairs = in.readInt();
+            operands.add(defaultTarget);
+            operands.add(npairs);
+            for (int i = 0; i < npairs; i++) {
+                int match = in.readInt();
+                int caseOffset = in.readInt();
+                operands.add(match);
+                jumpTargetsList.add(offset + caseOffset);
+            }
+        }
+
+        int[] jumpTargets = jumpTargetsList.stream().mapToInt(Integer::intValue).toArray();
+        return new Instruction(offset, op.code(), op.mnemonic(),
+                operands, op.canFallThrough(), op.isTerminal(), jumpTargets, varIndex(op));
+    }
+
+    /** Get the implicit variable index for a switch (not applicable — returns -1). */
+    private int varIndex(Opcode op) {
+        return op.implicitVarIndex();
     }
 
     /**

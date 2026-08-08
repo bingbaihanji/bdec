@@ -32,6 +32,10 @@ public record ControlFlowEdge(
         return new ControlFlowEdge(source, exit, EdgeKind.RETURN, -1, null);
     }
 
+    public static ControlFlowEdge switchDefault(BasicBlock source, BasicBlock target) {
+        return new ControlFlowEdge(source, target, EdgeKind.SWITCH_DEFAULT, -1, null);
+    }
+
     public static ControlFlowEdge throwEdge(BasicBlock source, BasicBlock exit) {
         return new ControlFlowEdge(source, exit, EdgeKind.THROW, -1, null);
     }

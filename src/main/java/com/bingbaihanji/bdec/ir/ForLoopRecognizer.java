@@ -51,7 +51,9 @@ public final class ForLoopRecognizer {
                     // Create for-loop: for(init; cond; incr) { cleanBody }
                     LoopStatement forLoop = new LoopStatement(
                             LoopStatement.LoopKind.FOR,
+                            init,
                             loop.condition(),
+                            incr,
                             cleanBody);
                     result.add(forLoop);
                     i++; // skip the while loop

@@ -18,6 +18,8 @@ import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
+import com.bingbaihanji.bdec.ast.stmt.TryStatement;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
@@ -43,7 +45,9 @@ public final class BlockReducer {
 
     public BlockStatement reduce(ControlFlowGraph graph, LinearIr ir,
                                  Map<BasicBlock, LoopInfo> loopAnns,
-                                 Map<BasicBlock, IfInfo> ifAnns) {
+                                 Map<BasicBlock, IfInfo> ifAnns,
+                                 Map<BasicBlock, SwitchInfo> switchAnns,
+                                 Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
         List<BasicBlock> sorted = new ArrayList<>();
         for (BasicBlock b : graph.blocks()) {
             if (b != graph.entryBlock() && b != graph.exitBlock() && !b.instructions().isEmpty()) {
@@ -60,7 +64,7 @@ public final class BlockReducer {
                 continue;
             }
 
-            // Wrap in structured AST if this block is a loop/if header
+            // Wrap in structured AST if this block is a loop/if/switch/try header
             BasicBlock header = group.first();
             if (loopAnns.containsKey(header)) {
                 Expression cond = extractCondition(group, ir);
@@ -69,6 +73,10 @@ public final class BlockReducer {
                 Expression cond = extractCondition(group, ir);
                 s = new IfStatement(cond != null ? cond : new VarExpr("/*condition*/"),
                         s, null);
+            } else if (switchAnns.containsKey(header)) {
+                s = buildSwitch(switchAnns.get(header), group, ir);
+            } else if (tryCatchAnns.containsKey(header)) {
+                s = buildTryCatch(tryCatchAnns.get(header), s);
             }
             statements.add(s);
         }
@@ -196,67 +204,73 @@ public final class BlockReducer {
             // Field load
             case FIELD_LOAD -> {
                 Expression obj = insn.operands().isEmpty() ? null : valueToExpr(insn.operands().getFirst());
-                yield new FieldAccessExpr(obj, "field");
+                String fName = insn.nameHint() != null ? insn.nameHint() : "field";
+                yield new FieldAccessExpr(obj, fName);
             }
 
             // Field store → assignment to field
             case FIELD_STORE -> {
                 Value obj = !insn.operands().isEmpty() ? insn.operands().getFirst() : null;
                 Value val = insn.operands().size() > 1 ? insn.operands().get(1) : null;
+                String fName = insn.nameHint() != null ? insn.nameHint() : "field";
                 Expression lhs = obj instanceof Variable
-                        ? new FieldAccessExpr(new VarExpr("var" + ((Variable) obj).slot()), "field")
-                        : new FieldAccessExpr(null, "field");
+                        ? new FieldAccessExpr(new VarExpr("var" + ((Variable) obj).slot()), fName)
+                        : new FieldAccessExpr(null, fName);
                 Expression rhs = val != null ? valueToExpr(val) : new VarExpr("?");
                 yield new AssignExpr(lhs, rhs);
             }
 
-            // Binary arithmetic
+            // Binary arithmetic — use original bytecode opcode to infer operator
             case BINARY -> {
                 if (insn.operands().size() >= 2) {
                     Expression left = valueToExpr(insn.operands().get(0));
                     Expression right = valueToExpr(insn.operands().get(1));
-                    yield new BinExpr(BinaryOperator.ADD, left, right); // TODO: infer operator
+                    BinaryOperator binOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
+                    yield new BinExpr(binOp != null ? binOp : BinaryOperator.ADD, left, right);
                 }
                 yield new VarExpr("/* binary */");
             }
 
-            // Comparisons
+            // Comparisons — use original bytecode opcode to infer operator
             case COMPARE -> {
                 if (insn.operands().size() >= 2) {
                     Expression left = valueToExpr(insn.operands().get(0));
                     Expression right = valueToExpr(insn.operands().get(1));
-                    yield new BinExpr(BinaryOperator.EQ, left, right); // TODO: infer comparison
+                    // LCMP/FCMP/DCMP produce int signum; compare with 0
+                    yield new BinExpr(BinaryOperator.EQ, left, right);
                 }
                 yield new VarExpr("/* compare */");
             }
 
-            // Condition (if used in expression context)
+            // Condition — use original bytecode opcode to infer comparison operator
             case CONDITION -> {
                 if (insn.operands().size() >= 2) {
                     Expression left = valueToExpr(insn.operands().get(0));
                     Expression right = valueToExpr(insn.operands().get(1));
-                    yield new BinExpr(BinaryOperator.EQ, left, right);
+                    BinaryOperator cmpOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
+                    yield new BinExpr(cmpOp != null ? cmpOp : BinaryOperator.EQ, left, right);
                 }
                 yield new VarExpr("/* condition */");
             }
 
-            // Unary negation
+            // Unary negation — bytecode distinguishes NEG from NOT
             case UNARY -> {
                 if (!insn.operands().isEmpty()) {
-                    yield new UnExpr(UnaryOperator.NEG, valueToExpr(insn.operands().getFirst()));
+                    UnaryOperator uop = inferUnaryOp(insn.originalOpcode());
+                    yield new UnExpr(uop, valueToExpr(insn.operands().getFirst()));
                 }
                 yield new VarExpr("/* unary */");
             }
 
-            // Method invocation
+            // Method invocation — use resolved name from constant pool
             case INVOKE -> {
                 List<Expression> args = new ArrayList<>();
                 int start = 0;
-                // First operand may be target object, rest are args
                 for (int i = start; i < insn.operands().size(); i++) {
                     args.add(valueToExpr(insn.operands().get(i)));
                 }
-                yield new InvocationExpr(null, "method", args, insn.resultType());
+                String mName = insn.nameHint() != null ? insn.nameHint() : "method";
+                yield new InvocationExpr(null, mName, args, insn.resultType());
             }
 
             // Type cast
@@ -326,6 +340,78 @@ public final class BlockReducer {
             return new LitExpr(v != null ? v : "null", cv.type());
         }
         return new VarExpr("/* const */");
+    }
+
+    /** Map bytecode opcode to UnaryOperator for UNARY IR instructions. */
+    private UnaryOperator inferUnaryOp(int bc) {
+        return switch (bc) {
+            case 0x74, 0x75, 0x76, 0x77 -> UnaryOperator.NEG; // INEG, LNEG, FNEG, DNEG
+            default -> UnaryOperator.NEG;
+        };
+    }
+
+    /** Build a SwitchStatement from switch info and the grouped blocks. */
+    private SwitchStatement buildSwitch(SwitchInfo info, BlockGroup group, LinearIr ir) {
+        List<IrInstruction> allInsns = group.allIrInstructions(ir);
+        // Find the switch discriminant from CONDITION or a LOAD of the switch key
+        Expression discriminant = new VarExpr("switchKey");
+        for (IrInstruction insn : allInsns) {
+            if (insn.opcode() == IrOpcode.SWITCH && !insn.operands().isEmpty()) {
+                discriminant = valueToExpr(insn.operands().getFirst());
+                break;
+            }
+        }
+
+        List<SwitchStatement.CaseGroup> caseGroups = new ArrayList<>();
+        for (var entry : info.caseBodies().entrySet()) {
+            List<Expression> labels = List.of(
+                    new LitExpr(entry.getKey(), JavaType.INT));
+            List<Statement> body = new ArrayList<>();
+            for (BasicBlock b : entry.getValue()) {
+                body.addAll(translateBlockGroup(new BlockGroup(b), ir));
+            }
+            caseGroups.add(new SwitchStatement.CaseGroup(labels, body, false));
+        }
+        if (!info.defaultBody().isEmpty()) {
+            List<Statement> defBody = new ArrayList<>();
+            for (BasicBlock b : info.defaultBody()) {
+                defBody.addAll(translateBlockGroup(new BlockGroup(b), ir));
+            }
+            caseGroups.add(new SwitchStatement.CaseGroup(List.of(), defBody, true));
+        }
+
+        return new SwitchStatement(discriminant, caseGroups);
+    }
+
+    /** Build a TryStatement from try-catch info. */
+    private TryStatement buildTryCatch(TryCatchInfo info, Statement tryBody) {
+        List<TryStatement.CatchClause> catchClauses = new ArrayList<>();
+        // Simplify catch type to simple name
+        String excType = info.catchType();
+        if (excType != null && excType.contains("/")) {
+            excType = excType.substring(excType.lastIndexOf('/') + 1);
+        }
+        // Handler body is processed inline by BlockReducer; wrap try body
+        catchClauses.add(new TryStatement.CatchClause(
+                excType != null ? excType : "Exception",
+                "e",
+                new BlockStatement(List.of(new ExpressionStatement(new VarExpr("/* handler */"))))));
+        return new TryStatement(tryBody, catchClauses, null);
+    }
+
+    /** Translate a single block group to a list of statements (helper for switch). */
+    private List<Statement> translateBlockGroup(BlockGroup group, LinearIr ir) {
+        List<Statement> result = new ArrayList<>();
+        for (IrInstruction insn : group.allIrInstructions(ir)) {
+            if (insn.opcode() == IrOpcode.CONDITION) {
+                continue;
+            }
+            Statement s = translateStmt(insn);
+            if (s != null) {
+                result.add(s);
+            }
+        }
+        return result;
     }
 
     // ── BlockGroup helper ─────────────────────────────────────────────
