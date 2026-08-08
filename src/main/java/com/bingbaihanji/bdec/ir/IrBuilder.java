@@ -639,6 +639,7 @@ public final class IrBuilder {
         JavaType returnType = JavaType.classType("java/lang/Object");
         String methodName = null;
         String declaringClass = null; // for constructor delegation target
+        com.bingbaihanji.bdec.type.JavaType[] paramTypes = null; // for boolean folding
 
         if (cpIdx > 0 && cpIdx < cp.length) {
             try {
@@ -664,8 +665,8 @@ public final class IrBuilder {
                         && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
                     String desc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
                     methodName = ConstantPoolParser.utf8(cp, nat.nameIndex());
-                    var params = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(desc);
-                    argCount = params.length;
+                    paramTypes = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(desc);
+                    argCount = paramTypes.length;
                     returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(desc);
                 }
             } catch (Exception ignored) {
@@ -682,6 +683,17 @@ public final class IrBuilder {
         Value receiver = null;
         if (op != Opcode.INVOKESTATIC && !stack.isEmpty()) {
             receiver = stack.pop();
+        }
+
+        // Fold boolean constants: 0→false, 1→true when parameter is boolean
+        if (paramTypes != null) {
+            for (int p = 0; p < paramTypes.length && p < args.size(); p++) {
+                if (paramTypes[p].kind() == TypeKind.BOOLEAN
+                        && args.get(p) instanceof ConstantValue cv
+                        && cv.value() instanceof Integer i) {
+                    args.set(p, new ConstantValue(i != 0, JavaType.BOOLEAN));
+                }
+            }
         }
 
         IrInstruction inv = IrInstruction.invoke(nextId(), receiver, args, returnType,

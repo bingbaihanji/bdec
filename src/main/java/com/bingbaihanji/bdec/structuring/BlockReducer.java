@@ -264,8 +264,16 @@ public final class BlockReducer {
                 statements.add(s);
             }
         }
-        // Post-process: wrap statement groups in try-catch based on annotations
-        return wrapTryCatchBlocks(new BlockStatement(statements), groups, tryCatchAnns, ir);
+        // Post-process: wrap statement groups in try-catch based on annotations.
+        // Avoid double-wrapping: if there's only one statement and it's already
+        // a BlockStatement, use it directly as the root instead of nesting.
+        BlockStatement root;
+        if (statements.size() == 1 && statements.getFirst() instanceof BlockStatement bs) {
+            root = bs;
+        } else {
+            root = new BlockStatement(statements);
+        }
+        return wrapTryCatchBlocks(root, groups, tryCatchAnns, ir);
     }
 
     /** Find if any block in the group has an IfInfo annotation. */

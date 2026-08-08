@@ -106,6 +106,24 @@ public class ControlFlowTest {
     }
 
     @Test
+    public void testBooleanArgFolding() throws Exception {
+        // Boolean constants in method calls should not be emitted as integers.
+        String source = """
+                package test;
+                public class BoolArgTest {
+                    public BoolArgTest(int x, boolean flag) {}
+                    public static BoolArgTest create(int x) {
+                        return new BoolArgTest(x, false);
+                    }
+                }
+                """;
+        String out = harness.decompileSource(source, "BoolArgTest");
+        DecompileTestHarness.assertContains(out, "class BoolArgTest", "create", "return");
+        // Should contain "false" (boolean), not "0" (integer)
+        DecompileTestHarness.assertContains(out, "false");
+    }
+
+    @Test
     public void testTryCatchBasic() throws Exception {
         // P2: try-catch should be detected
         String source = """
