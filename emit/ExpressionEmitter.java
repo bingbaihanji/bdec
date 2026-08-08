@@ -177,8 +177,30 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
 
     private void emitAssign(AssignExpr a) {
         emit(a.target());
-        w.write(" = ");
+        if (a.compoundOp() != null) {
+            w.space().write(compoundSym(a.compoundOp())).write("= ");
+        } else {
+            w.write(" = ");
+        }
         emit(a.value());
+    }
+
+    /** Map BinaryOperator to its compound-assignment symbol prefix. */
+    private static String compoundSym(BinaryOperator op) {
+        return switch (op) {
+            case ADD -> "+";
+            case SUB -> "-";
+            case MUL -> "*";
+            case DIV -> "/";
+            case REM -> "%";
+            case BIT_AND -> "&";
+            case BIT_OR -> "|";
+            case BIT_XOR -> "^";
+            case SHL -> "<<";
+            case SHR -> ">>";
+            case USHR -> ">>>";
+            default -> "?";
+        };
     }
 
     private void emitConditional(CondExpr c) {

@@ -84,7 +84,8 @@ public final class StringConcatRecognizer {
         if (e instanceof AssignExpr assign) {
             return new AssignExpr(
                     simplifyExpression(assign.target()),
-                    simplifyExpression(assign.value()));
+                    simplifyExpression(assign.value()),
+                    assign.compoundOp());
         }
         if (e instanceof UnExpr un) {
             return new UnExpr(un.operator(), simplifyExpression(un.operand()));
