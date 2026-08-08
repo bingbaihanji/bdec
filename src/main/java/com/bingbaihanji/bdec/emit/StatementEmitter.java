@@ -100,7 +100,24 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
                 }
                 w.write(");").newLine();
             }
-            case FOR, FOR_EACH -> {
+            case FOR_EACH -> {
+                w.token("for").space().write("(");
+                // Emit variable and iterable: "Type var : iterable"
+                if (l.forEachVar() != null) {
+                    exprs.emit(l.forEachVar());
+                } else if (l.initExpr() != null) {
+                    exprs.emit(l.initExpr());
+                } else {
+                    w.write("Object e");
+                }
+                w.space().write(":").space();
+                if (l.condition() != null) {
+                    exprs.emit(l.condition());
+                }
+                w.write(")").space();
+                emitBranched(l.body());
+            }
+            case FOR -> {
                 w.token("for").space().write("(");
                 // Emit initializer
                 if (l.initExpr() != null) {

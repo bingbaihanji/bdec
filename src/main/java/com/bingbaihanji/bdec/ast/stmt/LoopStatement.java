@@ -20,6 +20,10 @@ public final class LoopStatement extends Statement {
 
     private final Statement body;
 
+    /** For-each: the variable declared in the loop header ({@code Type var}).
+     *  Stored as an AssignExpr or VarExpr; emits as {@code Type var} in for-each. */
+    private final Expression forEachVar;
+
     /** Full constructor for for-loops. */
     public LoopStatement(LoopKind k, Expression init, Expression cond, Expression incr, Statement b) {
         loopKind = k;
@@ -27,6 +31,22 @@ public final class LoopStatement extends Statement {
         condition = cond;
         incrExpr = incr;
         body = b;
+        forEachVar = null;
+    }
+
+    /** Constructor for for-each loops.
+     *  @param k         must be {@link LoopKind#FOR_EACH}
+     *  @param varExpr   the loop variable expression (VarExpr or AssignExpr)
+     *  @param iterable  the collection/array to iterate over
+     *  @param b         the loop body
+     */
+    public LoopStatement(LoopKind k, Expression varExpr, Expression iterable, Statement b) {
+        loopKind = k;
+        initExpr = null;
+        condition = iterable;  // iterable expression stored as condition
+        incrExpr = null;
+        body = b;
+        forEachVar = varExpr;
     }
 
     /** Backward-compatible constructor without init/incr. */
@@ -36,13 +56,16 @@ public final class LoopStatement extends Statement {
 
     public LoopKind loopKind() {return loopKind;}
 
-    /** For-loop initializer expression, or null. */
+    /** For-loop initializer expression, or for-each variable. */
     public Expression initExpr() {return initExpr;}
 
     public Expression condition() {return condition;}
 
     /** For-loop increment expression, or null. */
     public Expression incrExpr() {return incrExpr;}
+
+    /** For-each loop variable, or null for regular for/while loops. */
+    public Expression forEachVar() {return forEachVar;}
 
     public Statement body() {return body;}
 

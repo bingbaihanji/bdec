@@ -5,7 +5,9 @@ import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.rewrite.AstRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.BoxingRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.EnumRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.ForEachRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.LambdaRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.MethodRefRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.RewriteRule;
 import com.bingbaihanji.bdec.ast.rewrite.StringConcatRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.TernaryRewriter;
@@ -63,7 +65,8 @@ public class BdecEngine implements Decompiler {
     private final AstBuilder astBuilder = new AstBuilder();
 
     private final AstRewriter astRewriter = new AstRewriter(
-            List.of(new LambdaRewriter(), new StringConcatRewriter(),
+            List.of(new LambdaRewriter(), new MethodRefRewriter(),
+                    new StringConcatRewriter(), new ForEachRewriter(),
                     new TryResourceRewriter(), new TernaryRewriter(),
                     new BoxingRewriter(), new EnumRewriter()));
 

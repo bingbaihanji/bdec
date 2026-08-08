@@ -12,24 +12,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Detects Iterator-based and array-indexed loops and converts them
- * to Java {@code for (E e : collection)} enhanced for-each loops.
+ * Detects Iterator-based loops and converts them to Java
+ * {@code for (E element : collection)} enhanced for-each loops.
  *
- * <p>Pattern (Collection):
+ * <p>Pattern:
  * <pre>
  *   Iterator iter = collection.iterator();
- *   while (iter.hasNext()) {
- *       E element = iter.next();
- *       // body
- *   }
- * </pre>
+ *   while (iter.hasNext()) { E element = iter.next(); ...body... }
  *
- * <p>Pattern (Array):
- * <pre>
- *   for (int i = 0; i < arr.length; i++) {
- *       E element = arr[i];
- *       // body
- *   }
+ *   → for (E element : collection) { ...body... }
  * </pre>
  *
  * <p>Inspired by CFR's {@code IterLoopRewriter}.
@@ -54,7 +45,7 @@ public class ForEachRewriter implements RewriteRule {
             if (m instanceof MethodDeclaration md) {
                 members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(),
-                        rewriteStatement(md.body())));
+                        rewriteBlock(md.body())));
             } else {
                 members.add(m);
             }
@@ -63,120 +54,148 @@ public class ForEachRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
-    private Statement rewriteStatement(Statement s) {
+    private Statement rewriteBlock(Statement s) {
         if (s instanceof BlockStatement bs) {
-            return detectForEach(new BlockStatement(
-                    bs.statements().stream().map(this::rewriteStatement).toList()));
+            List<Statement> rewritten = new ArrayList<>();
+            for (Statement child : bs.statements()) {
+                rewritten.add(rewriteBlock(child));
+            }
+            return detectForEach(new BlockStatement(rewritten));
+        }
+        if (s instanceof LoopStatement ls) {
+            return new LoopStatement(ls.loopKind(), ls.initExpr(),
+                    ls.condition(), ls.incrExpr(), rewriteBlock(ls.body()));
+        }
+        if (s instanceof IfStatement i) {
+            return new IfStatement(i.condition(),
+                    rewriteBlock(i.thenBranch()),
+                    i.elseBranch() != null ? rewriteBlock(i.elseBranch()) : null);
         }
         return s;
     }
 
     /**
-     * Walk a BlockStatement looking for iterator→for-each patterns.
-     * When found, replace the iterator declaration + while loop with a for-each loop.
+     * Walk a block looking for adjacent iterator-declaration + while-loop
+     * patterns and collapse them into for-each loops.
      */
     private Statement detectForEach(BlockStatement bs) {
         List<Statement> stmts = new ArrayList<>(bs.statements());
-        for (int i = 0; i < stmts.size() - 1; i++) {
-            Statement s = stmts.get(i);
+        boolean changed;
+        do {
+            changed = false;
+            for (int i = 0; i < stmts.size() - 1; i++) {
+                Statement s = stmts.get(i);
+                // Look for: ExpressionStatement containing iterator() assignment
+                ForEachCandidate candidate = matchIteratorDecl(s);
+                if (candidate == null) continue;
 
-            // Pattern: Iterator<E> iter = collection.iterator()
-            if (s instanceof ExpressionStatement es
-                    && es.expression() instanceof AssignExpr assign
-                    && assign.value() instanceof InvocationExpr inv
-                    && "iterator".equals(inv.methodName())
-                    && inv.target() != null) {
+                // Check next statement is a while-loop
+                if (!(stmts.get(i + 1) instanceof LoopStatement loop)
+                        || loop.loopKind() != LoopStatement.LoopKind.WHILE) continue;
 
-                String iterVar = assign.target() instanceof VarExpr vx ? vx.name() : null;
-                Expression collection = inv.target();
+                // Match: while(iter.hasNext())
+                ForEachCandidate result = matchWhileLoop(loop, candidate);
+                if (result == null) continue;
 
-                // Find while(iter.hasNext()) loop
-                if (i + 1 < stmts.size() && stmts.get(i + 1) instanceof LoopStatement loop
-                        && loop.loopKind() == LoopStatement.LoopKind.WHILE) {
+                // Build for-each loop
+                LoopStatement forEach = new LoopStatement(
+                        LoopStatement.LoopKind.FOR_EACH,
+                        result.elementVar,
+                        candidate.iterableExpr,
+                        result.body);
 
-                    ForEachMatch match = matchWhileLoop(loop, iterVar, collection);
-                    if (match != null) {
-                        // Replace: remove iterator decl and while loop, insert for-each
-                        stmts.remove(i + 1); // while loop
-                        stmts.remove(i);     // iterator decl
-                        stmts.add(i, new LoopStatement(LoopStatement.LoopKind.FOR_EACH,
-                                null, loop.condition(), match.elementExpr,
-                                match.loopBody));
-                        return new BlockStatement(stmts);
-                    }
-                }
+                // Replace iterator decl + while loop with for-each
+                stmts.remove(i + 1);
+                stmts.remove(i);
+                stmts.add(i, forEach);
+                changed = true;
+                break;
             }
+        } while (changed);
 
-            // Pattern: array for-loop
-            if (s instanceof LoopStatement loop
-                    && loop.loopKind() == LoopStatement.LoopKind.FOR
-                    && loop.initExpr() instanceof AssignExpr initAssign) {
-                ForEachMatch match = matchArrayForLoop(loop);
-                if (match != null) {
-                    stmts.set(i, new LoopStatement(LoopStatement.LoopKind.FOR_EACH,
-                            null, loop.condition(), match.elementExpr, match.loopBody));
-                    return new BlockStatement(stmts);
-                }
-            }
-        }
-        return bs;
+        return new BlockStatement(stmts);
     }
 
-    /** Try to match a while(iter.hasNext()) loop as a for-each pattern. */
-    private ForEachMatch matchWhileLoop(LoopStatement loop, String iterVar, Expression collection) {
-        if (!(loop.body() instanceof BlockStatement bodyBs)) return null;
+    /** Match: {@code Iterator iter = collection.iterator();} */
+    private ForEachCandidate matchIteratorDecl(Statement s) {
+        if (!(s instanceof ExpressionStatement es)) return null;
+        if (!(es.expression() instanceof AssignExpr assign)) return null;
+        if (!(assign.value() instanceof InvocationExpr inv)) return null;
+        if (!"iterator".equals(inv.methodName())) return null;
+        if (inv.target() == null) return null;
 
-        List<Statement> bodyStmts = bodyBs.statements();
+        // Extract variable name
+        String varName = null;
+        if (assign.target() instanceof VarExpr vx) {
+            varName = vx.name();
+        }
+        if (varName == null) return null;
+
+        return new ForEachCandidate(varName, inv.target());
+    }
+
+    /** Match: {@code while(iter.hasNext()) { E e = iter.next(); ... }} */
+    private ForEachCandidate matchWhileLoop(LoopStatement loop, ForEachCandidate candidate) {
+        // Check condition: iter.hasNext()
+        if (!(loop.condition() instanceof InvocationExpr condInv)) return null;
+        if (!"hasNext".equals(condInv.methodName())) return null;
+        if (!(condInv.target() instanceof VarExpr var)) return null;
+        if (!candidate.iterVar.equals(var.name())) return null;
+
+        // Check body: first statement is E element = iter.next()
+        List<Statement> bodyStmts = getBodyStatements(loop.body());
         if (bodyStmts.isEmpty()) return null;
 
-        // First statement should be: Type element = iter.next()
         Statement first = bodyStmts.get(0);
-        if (first instanceof ExpressionStatement es
-                && es.expression() instanceof AssignExpr assign
-                && assign.value() instanceof InvocationExpr inv
-                && "next".equals(inv.methodName())
-                && inv.target() instanceof VarExpr vx
-                && vx.name().equals(iterVar)) {
+        if (!(first instanceof ExpressionStatement es)) return null;
+        if (!(es.expression() instanceof AssignExpr assign)) return null;
+        if (!(assign.value() instanceof InvocationExpr nextInv)) return null;
+        if (!"next".equals(nextInv.methodName())) return null;
+        if (!(nextInv.target() instanceof VarExpr nextVar)) return null;
+        if (!candidate.iterVar.equals(nextVar.name())) return null;
 
-            Expression elementExpr = assign.target();
-            // Build new loop body without the first statement
-            List<Statement> newBody = new ArrayList<>(bodyStmts);
-            newBody.remove(0);
-            Statement newLoopBody = newBody.size() == 1 ? newBody.get(0) : new BlockStatement(newBody);
-
-            // Create for-each expression: varName
-            return new ForEachMatch(collection, elementExpr, newLoopBody);
-        }
-        return null;
-    }
-
-    /** Try to match an array-indexed for loop as for-each. */
-    private ForEachMatch matchArrayForLoop(LoopStatement loop) {
-        if (!(loop.body() instanceof BlockStatement bodyBs)) return null;
-        List<Statement> bodyStmts = bodyBs.statements();
-        if (bodyStmts.isEmpty()) return null;
-
-        // Check first statement is: Type element = arr[i]
-        Statement first = bodyStmts.get(0);
-        if (first instanceof ExpressionStatement es
-                && es.expression() instanceof AssignExpr assign
-                && assign.value() instanceof FieldAccessExpr fae
-                && "length".equals(fae.fieldName())) {
-            // Too complex pattern — skip for now
+        // Build new body (minus the next() call)
+        List<Statement> newBodyStmts = new ArrayList<>(bodyStmts);
+        newBodyStmts.remove(0);
+        Statement newBody;
+        if (newBodyStmts.isEmpty()) {
+            newBody = new BlockStatement(List.of());
+        } else if (newBodyStmts.size() == 1) {
+            newBody = newBodyStmts.get(0);
+        } else {
+            newBody = new BlockStatement(newBodyStmts);
         }
 
-        return null; // Array for-each is complex, defer to later iteration
+        return new ForEachCandidate(candidate.iterVar, candidate.iterableExpr,
+                assign.target(), newBody);
     }
 
-    private static class ForEachMatch {
-        final Expression collectionExpr;
-        final Expression elementExpr;
-        final Statement loopBody;
+    private List<Statement> getBodyStatements(Statement s) {
+        if (s instanceof BlockStatement bs) return new ArrayList<>(bs.statements());
+        return new ArrayList<>(List.of(s));
+    }
 
-        ForEachMatch(Expression c, Expression e, Statement b) {
-            this.collectionExpr = c;
-            this.elementExpr = e;
-            this.loopBody = b;
+    private static class ForEachCandidate {
+        final String iterVar;
+        final Expression iterableExpr;
+        final Expression elementVar; // null for decl pattern
+        final Statement body;       // null for decl pattern
+
+        // Iterator declaration pattern
+        ForEachCandidate(String iterVar, Expression iterableExpr) {
+            this.iterVar = iterVar;
+            this.iterableExpr = iterableExpr;
+            this.elementVar = null;
+            this.body = null;
+        }
+
+        // While-loop pattern
+        ForEachCandidate(String iterVar, Expression iterableExpr,
+                         Expression elementVar, Statement body) {
+            this.iterVar = iterVar;
+            this.iterableExpr = iterableExpr;
+            this.elementVar = elementVar;
+            this.body = body;
         }
     }
 }
