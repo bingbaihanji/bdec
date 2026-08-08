@@ -89,8 +89,8 @@ public final class BdecCli {
             List<DecompilerDiagnostic> diags = new ArrayList<>();
             BdecEngine engine = new BdecEngine(config, diags::add);
 
-            // Derive internal name from file path
-            String name = deriveInternalName(classFile);
+            // Read internal name from the class file itself (most reliable)
+            String name = readInternalName(bytes, classFile.toString());
             BdecResult result = engine.decompile(name, bytes, DecompileContext.empty(config));
 
             if (!result.success()) {
@@ -198,11 +198,23 @@ public final class BdecCli {
         Files.writeString(outPath, source);
     }
 
-    private static String deriveInternalName(Path classFile) {
-        String fileName = classFile.getFileName().toString();
-        if (fileName.endsWith(".class")) {
-            return fileName.substring(0, fileName.length() - 6);
+    /**
+     * Extract the internal class name directly from the class file bytes.
+     * This is more reliable than trying to derive it from the file path.
+     */
+    private static String readInternalName(byte[] bytes, String fallbackPath) {
+        try {
+            // Class file layout: magic(4) + minor(2) + major(2) + cp_count(2) + cp...
+            // We just need the this_class index at a fixed offset after the constant pool.
+            // But the CP is variable-length. Use a full parse via ClassFileReader.
+            var reader = new com.bingbaihanji.bdec.bytecode.parser.ClassFileReader();
+            var model = reader.read(fallbackPath, bytes);
+            return model.internalName();
+        } catch (Exception e) {
+            // Fallback: simple name from file path
+            String fileName = java.nio.file.Path.of(fallbackPath).getFileName().toString();
+            return fileName.endsWith(".class")
+                    ? fileName.substring(0, fileName.length() - 6) : fileName;
         }
-        return fileName;
     }
 }

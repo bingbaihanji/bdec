@@ -13,8 +13,19 @@ public record MethodModel(
         List<Instruction> instructions,
         List<ExceptionHandlerModel> exceptionHandlers,
         int maxStack,
-        int maxLocals
+        int maxLocals,
+        String signature
 ) {
+
+    /** Backward-compatible constructor without signature. */
+    public MethodModel(int accessFlags, String name, String descriptor,
+                       JavaType returnType, JavaType[] parameterTypes,
+                       List<Instruction> instructions,
+                       List<ExceptionHandlerModel> exceptionHandlers,
+                       int maxStack, int maxLocals) {
+        this(accessFlags, name, descriptor, returnType, parameterTypes,
+                instructions, exceptionHandlers, maxStack, maxLocals, "");
+    }
 
     public boolean isAbstract() {return (accessFlags & 0x0400) != 0;}
 

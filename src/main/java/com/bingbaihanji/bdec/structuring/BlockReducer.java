@@ -31,17 +31,47 @@ import com.bingbaihanji.bdec.ir.LinearIr;
 import com.bingbaihanji.bdec.ir.Value;
 import com.bingbaihanji.bdec.ir.Variable;
 import com.bingbaihanji.bdec.type.JavaType;
+import com.bingbaihanji.bdec.type.TypeKind;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Converts a structured CFG into AST statements by translating
  * {@link IrInstruction} objects into proper AST expression/statement nodes.
+ *
+ * Key design: Only side-effecting instructions (STORE/RETURN/THROW/INVOKE/etc.)
+ * become statements. Intermediate instructions (LOAD/CONST/BINARY/CAST/etc.)
+ * are resolved into expression trees by following {@link InstructionRef} chains.
  */
 public final class BlockReducer {
+
+    /** Check if an instruction produces a side effect that should become a statement. */
+    private static boolean isStatementRoot(IrInstruction insn) {
+        return switch (insn.opcode()) {
+            case STORE, RETURN, THROW, FIELD_STORE, ARRAY_STORE -> true;
+            case INVOKE -> insn.resultType().kind() == TypeKind.VOID
+                    || insn.resultType().kind() == null; // void invocations
+            case INC -> true; // IINC is always a statement
+            case MONITOR_ENTER, MONITOR_EXIT -> true;
+            default -> false;
+        };
+    }
+
+    /** Check if an expression is "ignorable" — just a naked variable or temp ref. */
+    private static boolean isIgnorableExpr(Expression e) {
+        if (e instanceof VarExpr v) {
+            String name = v.name();
+            return name.startsWith("var") || name.startsWith("tmp") || name.startsWith("?");
+        }
+        return false;
+    }
+
+    // ── Block grouping ────────────────────────────────────────────────
 
     public BlockStatement reduce(ControlFlowGraph graph, LinearIr ir,
                                  Map<BasicBlock, LoopInfo> loopAnns,
@@ -94,7 +124,7 @@ public final class BlockReducer {
         return null;
     }
 
-    // ── Block grouping ────────────────────────────────────────────────
+    // ── Group → Statement translation ──────────────────────────────
 
     private List<BlockGroup> groupAdjacentBlocks(List<BasicBlock> blocks, ControlFlowGraph graph) {
         List<BlockGroup> groups = new ArrayList<>();
@@ -123,28 +153,61 @@ public final class BlockReducer {
         return graph.outgoingOf(prev).stream().allMatch(e -> e.kind() == EdgeKind.FALL_THROUGH);
     }
 
-    // ── Group → Statement translation ──────────────────────────────
-
+    /**
+     * Translate a block group to a statement tree.
+     *
+     * Only side-effecting instructions (statements) are emitted.
+     * Intermediate values (LOAD, BINARY, etc.) are skipped — they contribute
+     * to expression trees via recursive {@link #valueToExpr} resolution.
+     */
     private Statement translateGroup(BlockGroup group, LinearIr ir) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
         if (allInsns.isEmpty()) {
             return null;
         }
 
+        // Build index: which instruction IDs have their results consumed
+        Set<Integer> consumed = new HashSet<>();
+        for (IrInstruction insn : allInsns) {
+            for (Value op : insn.operands()) {
+                if (op instanceof InstructionRef ref) {
+                    consumed.add(ref.instruction().id());
+                }
+            }
+        }
+
+        // Only emit root instructions as statements
         List<Statement> stmts = new ArrayList<>();
         for (IrInstruction insn : allInsns) {
             // Skip conditions — they're used by IfStatement/LoopStatement wrappers
             if (insn.opcode() == IrOpcode.CONDITION) {
+                // If condition isn't consumed by an if/loop, emit it as-if
+                if (!consumed.contains(insn.id())) {
+                    Expression e = translateExpr(insn);
+                    if (e != null) {
+                        stmts.add(new ExpressionStatement(e));
+                    }
+                }
                 continue;
             }
-            Statement s = translateStmt(insn);
-            if (s != null) {
-                stmts.add(s);
+
+            // Only emit statements for side-effecting instructions
+            if (isStatementRoot(insn)) {
+                Statement s = translateStmt(insn);
+                if (s != null) {
+                    stmts.add(s);
+                }
+            } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
+                // Standalone expression (result not consumed by anything) — still emit
+                Expression e = translateExpr(insn);
+                if (e != null && !isIgnorableExpr(e)) {
+                    stmts.add(new ExpressionStatement(e));
+                }
             }
         }
 
         if (stmts.isEmpty()) {
-            return new ExpressionStatement(new VarExpr("// (empty)"));
+            return new BlockStatement(List.of());
         }
         if (stmts.size() == 1) {
             return stmts.getFirst();
@@ -164,7 +227,10 @@ public final class BlockReducer {
                 }
             }
             case THROW -> new ExpressionStatement(translateExpr(insn));
-            case STORE, FIELD_STORE -> new ExpressionStatement(translateExpr(insn));
+            case STORE, FIELD_STORE -> {
+                Expression e = translateExpr(insn);
+                yield e != null ? new ExpressionStatement(e) : null;
+            }
             default -> {
                 Expression e = translateExpr(insn);
                 yield e != null ? new ExpressionStatement(e) : null;
@@ -176,7 +242,8 @@ public final class BlockReducer {
 
     /**
      * Translate a single IR instruction to an AST expression.
-     * This is the core of the translation — mapping IR ops to AST nodes.
+     * For intermediate values (LOAD, BINARY, etc.) this produces the
+     * appropriate expression node that will be inlined into the parent statement.
      */
     private Expression translateExpr(IrInstruction insn) {
         return switch (insn.opcode()) {
@@ -231,12 +298,11 @@ public final class BlockReducer {
                 yield new VarExpr("/* binary */");
             }
 
-            // Comparisons — use original bytecode opcode to infer operator
+            // Comparisons
             case COMPARE -> {
                 if (insn.operands().size() >= 2) {
                     Expression left = valueToExpr(insn.operands().get(0));
                     Expression right = valueToExpr(insn.operands().get(1));
-                    // LCMP/FCMP/DCMP produce int signum; compare with 0
                     yield new BinExpr(BinaryOperator.EQ, left, right);
                 }
                 yield new VarExpr("/* compare */");
@@ -253,7 +319,7 @@ public final class BlockReducer {
                 yield new VarExpr("/* condition */");
             }
 
-            // Unary negation — bytecode distinguishes NEG from NOT
+            // Unary
             case UNARY -> {
                 if (!insn.operands().isEmpty()) {
                     UnaryOperator uop = inferUnaryOp(insn.originalOpcode());
@@ -265,8 +331,7 @@ public final class BlockReducer {
             // Method invocation — use resolved name from constant pool
             case INVOKE -> {
                 List<Expression> args = new ArrayList<>();
-                int start = 0;
-                for (int i = start; i < insn.operands().size(); i++) {
+                for (int i = 0; i < insn.operands().size(); i++) {
                     args.add(valueToExpr(insn.operands().get(i)));
                 }
                 String mName = insn.nameHint() != null ? insn.nameHint() : "method";
@@ -294,7 +359,7 @@ public final class BlockReducer {
                 yield new FieldAccessExpr(arr, "length");
             }
 
-            // Increment
+            // Increment (IINC)
             case INC -> {
                 if (insn.operands().size() >= 2 && insn.operands().getFirst() instanceof Variable v) {
                     Value incr = insn.operands().get(1);
@@ -306,15 +371,18 @@ public final class BlockReducer {
             }
 
             // Throw
-            case THROW -> {
-                yield !insn.operands().isEmpty() ? valueToExpr(insn.operands().getFirst()) : new VarExpr("ex");
-            }
+            case THROW -> !insn.operands().isEmpty() ? valueToExpr(insn.operands().getFirst()) : new VarExpr("ex");
+
+            // PHI — not handled at expression level during structuring
+            case PHI -> new VarExpr("phi");
 
             default -> new VarExpr("/* " + insn.opcode() + " */");
         };
     }
 
-    /** Convert a Value (Variable / ConstantValue / InstructionRef) to an Expression. */
+    /** Convert a Value (Variable / ConstantValue / InstructionRef) to an Expression.
+     *  For InstructionRef, recursively translates the referenced instruction
+     *  to build proper expression trees. */
     private Expression valueToExpr(Value v) {
         return switch (v) {
             case Variable var -> new VarExpr("var" + var.slot());
@@ -325,7 +393,12 @@ public final class BlockReducer {
                 }
                 yield new LitExpr(val, cv.type());
             }
-            case InstructionRef ref -> new VarExpr("tmp" + ref.instruction().id());
+            case InstructionRef ref -> {
+                // Recursively translate the referenced instruction to build expression tree
+                IrInstruction def = ref.instruction();
+                Expression expr = translateExpr(def);
+                yield expr != null ? expr : new VarExpr("tmp" + def.id());
+            }
             default -> new VarExpr("?");
         };
     }
@@ -353,7 +426,6 @@ public final class BlockReducer {
     /** Build a SwitchStatement from switch info and the grouped blocks. */
     private SwitchStatement buildSwitch(SwitchInfo info, BlockGroup group, LinearIr ir) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
-        // Find the switch discriminant from CONDITION or a LOAD of the switch key
         Expression discriminant = new VarExpr("switchKey");
         for (IrInstruction insn : allInsns) {
             if (insn.opcode() == IrOpcode.SWITCH && !insn.operands().isEmpty()) {
@@ -386,12 +458,10 @@ public final class BlockReducer {
     /** Build a TryStatement from try-catch info. */
     private TryStatement buildTryCatch(TryCatchInfo info, Statement tryBody) {
         List<TryStatement.CatchClause> catchClauses = new ArrayList<>();
-        // Simplify catch type to simple name
         String excType = info.catchType();
         if (excType != null && excType.contains("/")) {
             excType = excType.substring(excType.lastIndexOf('/') + 1);
         }
-        // Handler body is processed inline by BlockReducer; wrap try body
         catchClauses.add(new TryStatement.CatchClause(
                 excType != null ? excType : "Exception",
                 "e",
@@ -399,19 +469,11 @@ public final class BlockReducer {
         return new TryStatement(tryBody, catchClauses, null);
     }
 
-    /** Translate a single block group to a list of statements (helper for switch). */
+    /** Translate a single block group to a list of statements. */
     private List<Statement> translateBlockGroup(BlockGroup group, LinearIr ir) {
-        List<Statement> result = new ArrayList<>();
-        for (IrInstruction insn : group.allIrInstructions(ir)) {
-            if (insn.opcode() == IrOpcode.CONDITION) {
-                continue;
-            }
-            Statement s = translateStmt(insn);
-            if (s != null) {
-                result.add(s);
-            }
-        }
-        return result;
+        return translateGroup(group, ir) instanceof BlockStatement bs
+                ? bs.statements()
+                : List.of();
     }
 
     // ── BlockGroup helper ─────────────────────────────────────────────

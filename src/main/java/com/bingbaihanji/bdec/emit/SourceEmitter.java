@@ -56,6 +56,13 @@ public class SourceEmitter {
 
         w.token(type.kindName()).space().write(type.simpleName());
 
+        // Emit type parameters for generic classes
+        if (!type.typeParameters().isEmpty()) {
+            w.write("<");
+            w.write(String.join(", ", type.typeParameters()));
+            w.write(">");
+        }
+
         // Super class
         if (type.superName() != null) {
             w.space().token("extends").space().write(type.superName());
@@ -96,7 +103,10 @@ public class SourceEmitter {
         if ((flags & 0x0010) != 0) {
             w.token("final").space();
         }
-        if ((flags & 0x0020) != 0) {
+        // Note: 0x0020 = ACC_SUPER (not ACC_STATIC). ACC_STATIC = 0x0008.
+        // ACC_SUPER is set on all modern class files and should NOT be emitted as a modifier.
+        // ACC_STATIC only applies to nested classes.
+        if ((flags & 0x0008) != 0) {
             w.token("static").space();
         }
     }

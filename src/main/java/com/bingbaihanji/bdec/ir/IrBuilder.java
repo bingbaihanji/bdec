@@ -191,6 +191,7 @@ public final class IrBuilder {
                 // Invoke
                 case INVOKEVIRTUAL, INVOKESPECIAL, INVOKESTATIC, INVOKEINTERFACE ->
                         handleInvoke(op, insn, stack, instructions, cp, offset, blockId);
+                case INVOKEDYNAMIC -> handleInvokeDynamic(insn, stack, instructions, cp, offset, blockId);
 
                 // Object / Array
                 case NEW -> handleNew(stack, instructions, offset, blockId);
@@ -548,6 +549,50 @@ public final class IrBuilder {
         }
         if (op != Opcode.INVOKESTATIC && !stack.isEmpty()) {
             stack.pop(); // receiver
+        }
+
+        IrInstruction inv = IrInstruction.invoke(nextId(), null, args, returnType,
+                offset, blockId, methodName);
+        instructions.add(inv);
+        if (returnType.kind() != TypeKind.VOID) {
+            inv.setResultValue(new InstructionRef(inv, returnType));
+            stack.push(new InstructionRef(inv, returnType));
+        }
+    }
+
+    // ── InvokeDynamic ────────────────────────────────────────────
+
+    private void handleInvokeDynamic(Instruction insn, Deque<Value> stack,
+                                     List<IrInstruction> instructions, ConstantPoolEntry[] cp,
+                                     int offset, int blockId) {
+        int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
+        int argCount = 0;
+        JavaType returnType = JavaType.classType("java/lang/Object");
+        String methodName = "invokeDynamic";
+
+        if (cpIdx > 0 && cpIdx < cp.length) {
+            try {
+                ConstantPoolEntry entry = cp[cpIdx];
+                if (entry instanceof ConstantPoolEntry.CpInvokeDynamic indy) {
+                    int natIdx = indy.nameAndTypeIndex();
+                    if (natIdx > 0 && natIdx < cp.length
+                            && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
+                        String desc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
+                        methodName = ConstantPoolParser.utf8(cp, nat.nameIndex());
+                        var params = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(desc);
+                        argCount = params.length;
+                        returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(desc);
+                    }
+                }
+            } catch (Exception ignored) {
+                // keep defaults
+            }
+        }
+
+        // Pop arguments
+        List<Value> args = new ArrayList<>();
+        for (int a = 0; a < argCount && !stack.isEmpty(); a++) {
+            args.addFirst(stack.pop());
         }
 
         IrInstruction inv = IrInstruction.invoke(nextId(), null, args, returnType,

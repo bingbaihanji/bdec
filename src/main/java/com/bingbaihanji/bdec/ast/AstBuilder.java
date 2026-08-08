@@ -2,11 +2,13 @@ package com.bingbaihanji.bdec.ast;
 
 import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.LitExpr;
 import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.FieldModel;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
+import com.bingbaihanji.bdec.bytecode.parser.SignatureParser;
 import com.bingbaihanji.bdec.structuring.StructuredMethod;
 import com.bingbaihanji.bdec.type.JavaType;
 
@@ -35,10 +37,17 @@ public class AstBuilder {
 
         // Add fields
         for (FieldModel field : classFile.fields()) {
-            // Parse constant value attribute when available
             Expression init = parseFieldInitializer(field);
+            // If the field has a signature, use it for a generic display type
+            JavaType displayType = field.type();
+            if (field.signature() != null && !field.signature().isEmpty()) {
+                String displayName = SignatureParser.signatureToDisplayName(field.signature());
+                if (displayName != null) {
+                    displayType = JavaType.classType(displayName.replace('.', '/'));
+                }
+            }
             FieldDeclaration fd = new FieldDeclaration(
-                    field.accessFlags(), field.name(), field.type(), init);
+                    field.accessFlags(), field.name(), displayType, init);
             members.add(fd);
             collectImport(field.type(), imports, simpleName);
         }
@@ -88,9 +97,12 @@ public class AstBuilder {
             collectImport(JavaType.classType(ifName), imports, simpleName);
         }
 
+        // Extract type parameters from class signature (e.g. "<E:Ljava/lang/Object;>" → ["E"])
+        List<String> typeParams = SignatureParser.extractTypeParams(classFile.signature());
+
         TypeDeclaration td = new TypeDeclaration(
                 classFile.accessFlags(), simpleName, kind,
-                superName, interfaceNames, members);
+                superName, interfaceNames, typeParams, members);
 
         // Build imports (filter java.lang.* and same-package types)
         List<String> importList = new ArrayList<>();
@@ -139,10 +151,18 @@ public class AstBuilder {
         return idx > 0 ? internalName.substring(0, idx).replace('/', '.') : "";
     }
 
-    /** Parse a field's constant value attribute as an expression, or null. */
+    /** Parse a field's constant value as a LitExpr, or null. */
     private Expression parseFieldInitializer(FieldModel field) {
-        // Phase 2b: parse ConstantValue attribute from field attributes
-        // For now, return null — constant values not yet resolved.
+        Object cv = field.constantValue();
+        if (cv == null) {
+            return null;
+        }
+        if (cv instanceof String s) {
+            return new LitExpr(s, JavaType.classType("java/lang/String"));
+        }
+        if (cv instanceof Number || cv instanceof Boolean || cv instanceof Character) {
+            return new LitExpr(cv, field.type());
+        }
         return null;
     }
 
