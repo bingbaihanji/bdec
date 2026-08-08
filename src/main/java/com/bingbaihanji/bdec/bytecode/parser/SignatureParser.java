@@ -1,5 +1,8 @@
 package com.bingbaihanji.bdec.bytecode.parser;
 
+import com.bingbaihanji.bdec.type.JavaType;
+import com.bingbaihanji.bdec.type.TypeKind;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -65,6 +68,98 @@ public final class SignatureParser {
      */
     public static List<String> extractMethodTypeParams(String signature) {
         return extractTypeParams(signature); // same format: <...> at start
+    }
+
+    /**
+     * Parse a field or method signature into a structured JavaType with type arguments.
+     * For generic types like {@code Ljava/util/List<Ljava/lang/String;>;},
+     * the returned JavaType will have typeArguments = [JavaType("java/lang/String")].
+     *
+     * @return a JavaType with type arguments populated, or null if parsing fails
+     */
+    public static JavaType parseGenericType(String sig) {
+        if (sig == null || sig.isEmpty()) return null;
+        try {
+            var result = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+            parseTypeToJavaType(sig, 0, result);
+            return result.get();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Parse a type signature into a JavaType struct. Returns next position. */
+    private static int parseTypeToJavaType(String sig, int i,
+                                            java.util.concurrent.atomic.AtomicReference<JavaType> out) {
+        if (i >= sig.length()) return i;
+        char c = sig.charAt(i);
+        switch (c) {
+            case 'B': out.set(JavaType.BYTE); return i + 1;
+            case 'C': out.set(JavaType.CHAR); return i + 1;
+            case 'D': out.set(JavaType.DOUBLE); return i + 1;
+            case 'F': out.set(JavaType.FLOAT); return i + 1;
+            case 'I': out.set(JavaType.INT); return i + 1;
+            case 'J': out.set(JavaType.LONG); return i + 1;
+            case 'S': out.set(JavaType.SHORT); return i + 1;
+            case 'Z': out.set(JavaType.BOOLEAN); return i + 1;
+            case 'V': out.set(JavaType.VOID); return i + 1;
+            case 'T': {
+                int semi = sig.indexOf(';', i);
+                String tvName = sig.substring(i + 1, semi);
+                // Type variable — use as internal name for display purposes
+                out.set(new JavaType(TypeKind.CLASS, tvName, "T" + tvName + ";",
+                        List.of(), 0));
+                return semi + 1;
+            }
+            case 'L': {
+                int semi = sig.indexOf(';', i);
+                String raw = sig.substring(i + 1, semi);
+                int lt = raw.indexOf('<');
+                if (lt >= 0) {
+                    String className = raw.substring(0, lt);
+                    List<JavaType> typeArgs = new ArrayList<>();
+                    int argPos = i + 1 + lt + 1;
+                    while (argPos < i + semi) {
+                        char ac = sig.charAt(argPos);
+                        if (ac == '*') {
+                            typeArgs.add(new JavaType(TypeKind.CLASS, "?",
+                                    "Ljava/lang/Object;", List.of(), 0));
+                            argPos++;
+                        } else if (ac == '+') {
+                            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+                            argPos = parseTypeToJavaType(sig, argPos + 1, ref);
+                            typeArgs.add(ref.get() != null ? ref.get()
+                                    : JavaType.classType("java/lang/Object"));
+                        } else if (ac == '-') {
+                            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+                            argPos = parseTypeToJavaType(sig, argPos + 1, ref);
+                            typeArgs.add(ref.get() != null ? ref.get()
+                                    : JavaType.classType("java/lang/Object"));
+                        } else {
+                            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+                            argPos = parseTypeToJavaType(sig, argPos, ref);
+                            if (ref.get() != null) typeArgs.add(ref.get());
+                        }
+                        if (argPos >= i + semi) break;
+                    }
+                    out.set(new JavaType(TypeKind.CLASS, className,
+                            "L" + className + ";", typeArgs, 0));
+                } else {
+                    out.set(JavaType.classType(raw));
+                }
+                return semi + 1;
+            }
+            case '[': {
+                var elemRef = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+                int next = parseTypeToJavaType(sig, i + 1, elemRef);
+                JavaType elem = elemRef.get();
+                if (elem != null) {
+                    out.set(JavaType.array(elem, 1));
+                }
+                return next;
+            }
+            default: out.set(JavaType.classType("java/lang/Object")); return i + 1;
+        }
     }
 
     /**

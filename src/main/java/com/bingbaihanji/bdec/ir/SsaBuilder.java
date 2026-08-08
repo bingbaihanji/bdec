@@ -112,35 +112,77 @@ public final class SsaBuilder {
             }
         }
 
-        // 5. Rename variables (version numbering)
-        Map<Integer, Integer> varVersionCount = new HashMap<>();
-
-        // Count existing versions
-        for (Variable v : originalVars) {
-            varVersionCount.put(v.slot(), Math.max(varVersionCount.getOrDefault(v.slot(), 0), v.version()));
-        }
-
-        // Rename pass: assign versions to definitions
-        Map<Integer, Deque<Integer>> versionStacks = new HashMap<>(); // varSlot → version stack
+        // 5. Fill PHI operands from predecessor blocks
         for (IrInstruction insn : allInsns) {
-            if (insn.opcode() == IrOpcode.PHI) {
-                // PHI gets a new version
-                int slot = findPhiSlot(insn, originalVars, varDefBlocks);
-                if (slot >= 0) {
-                    int newVer = varVersionCount.getOrDefault(slot, 0) + 1;
-                    varVersionCount.put(slot, newVer);
-                    versionStacks.computeIfAbsent(slot, k -> new ArrayDeque<>()).push(newVer);
+            if (insn.opcode() != IrOpcode.PHI) continue;
+            int slot = findPhiSlot(insn, originalVars, varDefBlocks);
+            if (slot < 0) continue;
+            BasicBlock phiBlock = findBlock(cfg, insn.blockId());
+            if (phiBlock == null) continue;
+
+            // For each predecessor, find the variable version that reaches this block
+            List<Value> phiOperands = new ArrayList<>();
+            for (BasicBlock pred : cfg.predecessorsOf(phiBlock)) {
+                Variable reachingVar = findReachingVar(pred, slot, originalVars,
+                        allInsns, perBlock);
+                if (reachingVar != null) {
+                    phiOperands.add(reachingVar);
                 }
-            } else if (insn.opcode() == IrOpcode.STORE && !insn.operands().isEmpty()
-                    && insn.operands().getFirst() instanceof Variable v) {
-                int slot = v.slot();
-                int newVer = varVersionCount.getOrDefault(slot, 0) + 1;
-                varVersionCount.put(slot, newVer);
-                versionStacks.computeIfAbsent(slot, k -> new ArrayDeque<>()).push(newVer);
+            }
+            // Replace the PHI instruction with one that has operands filled
+            if (!phiOperands.isEmpty()) {
+                int idx = allInsns.indexOf(insn);
+                IrInstruction filled = new IrInstruction(insn.id(), IrOpcode.PHI,
+                        insn.resultType(), phiOperands, insn.sourceOffset(), insn.blockId());
+                allInsns.set(idx, filled);
             }
         }
 
+        // Count final versions
+        Map<Integer, Integer> varVersionCount = new HashMap<>();
+        for (Variable v : originalVars) {
+            varVersionCount.put(v.slot(),
+                    Math.max(varVersionCount.getOrDefault(v.slot(), 0), v.version()));
+        }
+
         return new SsaForm(cfg, dom, allInsns, varVersionCount);
+    }
+
+    /** Find the variable version for a slot that reaches the end of a predecessor block. */
+    private Variable findReachingVar(BasicBlock block, int slot, List<Variable> vars,
+                                      List<IrInstruction> allInsns,
+                                      Map<BasicBlock, List<IrInstruction>> perBlock) {
+        Variable latest = null;
+        List<IrInstruction> blockInsns = perBlock.getOrDefault(block, List.of());
+        // Walk instructions in reverse to find the last STORE for this slot
+        for (int i = blockInsns.size() - 1; i >= 0; i--) {
+            IrInstruction insn = blockInsns.get(i);
+            if (insn.opcode() == IrOpcode.STORE && !insn.operands().isEmpty()
+                    && insn.operands().getFirst() instanceof Variable v
+                    && v.slot() == slot) {
+                return v;
+            }
+            if (insn.opcode() == IrOpcode.PHI) {
+                // PHI defines a new version
+                int phiSlot = findPhiSlot(insn, vars, Map.of());
+                if (phiSlot == slot && insn.resultValue() instanceof InstructionRef ref
+                        && ref.instruction().operands().stream().anyMatch(
+                                op -> op instanceof Variable v2 && v2.slot() == slot)) {
+                    for (Value op : insn.operands()) {
+                        if (op instanceof Variable v2 && v2.slot() == slot) {
+                            return v2;
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback: find the original variable for this slot
+        for (Variable v : vars) {
+            if (v.slot() == slot) {
+                return v;
+            }
+        }
+        return null;
     }
 
     /** Compute iterated dominance frontier for a set of definition blocks. */
