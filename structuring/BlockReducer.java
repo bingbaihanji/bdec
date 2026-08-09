@@ -535,7 +535,25 @@ public final class BlockReducer {
         // absorbed into try-finally by wrapTryCatchBlocks).
         Set<BasicBlock> handlerBlocks = new HashSet<>();
         for (TryCatchInfo tci : tryCatchAnns.values()) {
-            handlerBlocks.add(tci.handlerBlock());
+            // Add the initial handler block and all its non-exception
+            // successors (CFG may split handler due to self-referencing edges)
+            BasicBlock hb = tci.handlerBlock();
+            handlerBlocks.add(hb);
+            // Follow fallthrough chain
+            Set<BasicBlock> visited = new HashSet<>();
+            Deque<BasicBlock> queue = new ArrayDeque<>();
+            queue.add(hb);
+            while (!queue.isEmpty()) {
+                BasicBlock curr = queue.poll();
+                if (!visited.add(curr)) continue;
+                handlerBlocks.add(curr);
+                for (var edge : graph.outgoingOf(curr)) {
+                    if (edge.kind() != EdgeKind.EXCEPTION
+                            && edge.target() != graph.exitBlock()) {
+                        queue.add(edge.target());
+                    }
+                }
+            }
         }
         List<Statement> statements = new ArrayList<>();
 
@@ -630,11 +648,19 @@ public final class BlockReducer {
             }
             // loop: wrap group in LoopStatement (only if we have a valid body)
             else if (loopInfo != null) {
-                s = translateGroup(group, ir);
-                if (s != null && !isEmptyBlock(s)) {
-                    Expression cond = simplifyCondition(extractCondition(group, ir));
-                    s = new LoopStatement(LoopStatement.LoopKind.WHILE,
-                            cond != null ? cond : new VarExpr("true"), s);
+                // Skip loops that only contain handler blocks (self-referencing
+                // exception edges in finally handlers create fake back-edges).
+                boolean isHandlerLoop = group.blocks().stream()
+                        .allMatch(b -> handlerBlocks.contains(b));
+                if (!isHandlerLoop) {
+                    s = translateGroup(group, ir);
+                    if (s != null && !isEmptyBlock(s)) {
+                        Expression cond = simplifyCondition(extractCondition(group, ir));
+                        s = new LoopStatement(LoopStatement.LoopKind.WHILE,
+                                cond != null ? cond : new VarExpr("true"), s);
+                    }
+                } else {
+                    continue; // skip handler-only loops
                 }
             }
             // switch
@@ -1443,22 +1469,24 @@ public final class BlockReducer {
             }
             case THROW -> new ThrowStatement(translateExpr(insn));
             case STORE -> {
-                // Emit "Type name = value;" for the first assignment to a local,
-                // plain "name = value;" for subsequent reassignments.
-                // Skip parameter slots (isParameter=true) — they're already
-                // declared in the method signature.
+                // Emit "Type name = value;" for the first assignment to a
+                // local variable slot, plain "name = value;" for reassignments.
+                // Parameters are already declared in the method signature.
                 Value target = insn.operands().getFirst();
                 if (target instanceof Variable v && !v.isParameter()
                         && v.slot() != 0) { // slot 0 in instance methods is 'this'
-                    String rawName = v.name(); // never null — falls back to "varN"
-                    String declName = rawName.startsWith("var")
-                            ? rawName : rawName;
-                    boolean firstDef = tryDeclareVar(declName);
-                    if (firstDef) {
+                    // A store is a "first definition" if we haven't seen
+                    // this slot assigned before in the current scope.
+                    Integer slotKey = v.slot();
+                    boolean firstInScope = tryDeclareVar("@" + slotKey);
+                    if (firstInScope) {
                         Value source = insn.operands().size() > 1
                                 ? insn.operands().get(1) : null;
                         Expression rhs = source != null
                                 ? valueToExpr(source) : null;
+                        String rawName = v.name();
+                        String declName = rawName.startsWith("var")
+                                ? rawName : rawName;
                         yield new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
                                 v.type(), declName, rhs);
                     }

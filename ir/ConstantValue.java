@@ -4,7 +4,8 @@ import com.bingbaihanji.bdec.type.JavaType;
 
 public record ConstantValue(Object value, JavaType type) implements Value {
 
-    public static final ConstantValue NULL = new ConstantValue(null, JavaType.INT); // placeholder type
+    public static final ConstantValue NULL = new ConstantValue(null,
+            JavaType.classType("java/lang/Object"));
 
     public boolean isNull() {return value == null;}
 
