@@ -426,7 +426,8 @@ public final class IrBuilder {
 
                 // Object / Array
                 case NEW -> handleNew(insn, stack, instructions, cp, offset, blockId);
-                case NEWARRAY, ANEWARRAY -> handleNewArray(op, insn, stack, instructions, cp, offset, blockId);
+                case NEWARRAY -> handleNewPrimitiveArray(insn, stack, instructions, offset, blockId);
+                case ANEWARRAY -> handleNewArray(op, insn, stack, instructions, cp, offset, blockId);
                 case ARRAYLENGTH -> handleArrayLength(stack, instructions, offset, blockId);
                 // Array element load: pop index, pop array → push element
                 case IALOAD, BALOAD, CALOAD, SALOAD ->
@@ -981,12 +982,39 @@ public final class IrBuilder {
         stack.push(new InstructionRef(n, n.resultType()));
     }
 
+    /** NEWARRAY: create primitive array (new int[10], new byte[20], etc.).
+     *  Operand byte: array type code (4=boolean, 5=char, 6=float, 7=double,
+     *  8=byte, 9=short, 10=int, 11=long). */
+    private void handleNewPrimitiveArray(Instruction insn, Deque<Value> stack,
+                                         List<IrInstruction> instructions,
+                                         int offset, int blockId) {
+        int typeCode = insn.rawOperands().isEmpty() ? 10 : insn.rawOperands().get(0);
+        JavaType elementType = switch (typeCode) {
+            case 4 -> JavaType.BOOLEAN;
+            case 5 -> JavaType.CHAR;
+            case 6 -> JavaType.FLOAT;
+            case 7 -> JavaType.DOUBLE;
+            case 8 -> JavaType.BYTE;
+            case 9 -> JavaType.SHORT;
+            case 11 -> JavaType.LONG;
+            default -> JavaType.INT; // 10 = T_INT
+        };
+        Value size = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
+        IrInstruction na = new IrInstruction(nextId(), IrOpcode.NEW_ARRAY,
+                elementType, List.of(size), offset, blockId, insn.opcode(), null);
+        instructions.add(na);
+        na.setResultValue(new InstructionRef(na, na.resultType()));
+        stack.push(new InstructionRef(na, na.resultType()));
+    }
+
+    /** ANEWARRAY: create reference-type array (new String[10]). */
     private void handleNewArray(Opcode op, Instruction insn, Deque<Value> stack,
                                 List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                 int offset, int blockId) {
         Value size = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
+        JavaType elementType = resolveClassType(insn, cp);
         IrInstruction na = new IrInstruction(nextId(), IrOpcode.NEW_ARRAY,
-                JavaType.classType("java/lang/Object"), List.of(size), offset, blockId);
+                elementType, List.of(size), offset, blockId, op.code(), null);
         instructions.add(na);
         na.setResultValue(new InstructionRef(na, na.resultType()));
         stack.push(new InstructionRef(na, na.resultType()));
