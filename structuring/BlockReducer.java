@@ -1137,7 +1137,19 @@ public final class BlockReducer {
 
     /** Translate an invokedynamic INVOKE into a LambdaExpr.
      *  Detects lambda expressions (lambda$method$N pattern) and method references.
-     *  For string concat (makeConcatWithConstants), delegates to normal INVOKE handling. */
+     *  For string concat (makeConcatWithConstants), delegates to normal INVOKE handling.
+     *
+     *  <p>Detection priority:
+     *  <ol>
+     *    <li>Bootstrap method resolution: check the implementation method handle.
+     *        If it points to a synthetic {@code lambda$xxx$N} method → expression/block lambda.
+     *        If it points to a real method → method reference ({@code Class::method}).
+     *        If it points to {@code <init>} → constructor reference ({@code Class::new}).</li>
+     *    <li>Name-based patterns: "::" in the name or "new " prefix.</li>
+     *    <li>SAM name heuristic: if indy name is a functional interface method name
+     *        and no resolved info is available, guess method reference.</li>
+     *  </ol>
+     */
     private Expression translateIndyInvoke(IrInstruction insn) {
         String mName = insn.nameHint() != null ? insn.nameHint() : "lambda";
         JavaType funcType = insn.resultType();
@@ -1148,7 +1160,63 @@ public final class BlockReducer {
             return translateIndyAsRegularInvoke(insn);
         }
 
+        // Read resolved bootstrap info from semantic annotations
+        String implName = getIndyAnnotation(insn, "implName");
+        String implOwner = getIndyAnnotation(insn, "implOwner");
+
         // Build parameter list from operands (captured vars + factory args → lambda params)
+        List<LambdaExpr.Param> params = buildIndyParams(operands);
+
+        // Detect method reference pattern (name contains "::" or starts with "new")
+        if (mName.contains("::")) {
+            String[] parts = mName.split("::", 2);
+            return LambdaExpr.methodRef(parts[0], parts.length > 1 ? parts[1] : "new",
+                    funcType);
+        }
+
+        // Method reference via "new" prefix
+        if (mName.startsWith("new ")) {
+            String cls = mName.substring(4);
+            return LambdaExpr.methodRef(cls, "new", funcType);
+        }
+
+        // Resolved bootstrap info: distinguish lambda from method reference
+        if (implName != null && !implName.isEmpty() && implOwner != null) {
+            if (implName.startsWith("lambda$")) {
+                // Lambda: implementation is a synthetic lambda$xxx$N method
+                String bodyHint = "/* " + implName + " */";
+                return LambdaExpr.placeholder(params, bodyHint, funcType);
+            }
+            if (implName.equals("<init>")) {
+                // Constructor reference: ClassName::new
+                return LambdaExpr.methodRef(simplifyClassName(implOwner), "new", funcType);
+            }
+            // Method reference: determine owner representation
+            String owner = simplifyClassName(implOwner);
+            // For instance method refs with captured receiver, use variable name
+            if (!operands.isEmpty() && operands.getFirst() instanceof Variable v
+                    && v.name() != null && !v.name().equals("this")) {
+                owner = v.name();
+            }
+            return LambdaExpr.methodRef(owner, implName, funcType);
+        }
+
+        // Fallback heuristic: if name is a SAM method name (not lambda$),
+        // and the return type looks like a functional interface, guess method ref
+        if (isSamMethodName(mName) && isFunctionalInterfaceLike(funcType)) {
+            String owner = functionalInterfaceShortName(funcType);
+            if (owner != null && !owner.isEmpty()) {
+                return LambdaExpr.methodRef(owner, mName, funcType);
+            }
+        }
+
+        // Lambda placeholder fallback
+        String bodyHint = "/* " + mName + " */";
+        return LambdaExpr.placeholder(params, bodyHint, funcType);
+    }
+
+    /** Build parameter list from INDY operands. */
+    private List<LambdaExpr.Param> buildIndyParams(List<Value> operands) {
         List<LambdaExpr.Param> params = new ArrayList<>();
         for (int i = 0; i < operands.size(); i++) {
             Value op = operands.get(i);
@@ -1162,23 +1230,85 @@ public final class BlockReducer {
             }
             params.add(new LambdaExpr.Param(pName, pt));
         }
+        return params;
+    }
 
-        // Detect method reference pattern (name contains "::" or starts with "new")
-        if (mName.contains("::")) {
-            String[] parts = mName.split("::", 2);
-            return LambdaExpr.methodRef(parts[0], parts.length > 1 ? parts[1] : "new",
-                    funcType);
+    /** Get a string value from the INDY annotation properties. */
+    private String getIndyAnnotation(IrInstruction insn, String key) {
+        for (com.bingbaihanji.bdec.semantic.SemanticAnnotation ann : insn.annotations()) {
+            if (ann.is(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
+                String val = ann.getString(key);
+                if (val != null && !val.isEmpty()) {
+                    return val;
+                }
+            }
         }
+        return null;
+    }
 
-        // Method reference via "new" pattern
-        if (mName.startsWith("new ")) {
-            String cls = mName.substring(4);
-            return LambdaExpr.methodRef(cls, "new", funcType);
+    /** Known SAM (Single Abstract Method) names for common functional interfaces. */
+    private static final Set<String> SAM_METHOD_NAMES = Set.of(
+            "run", "call", "get", "apply", "accept", "test",
+            "compare", "compareTo", "getAsBoolean", "getAsInt",
+            "getAsLong", "getAsDouble", "thenApply", "thenAccept",
+            "thenRun", "thenCompose", "thenCombine", "supply",
+            "applyAsInt", "applyAsLong", "applyAsDouble",
+            "andThen", "compose", "negate", "or", "and");
+
+    /** Check if a method name is a known SAM (functional interface) method name. */
+    private static boolean isSamMethodName(String name) {
+        return name != null && SAM_METHOD_NAMES.contains(name);
+    }
+
+    /** Check if the type looks like a functional interface (java.util.function.* or similar). */
+    private static boolean isFunctionalInterfaceLike(JavaType type) {
+        if (type == null) {
+            return false;
         }
+        String desc = type.descriptor();
+        if (desc == null) {
+            return false;
+        }
+        // Functional interfaces in java.util.function
+        return desc.contains("java/util/function/")
+                || desc.contains("java/util/Comparator")
+                || desc.contains("java/lang/Runnable")
+                || desc.contains("java/util/concurrent/Callable");
+    }
 
-        // Lambda: method name is the implementation method (e.g., lambda$main$0)
-        String bodyHint = "/* " + mName + " */";
-        return LambdaExpr.placeholder(params, bodyHint, funcType);
+    /** Extract a short display name from a functional interface type. */
+    private static String functionalInterfaceShortName(JavaType type) {
+        if (type == null) {
+            return null;
+        }
+        String desc = type.descriptor();
+        if (desc == null) {
+            return null;
+        }
+        // Extract the class name from "Ljava/util/function/Function;"
+        if (desc.startsWith("L") && desc.endsWith(";")) {
+            String internal = desc.substring(1, desc.length() - 1);
+            int slash = internal.lastIndexOf('/');
+            return slash >= 0 ? internal.substring(slash + 1) : internal;
+        }
+        return desc;
+    }
+
+    /** Simplify a fully-qualified internal class name to a short name.
+     *  "java/lang/String" → "String" */
+    private static String simplifyClassName(String internalName) {
+        if (internalName == null) {
+            return null;
+        }
+        int slash = internalName.lastIndexOf('/');
+        if (slash >= 0) {
+            return internalName.substring(slash + 1);
+        }
+        int dollar = internalName.lastIndexOf('$');
+        if (dollar >= 0) {
+            return internalName.substring(dollar + 1);
+        }
+        return internalName;
     }
 
     /** Fallback: treat INDY as a regular method invocation. */
