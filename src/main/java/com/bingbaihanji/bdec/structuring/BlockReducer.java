@@ -995,12 +995,18 @@ public final class BlockReducer {
                 yield new FieldAccessExpr(arr, "length");
             }
 
-            // Increment (IINC)
+            // Increment (IINC) — operands: [readVar, writeVar, ConstantValue(incr)]
             case INC -> {
-                if (insn.operands().size() >= 2 && insn.operands().getFirst() instanceof Variable v) {
-                    Value incr = insn.operands().get(1);
+                if (insn.operands().size() >= 3 && insn.operands().getFirst() instanceof Variable v) {
+                    Value incr = insn.operands().get(2); // index 2 is the increment value
                     VarExpr var = varToExpr(v);
                     Expression rhs = valueToExpr(incr);
+                    // x += c → can become x++ if c == 1
+                    if (rhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
+                            && lr.value() instanceof Integer i && i == 1) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, var);
+                    }
                     yield new AssignExpr(var, new BinExpr(BinaryOperator.ADD, var, rhs));
                 }
                 yield new VarExpr("/* inc */");

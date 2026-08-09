@@ -155,7 +155,7 @@ public enum Opcode {
     LOR(129, "lor", 0, -2, true, false, false, -1),
     IXOR(130, "ixor", 0, -1, true, false, false, -1),
     LXOR(131, "lxor", 0, -2, true, false, false, -1),
-    IINC(132, "iinc", 2, 0, true, false, false, 0),
+    IINC(132, "iinc", 2, 0, true, false, false, -1),
 
     // === Conversions (133-147) ===
     I2L(133, "i2l", 0, 1, true, false, false, -1),
