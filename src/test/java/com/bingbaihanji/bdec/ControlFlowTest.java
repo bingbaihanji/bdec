@@ -169,6 +169,20 @@ public class ControlFlowTest {
     }
 
     @Test
+    public void testStringSwitch() throws Exception {
+        // String switch generates complex hashCode/equals bytecode scaffolding.
+        // For now just verify decompilation doesn't crash. Tighten after StringSwitchRewriter.
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/StringSwitchSample.java");
+        System.out.println("=== STRING SWITCH DECOMPILED ===");
+        System.out.println(out);
+        System.out.println("=== END ===");
+        DecompileTestHarness.assertContains(out, "class StringSwitchSample");
+        // TODO: when StringSwitchRewriter collapses hashCode scaffolding:
+        // DecompileTestHarness.assertContains(out, "\"foo\"", "\"bar\"");
+        // DecompileTestHarness.assertNotContains(out, "hashCode");
+    }
+
+    @Test
     public void testLambda() throws Exception {
         String out = harness.decompileResource("decompile-samples/m2-controlflow/LambdaSample.java");
         DecompileTestHarness.assertContains(out, "class LambdaSample", "->");
