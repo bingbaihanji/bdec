@@ -198,12 +198,13 @@ public class ControlFlowTest {
     @Test
     public void testMethodRef() throws Exception {
         // Method reference detection via bootstrap method resolution.
-        // TODO: tighten assertions when structurer handles invokedynamic returns properly.
+        // TODO: tighten assertions when structurer handles invokedynamic returns properly
+        //       (return keyword is currently missing from method-ref-only method bodies).
         String out = harness.decompileResource("decompile-samples/m2-controlflow/MethodRefSample.java");
         DecompileTestHarness.assertContains(out, "class MethodRefSample");
-        System.err.println("===MF_OUT_START===");
-        System.err.println(out);
-        System.err.println("===MF_OUT_END===");
-        // When working: DecompileTestHarness.assertContains(out, "::");
+        // String::length method reference detected from bootstrap method info
+        DecompileTestHarness.assertContains(out, "String::length");
+        // Should NOT use lambda arrow notation for method references
+        DecompileTestHarness.assertNotContains(out, "->");
     }
 }
