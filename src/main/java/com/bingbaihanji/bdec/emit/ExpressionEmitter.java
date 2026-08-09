@@ -15,15 +15,61 @@ import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.type.JavaType;
+import com.bingbaihanji.bdec.type.TypeKind;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Emits AST expressions to Java source text. Implements AstVisitor for dispatch. */
 public class ExpressionEmitter implements AstVisitor<Void, Void> {
 
     private final IndentWriter w;
 
-    public ExpressionEmitter(IndentWriter w) {this.w = w;}
+    private final Set<String> importedPackages;
+
+    public ExpressionEmitter(IndentWriter w) {
+        this(w, List.of());
+    }
+
+    public ExpressionEmitter(IndentWriter w, List<String> imports) {
+        this.w = w;
+        this.importedPackages = new HashSet<>();
+        for (String imp : imports) {
+            // Convert import like "java.util.List" to package "java.util"
+            int lastDot = imp.lastIndexOf('.');
+            if (lastDot >= 0) {
+                importedPackages.add(imp.substring(0, lastDot));
+            }
+        }
+    }
+
+    /** Resolve a type name to its shortest valid form:
+     *  - java.lang.* types → simple name
+     *  - types matching an import → simple name
+     *  - otherwise → full qualified name. */
+    String typeName(JavaType type) {
+        if (type.kind() == TypeKind.CLASS && type.internalName() != null) {
+            String internal = type.internalName();
+            String full = internal.replace('/', '.');
+            // java.lang always gets short name
+            if (full.startsWith("java.lang.") && full.indexOf('.', 10) < 0) {
+                return full.substring(10);
+            }
+            // Types with matching imports get short name
+            int lastSlash = internal.lastIndexOf('/');
+            if (lastSlash >= 0) {
+                String pkg = internal.substring(0, lastSlash).replace('/', '.');
+                if (importedPackages.contains(pkg)) {
+                    return internal.substring(lastSlash + 1);
+                }
+            }
+            return full;
+        }
+        // For arrays, delegate to type's own displayName (handled recursively)
+        return type.displayName();
+    }
 
     // ── AstVisitor ─────────────────────────────────────────────────
 
@@ -238,12 +284,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
     }
 
     private void emitCast(CastExpr cast) {
-        w.write("(").write(cast.targetType().displayName()).write(") ");
+        w.write("(").write(typeName(cast.targetType())).write(") ");
         emitWithParens(cast.operand(), cast.precedence());
     }
 
     private void emitNew(NewExpr n) {
-        w.write("new ").write(n.instantiatedType().displayName());
+        w.write("new ").write(typeName(n.instantiatedType()));
         if (!n.constructorArgs().isEmpty()) {
             w.write("(");
             List<Expression> args = n.constructorArgs();
