@@ -1,4 +1,5 @@
 com\bingbaihanji\bdec\type\TypeResolverTest.class
+com\bingbaihanji\bdec\QuickCheck.class
 com\bingbaihanji\bdec\bytecode\parser\ClassFileReaderTest.class
 com\bingbaihanji\bdec\ControlFlowTest.class
 com\bingbaihanji\bdec\DecompileTestHarness.class

@@ -38,8 +38,19 @@ public class IrBuilderTest {
         assertNotNull("should have RETURN", ret);
         assertFalse("RETURN should have constant operand", ret.operands().isEmpty());
         Value operand = ret.operands().getFirst();
-        assertTrue("operand should be ConstantValue", operand instanceof ConstantValue);
-        assertEquals(0, ((ConstantValue) operand).value());
+        // The constant is now emitted as a CONST IR instruction and referenced
+        // via InstructionRef (needed for cross-block value tracking in if-else).
+        if (operand instanceof ConstantValue cv) {
+            assertEquals(0, cv.value());
+        } else if (operand instanceof InstructionRef ref) {
+            IrInstruction def = ref.instruction();
+            assertEquals(IrOpcode.CONST, def.opcode());
+            Value constVal = def.operands().getFirst();
+            assertTrue("CONST should have ConstantValue operand", constVal instanceof ConstantValue);
+            assertEquals(0, ((ConstantValue) constVal).value());
+        } else {
+            org.junit.Assert.fail("RETURN operand should be ConstantValue or InstructionRef, got " + operand.getClass());
+        }
     }
 
     @Test

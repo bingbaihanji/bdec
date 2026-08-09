@@ -2,6 +2,7 @@ package com.bingbaihanji.bdec.semantic;
 
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
 import com.bingbaihanji.bdec.ir.ConstantValue;
+import com.bingbaihanji.bdec.ir.InstructionRef;
 import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.IrOpcode;
 import com.bingbaihanji.bdec.ir.LinearIr;
@@ -49,7 +50,9 @@ public final class TypeAwareConstantFolder {
         }
 
         Value operand = ret.operands().getFirst();
-        if (operand instanceof ConstantValue cv) {
+        // Follow InstructionRef chains (constants are now emitted as CONST IR)
+        ConstantValue cv = unwrapConstant(operand);
+        if (cv != null) {
             Object val = cv.value();
             if (val instanceof Integer i) {
                 boolean boolVal = i != 0;
@@ -58,7 +61,6 @@ public final class TypeAwareConstantFolder {
                         SemanticAnnotation.KEY_BOOLEAN_VALUE, boolVal));
                 return true;
             }
-            // Also handle 0L/0.0 etc. — any zero is false, non-zero is true
             if (val instanceof Long l) {
                 ret.addAnnotation(SemanticAnnotation.of(
                         SemanticTag.BOOLEAN_RETURN,
@@ -67,5 +69,18 @@ public final class TypeAwareConstantFolder {
             }
         }
         return false;
+    }
+
+    /** Follow InstructionRef chains to find the underlying ConstantValue. */
+    private static ConstantValue unwrapConstant(Value v) {
+        if (v instanceof ConstantValue cv) return cv;
+        if (v instanceof InstructionRef ref) {
+            IrInstruction def = ref.instruction();
+            if (def.opcode() == IrOpcode.CONST && !def.operands().isEmpty()
+                    && def.operands().getFirst() instanceof ConstantValue cv) {
+                return cv;
+            }
+        }
+        return null;
     }
 }
