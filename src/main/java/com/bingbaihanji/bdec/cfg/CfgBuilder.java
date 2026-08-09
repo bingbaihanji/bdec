@@ -42,12 +42,20 @@ public final class CfgBuilder {
         }
 
         // Exception handler entries are leaders.
-        // Also add try range boundaries as leaders so that blocks don't
-        // span across try boundaries (which would put pre-try code like
-        // lock.lock() inside the try body).
+        // Also add try range boundaries (startPc) as leaders so that blocks
+        // don't span across try boundaries. Without this, pre-try code like
+        // lock.lock() would be in the same block as the first try instruction
+        // and get absorbed into the try body.
         if (method.exceptionHandlers() != null) {
             for (ExceptionHandlerModel eh : method.exceptionHandlers()) {
                 leaders.add(eh.handlerPc());
+                // Add try start boundary as leader — ensures instructions
+                // before the try range (e.g., lock.lock()) are in their
+                // own block separate from the try body.
+                // Only add if > 0 to avoid splitting the first instruction.
+                if (eh.startPc() > 0) {
+                    leaders.add(eh.startPc());
+                }
             }
         }
 
