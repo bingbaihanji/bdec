@@ -2077,9 +2077,16 @@ public final class BlockReducer {
 
     /** Translate a single block group to a list of statements. */
     private List<Statement> translateBlockGroup(BlockGroup group, LinearIr ir) {
-        return translateGroup(group, ir) instanceof BlockStatement bs
-                ? bs.statements()
-                : List.of();
+        Statement s = translateGroup(group, ir);
+        if (s instanceof BlockStatement bs) {
+            return bs.statements();
+        }
+        // Single statement (ReturnStatement, etc.) — translateGroup
+        // unwraps BlockStatement when there's only one statement.
+        if (s != null) {
+            return List.of(s);
+        }
+        return List.of();
     }
 
     /**
