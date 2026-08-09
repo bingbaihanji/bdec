@@ -41,7 +41,10 @@ public final class CfgBuilder {
             }
         }
 
-        // Exception handler entries are leaders
+        // Exception handler entries are leaders.
+        // Also add try range boundaries as leaders so that blocks don't
+        // span across try boundaries (which would put pre-try code like
+        // lock.lock() inside the try body).
         if (method.exceptionHandlers() != null) {
             for (ExceptionHandlerModel eh : method.exceptionHandlers()) {
                 leaders.add(eh.handlerPc());
