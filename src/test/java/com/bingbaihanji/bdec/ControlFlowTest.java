@@ -34,9 +34,11 @@ public class ControlFlowTest {
     @Test
     public void testTryFinally() throws Exception {
         String out = harness.decompileResource("decompile-samples/m2-controlflow/TryFinallySample.java");
-        // Verify lock/unlock pattern and return value preserved
-        DecompileTestHarness.assertContains(out, "class TryFinallySample", "lock", "return");
-        // TODO M1+: tighten to "try", "finally" when try-catch structuring is complete
+        // Verify correct try-finally structure with return value propagation
+        DecompileTestHarness.assertContains(out, "class TryFinallySample", "lock", "return 42");
+        DecompileTestHarness.assertContains(out, "try", "finally");
+        // Ensure lock.lock() is OUTSIDE try body
+        DecompileTestHarness.assertContains(out, "lock.lock()");
     }
 
     @Test

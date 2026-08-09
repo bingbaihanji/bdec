@@ -15,6 +15,16 @@ import java.util.Set;
 
 public final class CfgBuilder {
 
+    /** Compute the end offset of a block (start offset of next block, or past-end). */
+    private static int getBlockEndOffset(BasicBlock b, List<BasicBlock> blocks, int lastOffset) {
+        for (BasicBlock next : blocks) {
+            if (next.startOffset() > b.startOffset()) {
+                return next.startOffset();
+            }
+        }
+        return lastOffset;
+    }
+
     public ControlFlowGraph build(MethodModel method) {
         List<Instruction> instructions = method.instructions();
         if (instructions == null || instructions.isEmpty()) {
@@ -42,19 +52,28 @@ public final class CfgBuilder {
         }
 
         // Exception handler entries are leaders.
-        // Also add try range boundaries (startPc) as leaders so that blocks
-        // don't span across try boundaries. Without this, pre-try code like
-        // lock.lock() would be in the same block as the first try instruction
-        // and get absorbed into the try body.
+        // Also add try range boundaries (startPc and endPc) as leaders so that
+        // blocks don't span across try boundaries. Without this:
+        //  - Pre-try code (lock.lock()) would be in the same block as the try body
+        //  - Post-try normal-exit code (unlock;return) would be in the try body block
+        // For try-finally, the normal-exit finally copy is at endPc and MUST be
+        // in its own block (no EXCEPTION edges) separate from the try body block
+        // (which has EXCEPTION edges to the handler).
         if (method.exceptionHandlers() != null) {
             for (ExceptionHandlerModel eh : method.exceptionHandlers()) {
                 leaders.add(eh.handlerPc());
                 // Add try start boundary as leader — ensures instructions
                 // before the try range (e.g., lock.lock()) are in their
                 // own block separate from the try body.
-                // Only add if > 0 to avoid splitting the first instruction.
                 if (eh.startPc() > 0) {
                     leaders.add(eh.startPc());
+                }
+                // Add try end boundary as leader — CRITICAL for try-finally:
+                // the normal-exit path (at endPc) must be in a separate block
+                // from the try body. Without this, the normal-exit instructions
+                // get included in the try body block and appear inside try { }.
+                if (eh.endPc() > 0) {
+                    leaders.add(eh.endPc());
                 }
             }
         }
@@ -199,15 +218,5 @@ public final class CfgBuilder {
         allBlocks.add(exit);
 
         return new ControlFlowGraph(method, entry, exit, allBlocks, edges, exceptionRanges);
-    }
-
-    /** Compute the end offset of a block (start offset of next block, or past-end). */
-    private static int getBlockEndOffset(BasicBlock b, List<BasicBlock> blocks, int lastOffset) {
-        for (BasicBlock next : blocks) {
-            if (next.startOffset() > b.startOffset()) {
-                return next.startOffset();
-            }
-        }
-        return lastOffset;
     }
 }

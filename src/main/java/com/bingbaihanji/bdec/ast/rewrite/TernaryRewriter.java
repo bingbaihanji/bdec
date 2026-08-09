@@ -33,7 +33,7 @@ import java.util.List;
 public class TernaryRewriter implements RewriteRule {
 
     @Override
-    public String name() { return "ternary"; }
+    public String name() {return "ternary";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -122,10 +122,14 @@ public class TernaryRewriter implements RewriteRule {
      * Try to collapse if-else into assign-ternary: x = cond ? a : b.
      */
     private Expression tryCollapse(Expression cond, Statement thenBody, Statement elseBody) {
-        if (elseBody == null) return null;
+        if (elseBody == null) {
+            return null;
+        }
         Expression thenExpr = singleExpr(thenBody);
         Expression elseExpr = singleExpr(elseBody);
-        if (thenExpr == null || elseExpr == null) return null;
+        if (thenExpr == null || elseExpr == null) {
+            return null;
+        }
 
         // Case: both branches are assignments to the same variable
         if (thenExpr instanceof AssignExpr ta && elseExpr instanceof AssignExpr ea) {
@@ -142,23 +146,38 @@ public class TernaryRewriter implements RewriteRule {
 
     /**
      * Try to collapse if-else into return-ternary: return cond ? a : b.
+     * Also normalizes {@code !x ? a : b} → {@code x ? b : a}.
      */
     private Expression tryReturnTernary(Expression cond, Statement thenBody, Statement elseBody) {
-        if (elseBody == null) return null;
+        if (elseBody == null) {
+            return null;
+        }
 
         Statement thenStmt = thenBody;
         Statement elseStmt = elseBody;
-        if (thenBody instanceof BlockStatement tb && tb.statements().size() == 1)
+        if (thenBody instanceof BlockStatement tb && tb.statements().size() == 1) {
             thenStmt = tb.statements().getFirst();
-        if (elseBody instanceof BlockStatement eb && eb.statements().size() == 1)
+        }
+        if (elseBody instanceof BlockStatement eb && eb.statements().size() == 1) {
             elseStmt = eb.statements().getFirst();
+        }
 
         if (thenStmt instanceof ReturnStatement tr
                 && elseStmt instanceof ReturnStatement er) {
             Expression thenVal = tr.value();
             Expression elseVal = er.value();
-            if (thenVal == null) thenVal = new VarExpr("/*void*/");
-            if (elseVal == null) elseVal = new VarExpr("/*void*/");
+            if (thenVal == null) {
+                thenVal = new VarExpr("/*void*/");
+            }
+            if (elseVal == null) {
+                elseVal = new VarExpr("/*void*/");
+            }
+
+            // Normalize: !x ? a : b  →  x ? b : a
+            if (cond instanceof com.bingbaihanji.bdec.ast.expr.UnExpr ue
+                    && ue.operator() == com.bingbaihanji.bdec.ast.expr.UnaryOperator.NOT) {
+                return new CondExpr(ue.operand(), elseVal, thenVal);
+            }
             return new CondExpr(cond, thenVal, elseVal);
         }
         return null;
@@ -166,9 +185,12 @@ public class TernaryRewriter implements RewriteRule {
 
     /** Extract the single expression from a statement, unwrapping single-statement blocks. */
     private Expression singleExpr(Statement s) {
-        if (s instanceof ExpressionStatement es) return es.expression();
-        if (s instanceof BlockStatement bs && bs.statements().size() == 1)
+        if (s instanceof ExpressionStatement es) {
+            return es.expression();
+        }
+        if (s instanceof BlockStatement bs && bs.statements().size() == 1) {
             return singleExpr(bs.statements().getFirst());
+        }
         return null;
     }
 }

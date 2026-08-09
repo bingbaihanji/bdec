@@ -39,11 +39,10 @@ import com.bingbaihanji.bdec.type.TypeKind;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -66,6 +65,11 @@ public final class BlockReducer {
 
     private Set<Integer> currentInitToSkip = Set.of();
 
+    // Transient state for constant/value inlining (STORE→Variable→LOAD chains)
+    private Map<Variable, Value> currentVarStoreSource = Map.of();
+
+    private Set<Integer> currentStoresToSkip = Set.of();
+
     public BlockReducer() {this(true);}
 
     public BlockReducer(boolean isInstanceMethod) {
@@ -84,6 +88,51 @@ public final class BlockReducer {
         };
     }
 
+    /** Check if an expression is "ignorable" — just a naked variable or temp ref. */
+    private static boolean isIgnorableExpr(Expression e) {
+        if (e instanceof VarExpr v) {
+            String name = v.name();
+            return name.startsWith("var") || name.startsWith("tmp") || name.startsWith("?")
+                    || "this".equals(name);
+        }
+        return false;
+    }
+
+    /** Check if a statement block is empty or contains only empty blocks. */
+    private static boolean isEmptyBlock(Statement s) {
+        if (s instanceof BlockStatement bs) {
+            return bs.statements().isEmpty()
+                    || bs.statements().stream().allMatch(BlockReducer::isEmptyBlock);
+        }
+        return false;
+    }
+
+    private static boolean isBooleanLit(Expression e, boolean expected) {
+        if (e instanceof LitExpr lit) {
+            Object v = lit.value();
+            return v instanceof Boolean b && b == expected;
+        }
+        return false;
+    }
+
+    // ── Block grouping ────────────────────────────────────────────────
+
+    /** Detect increment/decrement: x = x + 1 → x++, x = x - 1 → x--. */
+    private static UnaryOperator detectIncrement(BinExpr bin) {
+        boolean isOne = bin.right() instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
+                && lr.value() instanceof Integer i && i == 1;
+        if (!isOne) {
+            return null;
+        }
+        if (bin.operator() == BinaryOperator.ADD) {
+            return com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC;
+        }
+        if (bin.operator() == BinaryOperator.SUB) {
+            return com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC;
+        }
+        return null;
+    }
+
     /**
      * Post-processing: wrap statement groups in try-catch based on CFG exception ranges.
      * Runs AFTER if/else/loop structuring so nested control structures are preserved.
@@ -93,10 +142,12 @@ public final class BlockReducer {
      * have all their blocks inside a try range, and wrap only those.
      */
     private BlockStatement wrapTryCatchBlocks(BlockStatement root,
-                                               List<BlockGroup> groups,
-                                               Map<BasicBlock, TryCatchInfo> tryCatchAnns,
-                                               LinearIr ir) {
-        if (tryCatchAnns.isEmpty()) return root;
+                                              List<BlockGroup> groups,
+                                              Map<BasicBlock, TryCatchInfo> tryCatchAnns,
+                                              LinearIr ir) {
+        if (tryCatchAnns.isEmpty()) {
+            return root;
+        }
 
         List<Statement> stmts = new ArrayList<>(root.statements());
 
@@ -119,27 +170,59 @@ public final class BlockReducer {
                     }
                 }
                 if (anyInTry && allInTry) {
-                    if (firstTryGroup < 0) firstTryGroup = i;
+                    if (firstTryGroup < 0) {
+                        firstTryGroup = i;
+                    }
                     lastTryGroup = i;
                 }
             }
 
-            // Wrap the contiguous range of try-group statements
-            if (firstTryGroup >= 0 && lastTryGroup >= firstTryGroup
-                    && firstTryGroup < stmts.size()) {
-                List<Statement> tryBodyStmts = new ArrayList<>();
-                for (int i = firstTryGroup; i <= lastTryGroup && i < stmts.size(); i++) {
-                    tryBodyStmts.add(stmts.get(i));
+            if (firstTryGroup < 0 || firstTryGroup >= stmts.size()) {
+                continue;
+            }
+
+            // For finally patterns (catch-all handler), extend the try body
+            // to include the normal-exit block that follows the try range.
+            // The normal-exit block (at endPc) contains:
+            //   [finally body copy] [return value]
+            // We want: try { return value; } finally { ... }
+            // The duplicated finally code in the normal exit is stripped.
+            boolean isFinally = tci.catchType() == null
+                    || "java/lang/Throwable".equals(tci.catchType());
+
+            // Collect the normal-exit groups (after the try range, before the handler)
+            int normalExitEnd = lastTryGroup;
+            if (isFinally) {
+                // Find groups that contain blocks NOT in tryBlocks and NOT the handler,
+                // but that appear between lastTryGroup and the handler group.
+                for (int i = lastTryGroup + 1; i < groups.size(); i++) {
+                    BlockGroup g = groups.get(i);
+                    boolean hasHandler = false;
+                    boolean hasTry = false;
+                    for (BasicBlock b : g.blocks()) {
+                        if (b == tci.handlerBlock()) hasHandler = true;
+                        if (tci.tryBlocks().contains(b)) hasTry = true;
+                    }
+                    if (hasHandler || hasTry) break; // stop at handler or next try range
+                    normalExitEnd = i; // include this group
                 }
-                // Replace the first statement with wrapped version, mark rest for removal
-                if (!tryBodyStmts.isEmpty()) {
-                    Statement tryBody = tryBodyStmts.size() == 1
-                            ? tryBodyStmts.get(0)
-                            : new BlockStatement(tryBodyStmts);
-                    stmts.set(firstTryGroup, buildTryCatch(tci, tryBody, ir));
-                    // Remove subsequent try-group statements (they've been absorbed)
-                    for (int i = lastTryGroup; i > firstTryGroup; i--) {
-                        if (i < stmts.size()) stmts.remove(i);
+            }
+
+            // Build try body: groups from firstTryGroup to normalExitEnd
+            List<Statement> tryBodyStmts = new ArrayList<>();
+            for (int i = firstTryGroup; i <= normalExitEnd && i < stmts.size(); i++) {
+                tryBodyStmts.add(stmts.get(i));
+            }
+
+            if (!tryBodyStmts.isEmpty()) {
+                Statement tryBody = tryBodyStmts.size() == 1
+                        ? tryBodyStmts.get(0)
+                        : new BlockStatement(tryBodyStmts);
+                stmts.set(firstTryGroup, buildTryCatch(tci, tryBody, ir));
+                // Remove absorbed groups
+                for (int i = normalExitEnd; i > firstTryGroup; i--) {
+                    if (i < stmts.size()) {
+                        stmts.remove(i);
                     }
                 }
             }
@@ -147,27 +230,6 @@ public final class BlockReducer {
 
         return new BlockStatement(stmts);
     }
-
-    /** Check if an expression is "ignorable" — just a naked variable or temp ref. */
-    private static boolean isIgnorableExpr(Expression e) {
-        if (e instanceof VarExpr v) {
-            String name = v.name();
-            return name.startsWith("var") || name.startsWith("tmp") || name.startsWith("?")
-                    || "this".equals(name);
-        }
-        return false;
-    }
-
-    /** Check if a statement block is empty or contains only empty blocks. */
-    private static boolean isEmptyBlock(Statement s) {
-        if (s instanceof BlockStatement bs) {
-            return bs.statements().isEmpty()
-                    || bs.statements().stream().allMatch(BlockReducer::isEmptyBlock);
-        }
-        return false;
-    }
-
-    // ── Block grouping ────────────────────────────────────────────────
 
     public BlockStatement reduce(ControlFlowGraph graph, LinearIr ir,
                                  Map<BasicBlock, LoopInfo> loopAnns,
@@ -194,6 +256,13 @@ public final class BlockReducer {
             handlerBlocks.add(tci.handlerBlock());
         }
         List<Statement> statements = new ArrayList<>();
+
+        // ── Global variable inlining pre-pass ─────────────────────────
+        // Scan ALL groups to find STORE→Variable→LOAD chains where the
+        // variable is used exactly once. This works across group boundaries
+        // (critical for try-finally where STORE is in the try body group
+        // and LOAD+RETURN is in the normal-exit group).
+        buildGlobalVarInlineMap(groups, ir);
 
         for (int gi = 0; gi < groups.size(); gi++) {
             BlockGroup group = groups.get(gi);
@@ -296,28 +365,36 @@ public final class BlockReducer {
     /** Find if any block in the group has an IfInfo annotation. */
     private IfInfo findIfAnnotation(BlockGroup group, Map<BasicBlock, IfInfo> ifAnns) {
         for (BasicBlock b : group.blocks()) {
-            if (ifAnns.containsKey(b)) return ifAnns.get(b);
+            if (ifAnns.containsKey(b)) {
+                return ifAnns.get(b);
+            }
         }
         return null;
     }
 
     private LoopInfo findLoopAnnotation(BlockGroup group, Map<BasicBlock, LoopInfo> loopAnns) {
         for (BasicBlock b : group.blocks()) {
-            if (loopAnns.containsKey(b)) return loopAnns.get(b);
+            if (loopAnns.containsKey(b)) {
+                return loopAnns.get(b);
+            }
         }
         return null;
     }
 
     private TryCatchInfo findTryAnnotation(BlockGroup group, Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
         for (BasicBlock b : group.blocks()) {
-            if (tryCatchAnns.containsKey(b)) return tryCatchAnns.get(b);
+            if (tryCatchAnns.containsKey(b)) {
+                return tryCatchAnns.get(b);
+            }
         }
         return null;
     }
 
     private SwitchInfo findSwitchAnnotation(BlockGroup group, Map<BasicBlock, SwitchInfo> switchAnns) {
         for (BasicBlock b : group.blocks()) {
-            if (switchAnns.containsKey(b)) return switchAnns.get(b);
+            if (switchAnns.containsKey(b)) {
+                return switchAnns.get(b);
+            }
         }
         return null;
     }
@@ -334,33 +411,48 @@ public final class BlockReducer {
      * all groups and leaving nothing for the second branch.
      */
     private IfInfo detectIfHeader(BlockGroup group, ControlFlowGraph graph, LinearIr ir,
-                                   PostDominatorTree postDom) {
+                                  PostDominatorTree postDom) {
         for (BasicBlock b : group.blocks()) {
             // Check if any instruction in this block is a CONDITION
             boolean hasCondition = ir.instructionsOf(b).stream()
                     .anyMatch(i -> i.opcode() == IrOpcode.CONDITION);
-            if (!hasCondition) continue;
+            if (!hasCondition) {
+                continue;
+            }
 
             // Find TRUE_BRANCH and FALSE_BRANCH edges
             BasicBlock trueTarget = null, falseTarget = null;
             for (var edge : graph.outgoingOf(b)) {
-                if (edge.kind() == EdgeKind.TRUE_BRANCH) trueTarget = edge.target();
-                else if (edge.kind() == EdgeKind.FALSE_BRANCH) falseTarget = edge.target();
+                if (edge.kind() == EdgeKind.TRUE_BRANCH) {
+                    trueTarget = edge.target();
+                } else if (edge.kind() == EdgeKind.FALSE_BRANCH) {
+                    falseTarget = edge.target();
+                }
             }
-            if (trueTarget == null && falseTarget == null) continue;
+            if (trueTarget == null && falseTarget == null) {
+                continue;
+            }
             // Fill missing with remaining successors
             List<BasicBlock> succs = graph.successorsOf(b);
             if (trueTarget == null && succs.size() >= 1) {
                 for (BasicBlock s : succs) {
-                    if (s != falseTarget) { trueTarget = s; break; }
+                    if (s != falseTarget) {
+                        trueTarget = s;
+                        break;
+                    }
                 }
             }
             if (falseTarget == null && succs.size() >= 1) {
                 for (BasicBlock s : succs) {
-                    if (s != trueTarget) { falseTarget = s; break; }
+                    if (s != trueTarget) {
+                        falseTarget = s;
+                        break;
+                    }
                 }
             }
-            if (trueTarget == null || falseTarget == null) continue;
+            if (trueTarget == null || falseTarget == null) {
+                continue;
+            }
 
             // Compute the merge point using post-dominator tree.
             // This is the first block that must be traversed on all paths
@@ -395,15 +487,19 @@ public final class BlockReducer {
 
     /** Collect all blocks reachable from start up to (but not including) stop. */
     private Set<BasicBlock> collectReachableBlocks(BasicBlock start, BasicBlock stop,
-                                                    ControlFlowGraph graph) {
+                                                   ControlFlowGraph graph) {
         Set<BasicBlock> result = new LinkedHashSet<>();
         Deque<BasicBlock> queue = new ArrayDeque<>();
         queue.add(start);
         while (!queue.isEmpty()) {
             BasicBlock curr = queue.poll();
-            if (curr == stop || !result.add(curr)) continue;
+            if (curr == stop || !result.add(curr)) {
+                continue;
+            }
             for (BasicBlock succ : graph.successorsOf(curr)) {
-                if (succ != stop) queue.add(succ);
+                if (succ != stop) {
+                    queue.add(succ);
+                }
             }
         }
         return result;
@@ -503,11 +599,17 @@ public final class BlockReducer {
         return null;
     }
 
+    // ── Group → Statement translation ──────────────────────────────
+
     /** Simplify common boolean redundancy patterns:
      *  {@code x == true} → {@code x}, {@code x != false} → {@code x},
-     *  {@code x == false} → {@code !x}, {@code x != true} → {@code !x}. */
+     *  {@code x == false} → {@code !x}, {@code x != true} → {@code !x},
+     *  {@code x == 0} where x is boolean → {@code !x},
+     *  {@code x != 0} where x is boolean → {@code x}. */
     private Expression simplifyCondition(Expression cond) {
-        if (cond == null) return null;
+        if (cond == null) {
+            return null;
+        }
         if (cond instanceof BinExpr bin) {
             // Simplify left side: x == true → x, x != false → x
             Expression left = simplifyCondition(bin.left());
@@ -522,12 +624,10 @@ public final class BlockReducer {
 
             if ((op == BinaryOperator.EQ && rightIsTrue)
                     || (op == BinaryOperator.NE && rightIsFalse)) {
-                // x == true → x,  x != false → x
                 return left;
             }
             if ((op == BinaryOperator.EQ && rightIsFalse)
                     || (op == BinaryOperator.NE && rightIsTrue)) {
-                // x == false → !x,  x != true → !x
                 return new UnExpr(UnaryOperator.NOT, left);
             }
             if ((op == BinaryOperator.EQ && leftIsTrue)
@@ -546,16 +646,6 @@ public final class BlockReducer {
         }
         return cond;
     }
-
-    private static boolean isBooleanLit(Expression e, boolean expected) {
-        if (e instanceof LitExpr lit) {
-            Object v = lit.value();
-            return v instanceof Boolean b && b == expected;
-        }
-        return false;
-    }
-
-    // ── Group → Statement translation ──────────────────────────────
 
     private List<BlockGroup> groupAdjacentBlocks(List<BasicBlock> blocks, ControlFlowGraph graph) {
         List<BlockGroup> groups = new ArrayList<>();
@@ -605,6 +695,8 @@ public final class BlockReducer {
         return true;
     }
 
+    // ── IR → Statement ─────────────────────────────────────────────
+
     /**
      * Translate a block group to a statement tree.
      *
@@ -640,6 +732,43 @@ public final class BlockReducer {
                 }
             }
         }
+
+        // Augment the global var→value inline map with per-group discoveries.
+        // Start from the global map (built in reduce()) and add per-group entries.
+        Map<Variable, Value> varStoreSource = new HashMap<>(currentVarStoreSource);
+        Set<Integer> storableToSkip = new HashSet<>(currentStoresToSkip);
+        for (IrInstruction insn : allInsns) {
+            if (insn.opcode() == IrOpcode.STORE && insn.operands().size() >= 2
+                    && insn.operands().get(0) instanceof Variable v
+                    && !varStoreSource.containsKey(v)) {
+                Value source = insn.operands().get(1);
+                // Count how many times this STORE's result variable is loaded in this group
+                int loadCount = 0;
+                for (IrInstruction other : allInsns) {
+                    if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
+                            && other.operands().getFirst() instanceof Variable lv
+                            && lv.slot() == v.slot() && lv.version() == v.version()) {
+                        loadCount++;
+                    }
+                }
+                if (loadCount == 1 && isSimpleValue(source)) {
+                    // Check if the single LOAD is consumed
+                    for (IrInstruction other : allInsns) {
+                        if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
+                                && other.operands().getFirst() instanceof Variable lv
+                                && lv.slot() == v.slot() && lv.version() == v.version()) {
+                            if (consumed.contains(other.id())) {
+                                varStoreSource.put(v, source);
+                                storableToSkip.add(insn.id());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        currentVarStoreSource = Collections.unmodifiableMap(varStoreSource);
+        currentStoresToSkip = Set.copyOf(storableToSkip);
 
         // Pre-pass: merge NEW + INVOKE <init> pairs (CondenseConstruction pattern)
         currentNewToInit = new java.util.HashMap<>();
@@ -681,13 +810,18 @@ public final class BlockReducer {
                     stmts.add(new ExpressionStatement(
                             new com.bingbaihanji.bdec.ast.expr.VarExpr(
                                     "/* if (" + left + " " + (cmp != null ? cmp : "?")
-                                    + " " + right + ") */")));
+                                            + " " + right + ") */")));
                 }
                 continue;
             }
 
             // Skip INIT calls already merged into NEW
             if (currentInitToSkip.contains(insn.id())) {
+                continue;
+            }
+
+            // Skip STORE instructions that have been inlined
+            if (currentStoresToSkip.contains(insn.id())) {
                 continue;
             }
 
@@ -732,7 +866,7 @@ public final class BlockReducer {
         return new BlockStatement(stmts);
     }
 
-    // ── IR → Statement ─────────────────────────────────────────────
+    // ── IR → Expression ────────────────────────────────────────────
 
     private Statement translateStmt(IrInstruction insn) {
         return switch (insn.opcode()) {
@@ -757,8 +891,6 @@ public final class BlockReducer {
             }
         };
     }
-
-    // ── IR → Expression ────────────────────────────────────────────
 
     /**
      * Translate a single IR instruction to an AST expression.
@@ -896,24 +1028,52 @@ public final class BlockReducer {
             }
 
             // Condition — use original bytecode opcode to infer comparison operator.
-            // When one operand is a COMPARE result (from LCMP/FCMPL/DCMPG etc.),
-            // merge: COMPARE(a,b) + CONDITION(op) → BinExpr(op, a, b).
-            // This turns "0 < (capacity == delta)" into "capacity > delta".
             case CONDITION -> {
                 if (insn.operands().size() >= 2) {
                     Value leftOp = insn.operands().get(0);
                     Value rightOp = insn.operands().get(1);
 
-                    // Detect COMPARE+CONDITION pattern: one operand is a COMPARE result
+                    // Detect boolean variable compared to 0:
+                    //   boolean == 0 → !boolean,  boolean != 0 → boolean
+                    // This handles if(flag) vs if(!flag) from bytecode IFEQ/IFNE.
+                    boolean leftIsBoolVar = leftOp instanceof Variable v
+                            && v.type().kind() == com.bingbaihanji.bdec.type.TypeKind.BOOLEAN;
+                    boolean rightIsBoolVar = rightOp instanceof Variable v
+                            && v.type().kind() == com.bingbaihanji.bdec.type.TypeKind.BOOLEAN;
+                    boolean rightIsZero = rightOp instanceof ConstantValue cv
+                            && cv.value() instanceof Integer i && i == 0;
+                    boolean leftIsZero = leftOp instanceof ConstantValue cv
+                            && cv.value() instanceof Integer i && i == 0;
+
+                    BinaryOperator cmpOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
+
+                    if (leftIsBoolVar && rightIsZero) {
+                        Expression varExpr = valueToExpr(leftOp);
+                        if (cmpOp == BinaryOperator.EQ) {
+                            // boolean == 0 → !boolean (IFEQ)
+                            yield new UnExpr(UnaryOperator.NOT, varExpr);
+                        } else if (cmpOp == BinaryOperator.NE) {
+                            // boolean != 0 → boolean (IFNE)
+                            yield varExpr;
+                        }
+                    }
+                    if (rightIsBoolVar && leftIsZero) {
+                        Expression varExpr = valueToExpr(rightOp);
+                        if (cmpOp == BinaryOperator.EQ) {
+                            yield new UnExpr(UnaryOperator.NOT, varExpr);
+                        } else if (cmpOp == BinaryOperator.NE) {
+                            yield varExpr;
+                        }
+                    }
+
+                    // Detect COMPARE+CONDITION pattern
                     Value cmpVal = null;
-                    boolean cmpIsLeft = false;
                     if (rightOp instanceof InstructionRef ref
                             && ref.instruction().opcode() == IrOpcode.COMPARE) {
                         cmpVal = rightOp;
                     } else if (leftOp instanceof InstructionRef ref
                             && ref.instruction().opcode() == IrOpcode.COMPARE) {
                         cmpVal = leftOp;
-                        cmpIsLeft = true;
                     }
 
                     if (cmpVal != null) {
@@ -932,7 +1092,6 @@ public final class BlockReducer {
                     // Regular condition (no COMPARE merge)
                     Expression left = valueToExpr(leftOp);
                     Expression right = valueToExpr(rightOp);
-                    BinaryOperator cmpOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
                     yield new BinExpr(cmpOp != null ? cmpOp : BinaryOperator.EQ, left, right);
                 }
                 yield new VarExpr("/* condition */");
@@ -1104,7 +1263,15 @@ public final class BlockReducer {
      *  to build proper expression trees. */
     private Expression valueToExpr(Value v) {
         return switch (v) {
-            case Variable var -> varToExpr(var);
+            case Variable var -> {
+                // Check if this variable's value was inlined from a STORE.
+                // This handles: x = 42; ... use(x) → 42
+                Value storeSource = currentVarStoreSource.get(var);
+                if (storeSource != null) {
+                    yield valueToExpr(storeSource);
+                }
+                yield varToExpr(var);
+            }
             case ConstantValue cv -> {
                 Object val = cv.value();
                 if (val == null) {
@@ -1135,16 +1302,6 @@ public final class BlockReducer {
         return null;
     }
 
-    /** Detect increment/decrement: x = x + 1 → x++, x = x - 1 → x--. */
-    private static UnaryOperator detectIncrement(BinExpr bin) {
-        boolean isOne = bin.right() instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
-                && lr.value() instanceof Integer i && i == 1;
-        if (!isOne) return null;
-        if (bin.operator() == BinaryOperator.ADD) return com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC;
-        if (bin.operator() == BinaryOperator.SUB) return com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC;
-        return null;
-    }
-
     /** Check if two expressions are structurally equivalent (same variable/field).
      *  Handles the equivalence: {@code VarExpr("size") ≈ FieldAccessExpr(this, "size")}
      *  which arises because {@code FIELD_LOAD on this} emits bare field names. */
@@ -1155,8 +1312,8 @@ public final class BlockReducer {
         if (a instanceof FieldAccessExpr fa && b instanceof FieldAccessExpr fb) {
             return fa.fieldName().equals(fb.fieldName())
                     && (fa.target() == null && fb.target() == null
-                        || (fa.target() != null && fb.target() != null
-                            && expressionsMatch(fa.target(), fb.target())));
+                    || (fa.target() != null && fb.target() != null
+                    && expressionsMatch(fa.target(), fb.target())));
         }
         // Cross-type: VarExpr("size") matches FieldAccessExpr(this, "size")
         if (a instanceof VarExpr va && b instanceof FieldAccessExpr fb) {
@@ -1347,12 +1504,11 @@ public final class BlockReducer {
             Statement finallyBody = translateGroup(finallyGroup, ir);
 
             // Filter out the THROW from the emitted statements.
-            // THROW IR translates to ThrowStatement; also handle legacy VarExpr placeholder.
             if (finallyBody instanceof BlockStatement bs) {
                 List<Statement> stmts = new ArrayList<>();
                 for (Statement s : bs.statements()) {
                     if (s instanceof ThrowStatement) {
-                        continue; // suppress re-throw in finally body
+                        continue;
                     }
                     if (s instanceof ExpressionStatement es
                             && es.expression() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
@@ -1363,6 +1519,12 @@ public final class BlockReducer {
                 }
                 finallyBody = new BlockStatement(stmts);
             }
+
+            // Strip duplicated finally-body statements from the try body.
+            // Bytecode duplicates finally code: once in the normal exit path
+            // (which gets grouped into the try body) and once in the handler.
+            // We want the finally code ONLY in the finally block.
+            tryBody = stripDuplicatedFinally(tryBody, finallyBody);
 
             return new TryStatement(tryBody, List.of(), finallyBody);
         }
@@ -1383,11 +1545,194 @@ public final class BlockReducer {
         return new TryStatement(tryBody, catchClauses, null);
     }
 
+    /**
+     * Strip statements from the try body that also appear in the finally body.
+     * Uses structural comparison on the Expression objects rather than toString().
+     */
+    private Statement stripDuplicatedFinally(Statement tryBody, Statement finallyBody) {
+        List<Statement> finallyStmts = collectStatements(finallyBody);
+        if (finallyStmts.isEmpty()) {
+            return tryBody;
+        }
+
+        List<Statement> tryStmts = collectStatements(tryBody);
+        List<Statement> filtered = new ArrayList<>();
+        for (Statement s : tryStmts) {
+            if (!matchesAny(s, finallyStmts)) {
+                filtered.add(s);
+            }
+        }
+
+        if (filtered.isEmpty()) {
+            return new BlockStatement(List.of());
+        }
+        if (filtered.size() == 1) {
+            return filtered.getFirst();
+        }
+        return new BlockStatement(filtered);
+    }
+
+    /** Check if a statement matches any in a list by comparing expression structure. */
+    private static boolean matchesAny(Statement s, List<Statement> candidates) {
+        if (s instanceof ExpressionStatement es) {
+            for (Statement c : candidates) {
+                if (c instanceof ExpressionStatement ce
+                        && expressionsEquivalent(es.expression(), ce.expression())) {
+                    return true;
+                }
+            }
+        }
+        if (s instanceof ReturnStatement rs && rs.value() != null) {
+            for (Statement c : candidates) {
+                if (c instanceof ReturnStatement rc && rc.value() != null
+                        && expressionsEquivalent(rs.value(), rc.value())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Structural comparison of two Expression trees. */
+    private static boolean expressionsEquivalent(Expression a, Expression b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (a.getClass() != b.getClass()) return false;
+
+        if (a instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr ia
+                && b instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr ib) {
+            if (!ia.methodName().equals(ib.methodName())) return false;
+            if (ia.arguments().size() != ib.arguments().size()) return false;
+            for (int i = 0; i < ia.arguments().size(); i++) {
+                if (!expressionsEquivalent(ia.arguments().get(i), ib.arguments().get(i))) return false;
+            }
+            return expressionsEquivalent(ia.target(), ib.target());
+        }
+        if (a instanceof com.bingbaihanji.bdec.ast.expr.LitExpr la
+                && b instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lb) {
+            Object va = la.value(), vb = lb.value();
+            return va == null ? vb == null : va.equals(vb);
+        }
+        if (a instanceof com.bingbaihanji.bdec.ast.expr.VarExpr va
+                && b instanceof com.bingbaihanji.bdec.ast.expr.VarExpr vb) {
+            return va.name().equals(vb.name());
+        }
+        if (a instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
+                && b instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fb) {
+            return fa.fieldName().equals(fb.fieldName())
+                    && expressionsEquivalent(fa.target(), fb.target());
+        }
+        return false;
+    }
+
+    /** Recursively collect all statements, flattening nested BlockStatements. */
+    private static List<Statement> collectStatements(Statement s) {
+        List<Statement> result = new ArrayList<>();
+        if (s instanceof BlockStatement bs) {
+            for (Statement child : bs.statements()) {
+                result.addAll(collectStatements(child));
+            }
+        } else {
+            result.add(s);
+        }
+        return result;
+    }
+
     /** Translate a single block group to a list of statements. */
     private List<Statement> translateBlockGroup(BlockGroup group, LinearIr ir) {
         return translateGroup(group, ir) instanceof BlockStatement bs
                 ? bs.statements()
                 : List.of();
+    }
+
+    /**
+     * Build a global (cross-group) map from Variable → stored Value for
+     * single-use variables. This allows inlining constants across group
+     * boundaries, e.g., STORE in the try-body group and LOAD in the normal-exit
+     * group (common in try-finally patterns).
+     */
+    private void buildGlobalVarInlineMap(List<BlockGroup> groups, LinearIr ir) {
+        Map<Variable, Value> varStoreSource = new HashMap<>();
+        Set<Integer> storesToSkip = new HashSet<>();
+
+        // Collect all instructions across all groups
+        List<IrInstruction> allInsns = new ArrayList<>();
+        for (BlockGroup g : groups) {
+            allInsns.addAll(g.allIrInstructions(ir));
+        }
+
+        // First pass: count how many times each Variable is referenced
+        // (both via LOAD and directly in other instruction operands like RETURN).
+        Map<Variable, Integer> varUseCount = new HashMap<>();
+        Map<Variable, Integer> loadIdForVar = new HashMap<>();
+        for (IrInstruction insn : allInsns) {
+            if (insn.opcode() == IrOpcode.LOAD && !insn.operands().isEmpty()
+                    && insn.operands().getFirst() instanceof Variable v) {
+                varUseCount.merge(v, 1, Integer::sum);
+                loadIdForVar.put(v, insn.id());
+            }
+            // Also count direct Variable references (e.g., RETURN operand)
+            for (Value op : insn.operands()) {
+                if (op instanceof Variable v && insn.opcode() != IrOpcode.STORE
+                        && insn.opcode() != IrOpcode.LOAD) {
+                    varUseCount.merge(v, 1, Integer::sum);
+                }
+            }
+        }
+
+        // Build consumed set (InstructionRef usage + direct Variable usage)
+        Set<Integer> consumedInsnIds = new HashSet<>();
+        for (IrInstruction insn : allInsns) {
+            for (Value op : insn.operands()) {
+                if (op instanceof InstructionRef ref) {
+                    consumedInsnIds.add(ref.instruction().id());
+                }
+            }
+        }
+
+        // Second pass: track stores with single-use variables
+        for (IrInstruction insn : allInsns) {
+            if (insn.opcode() == IrOpcode.STORE && insn.operands().size() >= 2
+                    && insn.operands().get(0) instanceof Variable v) {
+                Value source = insn.operands().get(1);
+                int useCount = varUseCount.getOrDefault(v, 0);
+                if (useCount == 1 && isSimpleValue(source)) {
+                    // Check if the LOAD (if any) is consumed, OR if the variable
+                    // is used directly (e.g., RETURN operand).
+                    Integer loadId = loadIdForVar.get(v);
+                    boolean canInline;
+                    if (loadId != null) {
+                        // Variable is loaded via LOAD — check LOAD is consumed
+                        canInline = consumedInsnIds.contains(loadId);
+                    } else {
+                        // Variable is used directly — always safe to inline
+                        // (the variable itself is the use site)
+                        canInline = true;
+                    }
+                    if (canInline) {
+                        varStoreSource.put(v, source);
+                        storesToSkip.add(insn.id());
+                    }
+                }
+            }
+        }
+
+        currentVarStoreSource = Map.copyOf(varStoreSource);
+        currentStoresToSkip = Set.copyOf(storesToSkip);
+    }
+
+    /** Check if a value is simple enough to inline (constant or basic expression). */
+    private static boolean isSimpleValue(Value v) {
+        if (v instanceof ConstantValue) {
+            return true;
+        }
+        if (v instanceof InstructionRef ref) {
+            IrOpcode op = ref.instruction().opcode();
+            return op == IrOpcode.CONST || op == IrOpcode.LOAD || op == IrOpcode.CAST
+                    || op == IrOpcode.FIELD_LOAD || op == IrOpcode.ARRAY_LENGTH
+                    || op == IrOpcode.INSTANCE_OF;
+        }
+        return false;
     }
 
     // ── BlockGroup helper ─────────────────────────────────────────────
