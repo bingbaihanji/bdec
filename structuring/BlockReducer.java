@@ -684,7 +684,6 @@ public final class BlockReducer {
         }
         // Respect try boundaries: if blocks have different exception coverage
         // (one has exception edges and the other doesn't), don't merge them.
-        // This ensures pre-try code stays in its own group separate from the try body.
         boolean prevHasException = graph.outgoingOf(prev).stream()
                 .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
         boolean nextHasException = graph.outgoingOf(next).stream()
@@ -1244,9 +1243,15 @@ public final class BlockReducer {
             // Throw
             case THROW -> !insn.operands().isEmpty() ? valueToExpr(insn.operands().getFirst()) : new VarExpr("ex");
 
-            // PHI — pick the first variable operand as representative name
+            // PHI — pick the first non-trivial operand's expression as representative
             case PHI -> {
                 for (Value op : insn.operands()) {
+                    if (op instanceof InstructionRef ref) {
+                        yield translateExpr(ref.instruction());
+                    }
+                    if (op instanceof ConstantValue cv) {
+                        yield new LitExpr(cv.value(), cv.type());
+                    }
                     if (op instanceof Variable v) {
                         yield varToExpr(v);
                     }

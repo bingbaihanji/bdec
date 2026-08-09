@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -272,8 +273,8 @@ public final class IrBuilder {
                 case ACONST_NULL, ICONST_M1, ICONST_0, ICONST_1, ICONST_2,
                      ICONST_3, ICONST_4, ICONST_5, LCONST_0, LCONST_1,
                      FCONST_0, FCONST_1, FCONST_2, DCONST_0, DCONST_1,
-                     BIPUSH, SIPUSH -> handleConstant(op, insn, stack);
-                case LDC, LDC_W, LDC2_W -> handleLdc(insn, stack, cp);
+                     BIPUSH, SIPUSH -> handleConstant(op, insn, stack, instructions, offset, blockId);
+                case LDC, LDC_W, LDC2_W -> handleLdc(insn, stack, cp, instructions, offset, blockId);
 
                 // Loads
                 case ILOAD, ILOAD_0, ILOAD_1, ILOAD_2, ILOAD_3,
@@ -449,36 +450,53 @@ public final class IrBuilder {
 
     // ── Constants ─────────────────────────────────────────────────
 
-    private void handleConstant(Opcode op, Instruction insn, Deque<Value> stack) {
-        switch (op) {
-            case ACONST_NULL -> stack.push(ConstantValue.NULL);
-            case ICONST_M1 -> stack.push(new ConstantValue(-1, JavaType.INT));
-            case ICONST_0 -> stack.push(new ConstantValue(0, JavaType.INT));
-            case ICONST_1 -> stack.push(new ConstantValue(1, JavaType.INT));
-            case ICONST_2 -> stack.push(new ConstantValue(2, JavaType.INT));
-            case ICONST_3 -> stack.push(new ConstantValue(3, JavaType.INT));
-            case ICONST_4 -> stack.push(new ConstantValue(4, JavaType.INT));
-            case ICONST_5 -> stack.push(new ConstantValue(5, JavaType.INT));
-            case LCONST_0 -> stack.push(new ConstantValue(0L, JavaType.LONG));
-            case LCONST_1 -> stack.push(new ConstantValue(1L, JavaType.LONG));
-            case FCONST_0 -> stack.push(new ConstantValue(0.0f, JavaType.FLOAT));
-            case FCONST_1 -> stack.push(new ConstantValue(1.0f, JavaType.FLOAT));
-            case FCONST_2 -> stack.push(new ConstantValue(2.0f, JavaType.FLOAT));
-            case DCONST_0 -> stack.push(new ConstantValue(0.0, JavaType.DOUBLE));
-            case DCONST_1 -> stack.push(new ConstantValue(1.0, JavaType.DOUBLE));
+    private void handleConstant(Opcode op, Instruction insn, Deque<Value> stack,
+                                List<IrInstruction> instructions, int offset, int blockId) {
+        ConstantValue cv = switch (op) {
+            case ACONST_NULL -> ConstantValue.NULL;
+            case ICONST_M1 -> new ConstantValue(-1, JavaType.INT);
+            case ICONST_0 -> new ConstantValue(0, JavaType.INT);
+            case ICONST_1 -> new ConstantValue(1, JavaType.INT);
+            case ICONST_2 -> new ConstantValue(2, JavaType.INT);
+            case ICONST_3 -> new ConstantValue(3, JavaType.INT);
+            case ICONST_4 -> new ConstantValue(4, JavaType.INT);
+            case ICONST_5 -> new ConstantValue(5, JavaType.INT);
+            case LCONST_0 -> new ConstantValue(0L, JavaType.LONG);
+            case LCONST_1 -> new ConstantValue(1L, JavaType.LONG);
+            case FCONST_0 -> new ConstantValue(0.0f, JavaType.FLOAT);
+            case FCONST_1 -> new ConstantValue(1.0f, JavaType.FLOAT);
+            case FCONST_2 -> new ConstantValue(2.0f, JavaType.FLOAT);
+            case DCONST_0 -> new ConstantValue(0.0, JavaType.DOUBLE);
+            case DCONST_1 -> new ConstantValue(1.0, JavaType.DOUBLE);
             case BIPUSH, SIPUSH -> {
                 int val = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
-                stack.push(new ConstantValue(val, JavaType.INT));
+                yield new ConstantValue(val, JavaType.INT);
             }
+            default -> null;
+        };
+        if (cv != null) {
+            // Emit CONST IR instruction so the value is referenceable
+            // across block boundaries via InstructionRef chains.
+            IrInstruction constInsn = new IrInstruction(nextId(), IrOpcode.CONST,
+                    cv.type(), List.of(cv), offset, blockId);
+            instructions.add(constInsn);
+            constInsn.setResultValue(new InstructionRef(constInsn, cv.type()));
+            stack.push(new InstructionRef(constInsn, cv.type()));
         }
     }
 
-    private void handleLdc(Instruction insn, Deque<Value> stack, ConstantPoolEntry[] cp) {
+    private void handleLdc(Instruction insn, Deque<Value> stack, ConstantPoolEntry[] cp,
+                          List<IrInstruction> instructions, int offset, int blockId) {
         int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
         ConstantValue cv = cpIdx > 0 && cpIdx < cp.length
                 ? cpValue(cp[cpIdx], cp)
                 : new ConstantValue("?", JavaType.classType("java/lang/Object"));
-        stack.push(cv);
+        // Emit CONST IR instruction so the value is referenceable
+        IrInstruction constInsn = new IrInstruction(nextId(), IrOpcode.CONST,
+                cv.type(), List.of(cv), offset, blockId);
+        instructions.add(constInsn);
+        constInsn.setResultValue(new InstructionRef(constInsn, cv.type()));
+        stack.push(new InstructionRef(constInsn, cv.type()));
     }
 
     // ── Loads ────────────────────────────────────────────────────
@@ -729,13 +747,16 @@ public final class IrBuilder {
             receiver = stack.pop();
         }
 
-        // Fold boolean constants: 0→false, 1→true when parameter is boolean
+        // Fold boolean constants: 0→false, 1→true when parameter is boolean.
+        // Follow InstructionRef chains since constants are now emitted as CONST IR.
         if (paramTypes != null) {
             for (int p = 0; p < paramTypes.length && p < args.size(); p++) {
-                if (paramTypes[p].kind() == TypeKind.BOOLEAN
-                        && args.get(p) instanceof ConstantValue cv
-                        && cv.value() instanceof Integer i) {
-                    args.set(p, new ConstantValue(i != 0, JavaType.BOOLEAN));
+                if (paramTypes[p].kind() == TypeKind.BOOLEAN) {
+                    Value arg = args.get(p);
+                    ConstantValue cv = unwrapConstant(arg);
+                    if (cv != null && cv.value() instanceof Integer i) {
+                        args.set(p, new ConstantValue(i != 0, JavaType.BOOLEAN));
+                    }
                 }
             }
         }
@@ -1052,6 +1073,23 @@ public final class IrBuilder {
             instructions.add(load);
             load.setResultValue(new InstructionRef(load, v.type()));
         }
+    }
+
+    /** Follow InstructionRef chains to find the underlying ConstantValue. */
+    private static ConstantValue unwrapConstant(Value v) {
+        if (v instanceof ConstantValue cv) {
+            return cv;
+        }
+        if (v instanceof InstructionRef ref) {
+            IrInstruction def = ref.instruction();
+            if (def.opcode() == IrOpcode.CONST && !def.operands().isEmpty()) {
+                Value inner = def.operands().getFirst();
+                if (inner instanceof ConstantValue cv) {
+                    return cv;
+                }
+            }
+        }
+        return null;
     }
 
     private ConstantValue cpValue(ConstantPoolEntry entry, ConstantPoolEntry[] pool) {
