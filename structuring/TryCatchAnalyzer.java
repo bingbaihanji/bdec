@@ -51,16 +51,25 @@ public final class TryCatchAnalyzer {
     }
 
     /**
-     * Find all basic blocks whose start offset falls within [startPc, endPc).
+     * Find all basic blocks that overlap with [startPc, endPc).
+     * A block may start before the try range but still contain instructions
+     * within it — those blocks must also be included for exception edges.
      */
     private Set<BasicBlock> findBlocksInRange(ControlFlowGraph graph, int startPc, int endPc) {
         Set<BasicBlock> result = new LinkedHashSet<>();
-        for (BasicBlock b : graph.blocks()) {
-            if (b == graph.entryBlock() || b == graph.exitBlock()) {
-                continue;
-            }
+        List<BasicBlock> orderedBlocks = graph.blocks().stream()
+                .filter(b -> b != graph.entryBlock() && b != graph.exitBlock())
+                .sorted(java.util.Comparator.comparingInt(BasicBlock::startOffset))
+                .toList();
+        for (int i = 0; i < orderedBlocks.size(); i++) {
+            BasicBlock b = orderedBlocks.get(i);
             int blockStart = b.startOffset();
-            if (blockStart >= startPc && blockStart < endPc) {
+            // Compute block end: start of next block, or endPc as fallback
+            int blockEnd = (i + 1 < orderedBlocks.size())
+                    ? orderedBlocks.get(i + 1).startOffset()
+                    : Integer.MAX_VALUE;
+            // Overlap: [blockStart, blockEnd) intersects [startPc, endPc)
+            if (blockStart < endPc && blockEnd > startPc) {
                 result.add(b);
             }
         }
