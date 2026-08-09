@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec.emit;
 import com.bingbaihanji.bdec.ast.AstVisitor;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import java.util.ArrayList;
 import java.util.List;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
@@ -212,10 +213,31 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
 
         // Body
         if (m.body() != null) {
-            emit(m.body());
+            // Suppress implicit super() in constructors: if the first
+            // statement is a no-arg super() call, skip emitting it.
+            Statement body = m.body();
+            if (isConstructor && body instanceof BlockStatement bs
+                    && !bs.statements().isEmpty()) {
+                Statement first = bs.statements().getFirst();
+                if (isImplicitSuperCall(first)) {
+                    List<Statement> filtered = new ArrayList<>(
+                            bs.statements().subList(1, bs.statements().size()));
+                    body = new BlockStatement(filtered);
+                }
+            }
+            emit(body);
         } else {
             w.write(";").newLine();
         }
+    }
+
+    /** Check if a statement is an implicit no-arg super() constructor call. */
+    private boolean isImplicitSuperCall(Statement s) {
+        if (s instanceof ExpressionStatement es
+                && es.expression() instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
+            return "super".equals(inv.methodName()) && inv.arguments().isEmpty();
+        }
+        return false;
     }
 
     private void emitExprStmt(ExpressionStatement e) {
