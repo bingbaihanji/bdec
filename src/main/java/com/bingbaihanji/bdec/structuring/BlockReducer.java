@@ -2066,9 +2066,14 @@ public final class BlockReducer {
         if (excType != null && excType.contains("/")) {
             excType = excType.substring(excType.lastIndexOf('/') + 1);
         }
-        // Translate handler instructions as the catch body
+        // Translate handler instructions as the catch body.
+        // translateGroup can return null if the handler block has no IR instructions
+        // (e.g., empty catch clause), so guard with empty BlockStatement.
         BlockGroup handlerGroup = new BlockGroup(info.handlerBlock());
         Statement handlerBody = translateGroup(handlerGroup, ir);
+        if (handlerBody == null) {
+            handlerBody = new BlockStatement(List.of());
+        }
         catchClauses.add(new TryStatement.CatchClause(
                 excType != null ? excType : "Exception",
                 "e",
