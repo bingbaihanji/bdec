@@ -450,6 +450,10 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
     }
 
     private void emitBranched(Statement stmt) {
+        if (stmt == null) {
+            w.write("{}").newLine();
+            return;
+        }
         if (stmt instanceof BlockStatement) {
             emit(stmt);
         } else {
