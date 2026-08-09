@@ -42,6 +42,7 @@ com\bingbaihanji\bdec\ast\stmt\Statement.class
 com\bingbaihanji\bdec\cfg\ControlFlowEdge.class
 com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter$TempSwitchMatch.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpUtf8.class
+com\bingbaihanji\bdec\ast\stmt\VariableDeclaration.class
 com\bingbaihanji\bdec\ast\stmt\SwitchStmt.class
 com\bingbaihanji\bdec\structuring\IrreducibleHandler.class
 com\bingbaihanji\bdec\ast\AstBuilder.class

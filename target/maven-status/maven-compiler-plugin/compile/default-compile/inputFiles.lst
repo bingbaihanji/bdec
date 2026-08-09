@@ -51,6 +51,7 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\st
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\stmt\SynchronizedStatement.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\stmt\ThrowStatement.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\stmt\TryStatement.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\stmt\VariableDeclaration.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\TypeDeclaration.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\BdecCli.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\BdecConfig.java

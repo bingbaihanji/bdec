@@ -60,7 +60,13 @@ public final class InstructionDecoder {
             case 1 -> {
                 int val = in.readUnsignedByte();
                 operands.add(val);
-                if (op.implicitVarIndex() < 0) {
+                // Update varIndex when the operand byte carries a local variable
+                // index. Explicit-index opcodes (ILOAD, ISTORE, LSTORE, etc.) have
+                // implicitVarIndex==0 but operandCount==1 — the operand IS the index.
+                // Implicit-index opcodes (ILOAD_0, ISTORE_3, etc.) have operandCount==0
+                // and the index comes from implicitVarIndex.
+                // Non-index opcodes (BIPUSH, LDC, etc.) have implicitVarIndex==-1.
+                if (op.implicitVarIndex() < 0 || op.operandBytes() > 0) {
                     varIndex = val;
                 }
             }

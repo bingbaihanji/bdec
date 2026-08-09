@@ -14,6 +14,7 @@ import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
 import com.bingbaihanji.bdec.ast.stmt.SynchronizedStatement;
 import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
 import com.bingbaihanji.bdec.ast.stmt.TryStatement;
+import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -70,7 +71,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             case FIELD_DECL -> emitFieldDecl((FieldDeclaration) stmt);
             case THROW -> emitThrow(stmt);
             case SWITCH -> emitSwitch(stmt);
-            case VARIABLE_DECL -> w.write("/* var decl */;").newLine();
+            case VARIABLE_DECL -> emitVariableDecl(stmt);
             case BREAK -> w.token("break").write(";").newLine();
             case CONTINUE -> w.token("continue").write(";").newLine();
             case SYNCHRONIZED -> emitSynchronized(stmt);
@@ -269,6 +270,13 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
 
     private void emitTry(Statement stmt) {
         if (stmt instanceof TryStatement tryStmt) {
+            boolean hasCatch = !tryStmt.catchClauses().isEmpty();
+            boolean hasFinally = tryStmt.finallyBody() != null;
+            // Guard: a try must have at least one catch or finally
+            if (!hasCatch && !hasFinally) {
+                w.write("/* empty try */ { }").newLine();
+                return;
+            }
             w.token("try").space();
             emitBranched(tryStmt.tryBody());
             for (TryStatement.CatchClause cc : tryStmt.catchClauses()) {
@@ -276,7 +284,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
                         .write(cc.exceptionType()).space().write(cc.varName()).write(")").space();
                 emitBranched(cc.body());
             }
-            if (tryStmt.finallyBody() != null) {
+            if (hasFinally) {
                 w.space().token("finally").space();
                 emitBranched(tryStmt.finallyBody());
             }
@@ -293,6 +301,19 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             emitBranched(sync.body());
         } else {
             w.write("synchronized (obj) {}").newLine();
+        }
+    }
+
+    private void emitVariableDecl(Statement stmt) {
+        if (stmt instanceof VariableDeclaration vd) {
+            w.write(typeName(vd.type())).space().write(vd.name());
+            if (vd.initializer() != null) {
+                w.space().write("=").space();
+                exprs.emit(vd.initializer());
+            }
+            w.write(";").newLine();
+        } else {
+            w.write("/* var decl */;").newLine();
         }
     }
 

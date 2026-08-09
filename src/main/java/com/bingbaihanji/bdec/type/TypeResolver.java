@@ -9,6 +9,14 @@ public final class TypeResolver {
         return parseType(descriptor, 0).type();
     }
 
+    /** Parse a field type descriptor (e.g., "I", "J", "Ljava/lang/String;"). */
+    public static JavaType parseFieldType(String descriptor) {
+        if (descriptor == null || descriptor.isEmpty()) {
+            return JavaType.classType("java/lang/Object");
+        }
+        return parseType(descriptor, 0).type();
+    }
+
     public static JavaType[] parseMethodParameterTypes(String methodDescriptor) {
         if (!methodDescriptor.startsWith("(")) {
             throw new IllegalArgumentException("Not a method descriptor: " + methodDescriptor);

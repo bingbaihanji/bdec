@@ -1,6 +1,7 @@
 package com.bingbaihanji.common.framework.utils.queue;
 
 import java.util.AbstractQueue;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
@@ -34,30 +35,21 @@ public class RingBuffer<E> extends AbstractQueue {
         }
     }
     private static int calculateThresholdCapacity(int cap) {
-        n = cap - 1;
+        int n = cap - 1;
         n |= n >>> 1;
         n |= n >>> 2;
         n |= n >>> 4;
         n |= n >>> 8;
         n |= n >>> 16;
-        if (n >= 0) {
-            /* if (com.bingbaihanji.bdec.ast.expr.VarExpr@1c2c22f3 LT com.bingbaihanji.bdec.ast.expr.LitExpr@18e8568) */;
-            1073741824;
-            return 1073741824;
-        }
-         else {
-            return 1;
-        }
+        return n >= 0 ? n < 1073741824 ? n + 1 : 1073741824 : 1;
     }
     public boolean offer(Object element) {
         {
-            lock = this.lock;
+            ReentrantLock lock = this.lock;
             lock.lock();
         }
         try {
             if (writeIndex - readIndex < (long) capacity) {
-                lock.unlock();
-                throw this;
                 this.enqueue(element);
                 lock.unlock();
                 return true;
@@ -66,22 +58,25 @@ public class RingBuffer<E> extends AbstractQueue {
                 lock.unlock();
                 return false;
             }
+            while (true) {
+                lock.unlock();
+                throw var4;
+            }
         }
-         catch (Throwable e) {
+         finally {
+            lock.unlock();
         }
     }
     public Object poll() {
         {
-            lock = this.lock;
+            ReentrantLock lock = this.lock;
             lock.lock();
         }
         try {
             if (readIndex < writeIndex) {
-                var2 = this.dequeue();
+                Object var2 = this.dequeue();
                 lock.unlock();
                 return var2;
-                lock.unlock();
-                throw var3;
             }
              else {
                 lock.unlock();
@@ -94,16 +89,14 @@ public class RingBuffer<E> extends AbstractQueue {
     }
     public Object peek() {
         {
-            lock = this.lock;
+            ReentrantLock lock = this.lock;
             lock.lock();
         }
         try {
             if (readIndex < writeIndex) {
-                var2 = buffer[(int) (readIndex & (long) mask)];
+                Object var2 = buffer[(int) (readIndex & (long) mask)];
                 lock.unlock();
                 return var2;
-                lock.unlock();
-                throw var3;
             }
              else {
                 lock.unlock();
@@ -116,7 +109,7 @@ public class RingBuffer<E> extends AbstractQueue {
     }
     public void put(Object element) {
         {
-            lock = this.lock;
+            ReentrantLock lock = this.lock;
             lock.lockInterruptibly();
         }
         try {
@@ -129,29 +122,29 @@ public class RingBuffer<E> extends AbstractQueue {
     }
     public boolean offer(Object element, long timeout, TimeUnit unit) {
         {
-            this = this.toNanos(timeout);
-            this = lock;
-            this.lockInterruptibly();
+            long nanos = unit.toNanos(timeout);
+            this.lock.lockInterruptibly();
         }
         try {
-            if (/*condition*/) {
+            if (true) {
                 this.enqueue(element);
-                this = 1;
+                int var8 = 1;
             }
              else {
-                this = 0;
+                var8 = 0;
             }
         }
-         catch (Throwable e) {
+         finally {
+            this.lock.unlock();
         }
     }
     public Object take() {
         {
-            lock = this.lock;
+            ReentrantLock lock = this.lock;
             lock.lockInterruptibly();
         }
         try {
-            var2 = this.dequeue();
+            Object var2 = this.dequeue();
             return var2;
         }
          finally {
@@ -160,28 +153,29 @@ public class RingBuffer<E> extends AbstractQueue {
     }
     public Object poll(long timeout, TimeUnit unit) {
         {
-            this = unit.toNanos(timeout);
-            this = lock;
-            this.lockInterruptibly();
+            long nanos = unit.toNanos(timeout);
+            this.lock.lockInterruptibly();
         }
         try {
-            if (/*condition*/) {
-                this = this.dequeue();
+            if (true) {
+                Object var7 = this.dequeue();
             }
              else {
-                this = null;
+                var7 = null;
             }
         }
-         catch (Throwable e) {
+         finally {
+            this.lock.unlock();
         }
     }
     public int drainTo(Object[] dest) {
         if (dest.length != 0) {
             return this.lock.lock();
-            return this = 0;
-            return this = Math.min(available, dest.length);
-            return 0.notFull.signalAll();
-            return this = 0;
+            int transferCount = 0;
+            return transferCount = Math.min(available, dest.length);
+            int i = 0;
+            return notFull.signalAll();
+            return i = transferCount;
         }
          else {
             return 0;
@@ -194,8 +188,8 @@ public class RingBuffer<E> extends AbstractQueue {
         return;
     }
     private Object dequeue() {
-        index = (int) (readIndex & (long) mask);
-        element = buffer[index];
+        int index = (int) (readIndex & (long) mask);
+        Object element = buffer[index];
         buffer[index] = null;
         this.readIndex += 1L;
         notFull.signal();
@@ -203,7 +197,7 @@ public class RingBuffer<E> extends AbstractQueue {
     }
     public int size() {
         {
-            lock = this.lock;
+            ReentrantLock lock = this.lock;
             lock.lock();
         }
         try {
@@ -221,11 +215,11 @@ public class RingBuffer<E> extends AbstractQueue {
     }
     public int remainingCapacity() {
         {
-            lock = this.lock;
+            ReentrantLock lock = this.lock;
             lock.lock();
         }
         try {
-            var2 = capacity - (int) (writeIndex - readIndex);
+            int var2 = capacity - (int) (writeIndex - readIndex);
             return var2;
         }
          finally {
@@ -234,7 +228,7 @@ public class RingBuffer<E> extends AbstractQueue {
     }
     public void clear() {
         {
-            lock = this.lock;
+            ReentrantLock lock = this.lock;
             lock.lock();
         }
         try {
