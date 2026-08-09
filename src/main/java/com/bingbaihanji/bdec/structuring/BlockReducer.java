@@ -113,6 +113,16 @@ public final class BlockReducer {
         return false;
     }
 
+    /** Check if an expression produces void (e.g., void method call). */
+    private static boolean isVoidExpr(Expression e) {
+        if (e instanceof InvocationExpr inv
+                && inv.returnType() != null
+                && inv.returnType().kind() == TypeKind.VOID) {
+            return true;
+        }
+        return false;
+    }
+
     /** Check if a statement block is empty or contains only empty blocks. */
     private static boolean isEmptyBlock(Statement s) {
         if (s instanceof BlockStatement bs) {
@@ -535,11 +545,9 @@ public final class BlockReducer {
         // absorbed into try-finally by wrapTryCatchBlocks).
         Set<BasicBlock> handlerBlocks = new HashSet<>();
         for (TryCatchInfo tci : tryCatchAnns.values()) {
-            // Add the initial handler block and all its non-exception
-            // successors (CFG may split handler due to self-referencing edges)
             BasicBlock hb = tci.handlerBlock();
             handlerBlocks.add(hb);
-            // Follow fallthrough chain
+            // Follow fallthrough chain to collect all handler fragments
             Set<BasicBlock> visited = new HashSet<>();
             Deque<BasicBlock> queue = new ArrayDeque<>();
             queue.add(hb);
@@ -648,19 +656,16 @@ public final class BlockReducer {
             }
             // loop: wrap group in LoopStatement (only if we have a valid body)
             else if (loopInfo != null) {
-                // Skip loops that only contain handler blocks (self-referencing
-                // exception edges in finally handlers create fake back-edges).
+                // Handler-only "loops" (from self-referencing exception edges):
+                // translate without wrapping so stripDuplicatedFinally can
+                // absorb them into the finally block later.
                 boolean isHandlerLoop = group.blocks().stream()
                         .allMatch(b -> handlerBlocks.contains(b));
-                if (!isHandlerLoop) {
-                    s = translateGroup(group, ir);
-                    if (s != null && !isEmptyBlock(s)) {
-                        Expression cond = simplifyCondition(extractCondition(group, ir));
-                        s = new LoopStatement(LoopStatement.LoopKind.WHILE,
-                                cond != null ? cond : new VarExpr("true"), s);
-                    }
-                } else {
-                    continue; // skip handler-only loops
+                s = translateGroup(group, ir);
+                if (s != null && !isEmptyBlock(s) && !isHandlerLoop) {
+                    Expression cond = simplifyCondition(extractCondition(group, ir));
+                    s = new LoopStatement(LoopStatement.LoopKind.WHILE,
+                            cond != null ? cond : new VarExpr("true"), s);
                 }
             }
             // switch
@@ -695,27 +700,25 @@ public final class BlockReducer {
             }
         }
         // Post-pass: convert orphan ExpressionStatement to ReturnStatement.
-        // When INVOKEDYNAMIC (or other non-void call) is in a different block
-        // from ARETURN, the INDY's result is emitted as an orphan ExpressionStatement.
-        // If the method returns non-void and the last non-empty statement is an
-        // ExpressionStatement, wrap it as a return.
+        // When a non-void expression is an orphan (not consumed), wrap as return.
+        // Skip void expressions (e.g., orphan lock.unlock() calls).
         if (!statements.isEmpty() && ir.method().returnType() != null
                 && ir.method().returnType().kind() != TypeKind.VOID) {
-            // Find the last non-empty statement
             for (int i = statements.size() - 1; i >= 0; i--) {
                 Statement s = statements.get(i);
                 if (s instanceof ExpressionStatement es
                         && es.expression() != null
-                        && !isIgnorableExpr(es.expression())) {
+                        && !isIgnorableExpr(es.expression())
+                        && !isVoidExpr(es.expression())) {
                     statements.set(i, new ReturnStatement(es.expression()));
                     break;
                 }
-                // Also handle: ExpressionStatement inside BlockStatement
                 if (s instanceof BlockStatement bs && !bs.statements().isEmpty()) {
                     Statement last = bs.statements().get(bs.statements().size() - 1);
                     if (last instanceof ExpressionStatement es
                             && es.expression() != null
-                            && !isIgnorableExpr(es.expression())) {
+                            && !isIgnorableExpr(es.expression())
+                            && !isVoidExpr(es.expression())) {
                         List<Statement> newStmts = new ArrayList<>(bs.statements());
                         newStmts.set(newStmts.size() - 1,
                                 new ReturnStatement(es.expression()));
@@ -723,7 +726,6 @@ public final class BlockReducer {
                         break;
                     }
                 }
-                // Stop at first meaningful statement
                 if (!(s instanceof BlockStatement bs && bs.statements().isEmpty())) {
                     break;
                 }
@@ -1425,6 +1427,21 @@ public final class BlockReducer {
             return new BlockStatement(List.of());
         }
 
+        // Post-pass: strip unreachable statements after RETURN/THROW/BREAK/CONTINUE.
+        // When CFG structuring fails, unconditional control transfer instructions
+        // are followed by dead code that causes compile errors.
+        for (int i = 0; i < stmts.size(); i++) {
+            Statement s = stmts.get(i);
+            if (s instanceof ReturnStatement || s instanceof ThrowStatement
+                    || s.kind() == com.bingbaihanji.bdec.ast.AstKind.BREAK
+                    || s.kind() == com.bingbaihanji.bdec.ast.AstKind.CONTINUE) {
+                if (i + 1 < stmts.size()) {
+                    stmts = new ArrayList<>(stmts.subList(0, i + 1));
+                    break;
+                }
+            }
+        }
+
         // Post-pass: suppress bare "return;" after this()/super() constructor
         // delegation. In bytecode, constructors always end with RETURN, but
         // Java source doesn't need "return;" after a this()/super() call.
@@ -1469,24 +1486,30 @@ public final class BlockReducer {
             }
             case THROW -> new ThrowStatement(translateExpr(insn));
             case STORE -> {
-                // Emit "Type name = value;" for the first assignment to a
-                // local variable slot, plain "name = value;" for reassignments.
-                // Parameters are already declared in the method signature.
+                // Emit "Type name = value;" for the first store to each
+                // logical variable. Use both slot+version: version 1 at any
+                // slot is always a first local definition (version 0 = param).
+                // ALSO use per-scope tracking so branch bodies each get their
+                // own declarations for temp variables at the same slot.
                 Value target = insn.operands().getFirst();
                 if (target instanceof Variable v && !v.isParameter()
-                        && v.slot() != 0) { // slot 0 in instance methods is 'this'
-                    // A store is a "first definition" if we haven't seen
-                    // this slot assigned before in the current scope.
-                    Integer slotKey = v.slot();
-                    boolean firstInScope = tryDeclareVar("@" + slotKey);
-                    if (firstInScope) {
+                        && v.slot() != 0) {
+                    String rawName = v.name();
+                    String declName = rawName.startsWith("var")
+                            ? rawName : rawName;
+                    // Version 1 = first local at this slot → always declare.
+                    // Version 2+ = reassignment → declare only if new scope.
+                    // Always call tryDeclareVar to track the name in scope.
+                    boolean isFirstDef = v.version() == 1
+                            || tryDeclareVar(declName);
+                    if (v.version() == 1) {
+                        tryDeclareVar(declName); // track in scope
+                    }
+                    if (isFirstDef) {
                         Value source = insn.operands().size() > 1
                                 ? insn.operands().get(1) : null;
                         Expression rhs = source != null
                                 ? valueToExpr(source) : null;
-                        String rawName = v.name();
-                        String declName = rawName.startsWith("var")
-                                ? rawName : rawName;
                         yield new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
                                 v.type(), declName, rhs);
                     }
@@ -2376,35 +2399,56 @@ public final class BlockReducer {
     }
 
     /** Translate handler instructions (minus the final THROW) into a Statement body.
-     *  Follows the fallthrough chain from the initial handler block to collect
-     *  all handler fragments (CFG may split handler due to self-referencing edges). */
+     *  Directly translates the collected handler instructions without depending
+     *  on BlockGroup/block grouping, which can miss split handler fragments. */
     private Statement translateHandlerWithoutThrow(TryCatchInfo info, LinearIr ir,
                                                     List<IrInstruction> handlerInsns) {
-        // Build a synthetic BlockGroup covering ALL handler blocks
-        // (follow the fallthrough chain from the initial handler block).
-        BlockGroup finallyGroup = buildHandlerBlockGroup(info, ir);
-        Statement finallyBody = translateGroup(finallyGroup, ir);
-
-        // Filter out the THROW from the emitted statements.
-        if (finallyBody instanceof BlockStatement bs) {
-            List<Statement> stmts = new ArrayList<>();
-            for (Statement s : bs.statements()) {
-                if (s instanceof ThrowStatement) {
-                    continue;
-                }
-                if (s instanceof ExpressionStatement es
-                        && es.expression() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
-                        && "/* throw */".equals(v.name())) {
-                    continue;
-                }
-                stmts.add(s);
-            }
-            return new BlockStatement(stmts);
+        // Skip the final THROW instruction for finally body
+        List<IrInstruction> bodyInsns = handlerInsns;
+        if (!bodyInsns.isEmpty() && bodyInsns.getLast().opcode() == IrOpcode.THROW) {
+            bodyInsns = bodyInsns.subList(0, bodyInsns.size() - 1);
         }
-        if (finallyBody instanceof ThrowStatement) {
+        if (bodyInsns.isEmpty()) {
             return new BlockStatement(List.of());
         }
-        return finallyBody;
+
+        // Build consumed set for these instructions
+        Set<Integer> consumed = new HashSet<>();
+        Map<Variable, Integer> loadVarToId = new HashMap<>();
+        for (IrInstruction insn : bodyInsns) {
+            if (insn.opcode() == IrOpcode.LOAD && !insn.operands().isEmpty()
+                    && insn.operands().getFirst() instanceof Variable v) {
+                loadVarToId.put(v, insn.id());
+            }
+        }
+        for (IrInstruction insn : bodyInsns) {
+            for (Value op : insn.operands()) {
+                if (op instanceof InstructionRef ref) {
+                    consumed.add(ref.instruction().id());
+                } else if (op instanceof Variable v && loadVarToId.containsKey(v)) {
+                    consumed.add(loadVarToId.get(v));
+                }
+            }
+        }
+
+        // Translate each instruction that is a statement root or unconsumed
+        List<Statement> stmts = new ArrayList<>();
+        for (IrInstruction insn : bodyInsns) {
+            if (insn.opcode() == IrOpcode.CONDITION) continue;
+            if (currentStoresToSkip.contains(insn.id())) continue;
+            if (isStatementRoot(insn)) {
+                Statement s = translateStmt(insn);
+                if (s != null) stmts.add(s);
+            } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
+                Expression e = translateExpr(insn);
+                if (e != null && !isIgnorableExpr(e)) {
+                    stmts.add(new ExpressionStatement(e));
+                }
+            }
+        }
+        if (stmts.isEmpty()) return new BlockStatement(List.of());
+        if (stmts.size() == 1) return stmts.getFirst();
+        return new BlockStatement(stmts);
     }
 
     private TryStatement buildTryCatch(TryCatchInfo info, Statement tryBody, LinearIr ir) {

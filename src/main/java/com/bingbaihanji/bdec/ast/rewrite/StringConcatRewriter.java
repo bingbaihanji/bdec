@@ -139,13 +139,32 @@ public class StringConcatRewriter implements RewriteRule {
         return buildConcatExpr(parts);
     }
 
-    /** Build a chain of + from a list of expressions. */
+    /** Check if an expression already produces a String-compatible value. */
+    private boolean looksLikeString(Expression e) {
+        if (e instanceof LitExpr lit && lit.value() instanceof String) return true;
+        if (e instanceof InvocationExpr inv && "toString".equals(inv.methodName())) return true;
+        return false;
+    }
+
+    /** Build a chain of + from a list of expressions.
+     *  Ensures the first operand is String-typed so the whole chain
+     *  produces a String (Java's string concatenation promotion). */
     private Expression buildConcatExpr(List<Expression> parts) {
         if (parts.isEmpty()) {
             return new LitExpr("", JavaType.classType("java/lang/String"));
         }
         if (parts.size() == 1) {
-            return parts.get(0);
+            // Single part: ensure it's String-compatible
+            Expression single = parts.get(0);
+            if (looksLikeString(single)) return single;
+            return new BinExpr(BinaryOperator.ADD,
+                    new LitExpr("", JavaType.classType("java/lang/String")), single);
+        }
+        // Ensure first part is String-typed so Java's + produces String
+        Expression first = parts.get(0);
+        if (!looksLikeString(first)) {
+            parts = new ArrayList<>(parts);
+            parts.add(0, new LitExpr("", JavaType.classType("java/lang/String")));
         }
         Expression result = parts.get(0);
         for (int i = 1; i < parts.size(); i++) {
