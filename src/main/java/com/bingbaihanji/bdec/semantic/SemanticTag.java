@@ -40,4 +40,8 @@ public enum SemanticTag {
     /** The declaring class for a static method call. Allows emitting
      *  {@code Arrays.fill(...)} instead of just {@code fill(...)}. */
     DECLARING_CLASS,
+
+    /** An INVOKE IR instruction that originated from an invokedynamic bytecode.
+     *  Downstream passes use this to generate lambda expressions or method refs. */
+    INDY,
 }

@@ -167,4 +167,12 @@ public class ControlFlowTest {
         String out = harness.decompileResource("decompile-samples/m2-controlflow/NewInstanceSample.java");
         DecompileTestHarness.assertContains(out, "class NewInstanceSample", "new RuntimeException", "error", "return");
     }
+
+    @Test
+    public void testLambda() throws Exception {
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/LambdaSample.java");
+        DecompileTestHarness.assertContains(out, "class LambdaSample", "->");
+        // Lambda synthetic method should be filtered when decodeLambdas=true
+        DecompileTestHarness.assertNotContains(out, "lambda$test");
+    }
 }

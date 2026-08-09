@@ -920,11 +920,13 @@ public final class IrBuilder {
         int argCount = 0;
         JavaType returnType = JavaType.classType("java/lang/Object");
         String methodName = "invokeDynamic";
+        int bootstrapIdx = -1;
 
         if (cpIdx > 0 && cpIdx < cp.length) {
             try {
                 ConstantPoolEntry entry = cp[cpIdx];
                 if (entry instanceof ConstantPoolEntry.CpInvokeDynamic indy) {
+                    bootstrapIdx = indy.bootstrapMethodAttrIndex();
                     int natIdx = indy.nameAndTypeIndex();
                     if (natIdx > 0 && natIdx < cp.length
                             && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
@@ -948,6 +950,11 @@ public final class IrBuilder {
 
         IrInstruction inv = IrInstruction.invoke(nextId(), null, args, returnType,
                 offset, blockId, methodName);
+        // Tag as invokedynamic — BlockReducer uses this to generate LambdaExpr.
+        inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
+                com.bingbaihanji.bdec.semantic.SemanticTag.INDY,
+                "bootstrapIdx", bootstrapIdx,
+                "indyName", methodName));
         instructions.add(inv);
         if (returnType.kind() != TypeKind.VOID) {
             inv.setResultValue(new InstructionRef(inv, returnType));
