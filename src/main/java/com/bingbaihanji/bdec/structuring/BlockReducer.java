@@ -573,6 +573,42 @@ public final class BlockReducer {
                 statements.add(s);
             }
         }
+        // Post-pass: convert orphan ExpressionStatement to ReturnStatement.
+        // When INVOKEDYNAMIC (or other non-void call) is in a different block
+        // from ARETURN, the INDY's result is emitted as an orphan ExpressionStatement.
+        // If the method returns non-void and the last non-empty statement is an
+        // ExpressionStatement, wrap it as a return.
+        if (!statements.isEmpty() && ir.method().returnType() != null
+                && ir.method().returnType().kind() != TypeKind.VOID) {
+            // Find the last non-empty statement
+            for (int i = statements.size() - 1; i >= 0; i--) {
+                Statement s = statements.get(i);
+                if (s instanceof ExpressionStatement es
+                        && es.expression() != null
+                        && !isIgnorableExpr(es.expression())) {
+                    statements.set(i, new ReturnStatement(es.expression()));
+                    break;
+                }
+                // Also handle: ExpressionStatement inside BlockStatement
+                if (s instanceof BlockStatement bs && !bs.statements().isEmpty()) {
+                    Statement last = bs.statements().get(bs.statements().size() - 1);
+                    if (last instanceof ExpressionStatement es
+                            && es.expression() != null
+                            && !isIgnorableExpr(es.expression())) {
+                        List<Statement> newStmts = new ArrayList<>(bs.statements());
+                        newStmts.set(newStmts.size() - 1,
+                                new ReturnStatement(es.expression()));
+                        statements.set(i, new BlockStatement(newStmts));
+                        break;
+                    }
+                }
+                // Stop at first meaningful statement
+                if (!(s instanceof BlockStatement bs && bs.statements().isEmpty())) {
+                    break;
+                }
+            }
+        }
+
         // Post-process: wrap statement groups in try-catch based on annotations.
         // Avoid double-wrapping: if there's only one statement and it's already
         // a BlockStatement, use it directly as the root instead of nesting.

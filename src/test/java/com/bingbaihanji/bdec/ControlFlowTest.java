@@ -191,8 +191,7 @@ public class ControlFlowTest {
     @Test
     public void testLambda() throws Exception {
         String out = harness.decompileResource("decompile-samples/m2-controlflow/LambdaSample.java");
-        DecompileTestHarness.assertContains(out, "class LambdaSample", "->");
-        // TODO: add "return" check when INVOKEDYNAMIC RETURN path is fixed
+        DecompileTestHarness.assertContains(out, "class LambdaSample", "->", "return");
         // TODO: re-enable when LambdaRewriter filtering is active end-to-end
         // DecompileTestHarness.assertNotContains(out, "lambda$test");
     }
@@ -203,8 +202,7 @@ public class ControlFlowTest {
         // TODO: tighten assertions when structurer handles invokedynamic returns properly
         //       (return keyword is currently missing from method-ref-only method bodies).
         String out = harness.decompileResource("decompile-samples/m2-controlflow/MethodRefSample.java");
-        DecompileTestHarness.assertContains(out, "class MethodRefSample");
-        // TODO: add "return" check when INVOKEDYNAMIC RETURN path is fixed
+        DecompileTestHarness.assertContains(out, "class MethodRefSample", "return");
         // String::length method reference detected from bootstrap method info
         DecompileTestHarness.assertContains(out, "String::length");
         // Should NOT use lambda arrow notation for method references
