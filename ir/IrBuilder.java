@@ -746,8 +746,9 @@ public final class IrBuilder {
                                  int offset, int blockId) {
         Value obj = (op == Opcode.GETFIELD && !stack.isEmpty()) ? stack.pop() : null;
         String fieldName = resolveFieldName(insn, cp);
+        JavaType fieldType = resolveFieldType(insn, cp);
         IrInstruction fi = IrInstruction.fieldLoad(nextId(), obj,
-                JavaType.classType("java/lang/Object"), offset, blockId, fieldName);
+                fieldType, offset, blockId, fieldName);
         instructions.add(fi);
         fi.setResultValue(new InstructionRef(fi, fi.resultType()));
         stack.push(new InstructionRef(fi, fi.resultType()));
@@ -763,6 +764,32 @@ public final class IrBuilder {
         Value obj = (op == Opcode.PUTFIELD && !stack.isEmpty()) ? stack.pop() : null;
         String fieldName = resolveFieldName(insn, cp);
         instructions.add(IrInstruction.fieldStore(nextId(), obj, val, offset, blockId, fieldName));
+    }
+
+    /** Resolve a field type from the constant pool via a field-ref instruction. */
+    private JavaType resolveFieldType(Instruction insn, ConstantPoolEntry[] cp) {
+        if (insn.rawOperands().isEmpty()) {
+            return JavaType.classType("java/lang/Object");
+        }
+        int cpIdx = insn.rawOperands().get(0);
+        if (cpIdx <= 0 || cpIdx >= cp.length) {
+            return JavaType.classType("java/lang/Object");
+        }
+        try {
+            ConstantPoolEntry entry = cp[cpIdx];
+            int natIdx = switch (entry) {
+                case ConstantPoolEntry.CpFieldRef fr -> fr.nameAndTypeIndex();
+                default -> -1;
+            };
+            if (natIdx > 0 && natIdx < cp.length
+                    && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
+                String desc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
+                return com.bingbaihanji.bdec.type.TypeResolver.parseFieldType(desc);
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        return JavaType.classType("java/lang/Object");
     }
 
     /** Resolve a field name from the constant pool via a field-ref instruction. */
@@ -1264,7 +1291,10 @@ public final class IrBuilder {
         if (insn.varIndex() >= 0 && insn.opcode() == op.code()) {
             return insn.varIndex();
         }
-        if (op.implicitVarIndex() >= 0) {
+        // Only use implicitVarIndex for opcodes WITHOUT explicit operands
+        // (e.g., ILOAD_0 → 0, ISTORE_3 → 3). For explicit-index opcodes
+        // (ILOAD with operand byte), implicitVarIndex is 0 which is wrong.
+        if (op.implicitVarIndex() >= 0 && op.operandBytes() == 0) {
             return op.implicitVarIndex();
         }
         if (!insn.rawOperands().isEmpty()) {

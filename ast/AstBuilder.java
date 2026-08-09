@@ -34,6 +34,38 @@ public class AstBuilder {
         return raw;
     }
 
+    /** Collect imports from types referenced in method bodies (static calls,
+     *  new expressions, etc.) by scanning IR instructions. */
+    private void collectBodyImports(StructuredMethod sm, Set<String> imports, String thisClass) {
+        for (var insn : sm.ir().instructions()) {
+            // Static calls: DECLARING_CLASS annotation
+            for (var ann : insn.annotations()) {
+                if (ann.is(com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS)) {
+                    String declClass = ann.getString(
+                            com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS);
+                    if (declClass != null) {
+                        collectImport(com.bingbaihanji.bdec.type.JavaType.classType(declClass),
+                                imports, thisClass);
+                    }
+                }
+            }
+            // NEW instructions: type from resultType
+            if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.NEW) {
+                collectImport(insn.resultType(), imports, thisClass);
+            }
+            // NEW_ARRAY: element type
+            if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.NEW_ARRAY) {
+                collectImport(insn.resultType(), imports, thisClass);
+            }
+            // INSTANCE_OF: target type from nameHint
+            if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.INSTANCE_OF
+                    && insn.nameHint() != null) {
+                collectImport(com.bingbaihanji.bdec.type.JavaType.classType(insn.nameHint()),
+                        imports, thisClass);
+            }
+        }
+    }
+
     /** Extract simple class name from internal name (no inner-class info). */
     private static String simpleName(String internal) {
         int idx = internal.lastIndexOf('/');
@@ -96,6 +128,10 @@ public class AstBuilder {
             for (JavaType pt : method.parameterTypes()) {
                 collectImport(pt, imports, simpleName);
             }
+
+            // Collect imports from types referenced in the method body.
+            // Scan IR instructions for DECLARING_CLASS annotations on static calls.
+            collectBodyImports(sm, imports, simpleName);
         }
 
         // Determine class kind

@@ -80,6 +80,11 @@ public final class BlockReducer {
     // translation to check for field/local name conflicts).
     private LinearIr currentIr = null;
 
+    // Stack of declared variable name sets — one per scope.
+    // We push/pop when entering/leaving branch bodies so that each
+    // branch gets its own variable declarations for temp variables.
+    private final Deque<Set<String>> declaredVarNameStack = new ArrayDeque<>();
+
     public BlockReducer() {this(true);}
 
     public BlockReducer(boolean isInstanceMethod) {
@@ -517,6 +522,8 @@ public final class BlockReducer {
         currentMethodReturnsBoolean = ir.method().returnType() != null
                 && ir.method().returnType().kind() == TypeKind.BOOLEAN;
         this.currentIr = ir;
+        this.declaredVarNameStack.clear();
+        this.declaredVarNameStack.push(new HashSet<>()); // top-level scope
 
         // Compute post-dominator tree once for fallback if-header detection.
         // This gives correct merge points when BranchAnalyzer annotations are missing.
@@ -559,14 +566,6 @@ public final class BlockReducer {
             // Uses post-dominator tree for correct merge point computation.
             if (ifInfo == null) {
                 ifInfo = detectIfHeader(group, graph, ir, postDom);
-            }
-
-            // Handler-only groups: skip before any structure detection.
-            // Exception handlers are absorbed into try-finally by wrapTryCatchBlocks.
-            // Without early skip, they may be misidentified as loops (due to
-            // self-referencing exception edges in finally handlers).
-            if (group.blocks().size() == 1 && handlerBlocks.contains(group.first())) {
-                continue; // skip handler block
             }
 
             Statement s;
@@ -618,7 +617,7 @@ public final class BlockReducer {
                     }
                 }
 
-                s = new IfStatement(cond != null ? cond : new VarExpr("/*condition*/"),
+                s = new IfStatement(cond != null ? cond : new com.bingbaihanji.bdec.ast.expr.LitExpr(true, JavaType.BOOLEAN),
                         thenBody != null ? thenBody : new BlockStatement(List.of()),
                         elseBody);
 
@@ -922,7 +921,7 @@ public final class BlockReducer {
             }
 
             Statement ifStmt = new IfStatement(
-                    cond != null ? cond : new VarExpr("/*condition*/"),
+                    cond != null ? cond : new com.bingbaihanji.bdec.ast.expr.LitExpr(true, JavaType.BOOLEAN),
                     thenBody != null ? thenBody : new BlockStatement(List.of()),
                     elseBody);
 
@@ -961,6 +960,8 @@ public final class BlockReducer {
             branchBlockIds.add(b.id());
         }
         currentBranchBlocks = branchBlockIds;
+        // Push a new variable declaration scope for this branch body
+        declaredVarNameStack.push(new HashSet<>());
         try {
             List<Statement> bodyStmts = new ArrayList<>();
             for (BlockGroup g : allGroups) {
@@ -1005,7 +1006,18 @@ public final class BlockReducer {
             return new BlockStatement(flat);
         } finally {
             currentBranchBlocks = prevBranchBlocks;
+            declaredVarNameStack.pop(); // pop branch scope
         }
+    }
+
+    /** Check if a variable name has been declared in the current scope
+     *  (or any parent scope), and mark it as declared. */
+    private boolean tryDeclareVar(String name) {
+        Set<String> currentScope = declaredVarNameStack.peek();
+        if (currentScope == null) {
+            return false;
+        }
+        return currentScope.add(name);
     }
 
     /** Sort blocks by dominator-tree preorder. */
@@ -1430,7 +1442,31 @@ public final class BlockReducer {
                 }
             }
             case THROW -> new ThrowStatement(translateExpr(insn));
-            case STORE, FIELD_STORE -> {
+            case STORE -> {
+                // Emit "Type name = value;" for the first assignment to a local,
+                // plain "name = value;" for subsequent reassignments.
+                // Skip parameter slots (isParameter=true) — they're already
+                // declared in the method signature.
+                Value target = insn.operands().getFirst();
+                if (target instanceof Variable v && !v.isParameter()
+                        && v.slot() != 0) { // slot 0 in instance methods is 'this'
+                    String rawName = v.name(); // never null — falls back to "varN"
+                    String declName = rawName.startsWith("var")
+                            ? rawName : rawName;
+                    boolean firstDef = tryDeclareVar(declName);
+                    if (firstDef) {
+                        Value source = insn.operands().size() > 1
+                                ? insn.operands().get(1) : null;
+                        Expression rhs = source != null
+                                ? valueToExpr(source) : null;
+                        yield new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
+                                v.type(), declName, rhs);
+                    }
+                }
+                Expression e = translateExpr(insn);
+                yield e != null ? new ExpressionStatement(e) : null;
+            }
+            case FIELD_STORE -> {
                 Expression e = translateExpr(insn);
                 yield e != null ? new ExpressionStatement(e) : null;
             }
@@ -2250,6 +2286,36 @@ public final class BlockReducer {
      *  Detects finally blocks: when the handler is catch-all (null or Throwable)
      *  and ends with THROW (the re-throw pattern), extract the handler body
      *  minus the throw as a finally block. */
+    /** Build a BlockGroup covering all handler blocks by following the
+     *  fallthrough chain from the initial handler block. */
+    private BlockGroup buildHandlerBlockGroup(TryCatchInfo info, LinearIr ir) {
+        BlockGroup group = new BlockGroup(info.handlerBlock());
+        ControlFlowGraph cfg = ir.controlFlowGraph();
+        BasicBlock current = info.handlerBlock();
+        Set<BasicBlock> visited = new HashSet<>();
+        visited.add(current);
+        while (true) {
+            // Follow the single non-exception successor
+            BasicBlock next = null;
+            for (var edge : cfg.outgoingOf(current)) {
+                if (edge.kind() != EdgeKind.EXCEPTION) {
+                    if (next == null) {
+                        next = edge.target();
+                    } else {
+                        next = null; // multiple successors → stop
+                        break;
+                    }
+                }
+            }
+            if (next == null || next == cfg.exitBlock() || !visited.add(next)) {
+                break;
+            }
+            group.add(next);
+            current = next;
+        }
+        return group;
+    }
+
     /** Collect all IR instructions from the handler, following fallthrough chain
      *  when the CFG splits the handler block due to self-referencing exception edges. */
     private List<IrInstruction> collectHandlerInstructions(TryCatchInfo info, LinearIr ir) {
@@ -2281,16 +2347,14 @@ public final class BlockReducer {
         return result;
     }
 
-    /** Translate handler instructions (minus the final THROW) into a Statement body. */
+    /** Translate handler instructions (minus the final THROW) into a Statement body.
+     *  Follows the fallthrough chain from the initial handler block to collect
+     *  all handler fragments (CFG may split handler due to self-referencing edges). */
     private Statement translateHandlerWithoutThrow(TryCatchInfo info, LinearIr ir,
                                                     List<IrInstruction> handlerInsns) {
-        // Create a synthetic BlockGroup for translation.
-        // Use the handler block as the base, but the translation will
-        // emit all side-effecting instructions from handlerInsns.
-        BlockGroup finallyGroup = new BlockGroup(info.handlerBlock());
-        // Add any successor handler blocks' instructions to the group
-        // by creating a multi-block group. We can't easily add blocks to
-        // BlockGroup, so instead we translate directly.
+        // Build a synthetic BlockGroup covering ALL handler blocks
+        // (follow the fallthrough chain from the initial handler block).
+        BlockGroup finallyGroup = buildHandlerBlockGroup(info, ir);
         Statement finallyBody = translateGroup(finallyGroup, ir);
 
         // Filter out the THROW from the emitted statements.
