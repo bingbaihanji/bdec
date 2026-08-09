@@ -317,20 +317,31 @@ public final class BlockReducer {
                     .anyMatch(i -> i.opcode() == IrOpcode.CONDITION);
             if (!hasCondition) continue;
 
-            // Check if block has exactly 2 successors
+            // Find TRUE_BRANCH and FALSE_BRANCH edges (relaxed: allow any count)
+            BasicBlock trueTarget = null, falseTarget = null;
+            for (var edge : graph.outgoingOf(b)) {
+                if (edge.kind() == EdgeKind.TRUE_BRANCH) trueTarget = edge.target();
+                else if (edge.kind() == EdgeKind.FALSE_BRANCH) falseTarget = edge.target();
+            }
+            // Need at least one conditional edge
+            if (trueTarget == null && falseTarget == null) continue;
+            // Fill missing: use remaining successors
             List<BasicBlock> succs = graph.successorsOf(b);
-            if (succs.size() != 2) continue;
+            if (trueTarget == null && succs.size() >= 1) {
+                for (BasicBlock s : succs) {
+                    if (s != falseTarget) { trueTarget = s; break; }
+                }
+            }
+            if (falseTarget == null && succs.size() >= 1) {
+                for (BasicBlock s : succs) {
+                    if (s != trueTarget) { falseTarget = s; break; }
+                }
+            }
+            if (trueTarget == null || falseTarget == null) continue;
 
-            // Check if the outgoing edges are TRUE_BRANCH/FALSE_BRANCH
-            boolean hasCondEdges = graph.outgoingOf(b).stream()
-                    .anyMatch(e -> e.kind() == EdgeKind.TRUE_BRANCH
-                            || e.kind() == EdgeKind.FALSE_BRANCH);
-            if (!hasCondEdges) continue;
-
-            // Build IfInfo: first succ = then, second = else
             BasicBlock follow = graph.exitBlock();
-            Set<BasicBlock> thenBlocks = collectReachableBlocks(succs.get(0), follow, graph);
-            Set<BasicBlock> elseBlocks = collectReachableBlocks(succs.get(1), follow, graph);
+            Set<BasicBlock> thenBlocks = collectReachableBlocks(trueTarget, follow, graph);
+            Set<BasicBlock> elseBlocks = collectReachableBlocks(falseTarget, follow, graph);
             return new IfInfo(b, follow, thenBlocks, elseBlocks);
         }
         return null;
@@ -578,10 +589,19 @@ public final class BlockReducer {
         // Only emit root instructions as statements
         List<Statement> stmts = new ArrayList<>();
         for (IrInstruction insn : allInsns) {
-            // Skip conditions entirely — they are extracted by IfStatement/LoopStatement
-            // wrappers via extractCondition() in reduce(). Never emit them as standalone
-            // ExpressionStatements (that would put the condition inside the if-body).
+            // Skip conditions — they are extracted by IfStatement/LoopStatement wrappers
+            // via extractCondition() in reduce(). If the condition block has no matching
+            // annotation, emit a comment placeholder so control flow isn't silently lost.
             if (insn.opcode() == IrOpcode.CONDITION) {
+                if (insn.operands().size() >= 2) {
+                    Expression left = valueToExpr(insn.operands().get(0));
+                    Expression right = valueToExpr(insn.operands().get(1));
+                    BinaryOperator cmp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
+                    stmts.add(new ExpressionStatement(
+                            new com.bingbaihanji.bdec.ast.expr.VarExpr(
+                                    "/* if (" + left + " " + (cmp != null ? cmp : "?")
+                                    + " " + right + ") */")));
+                }
                 continue;
             }
 
