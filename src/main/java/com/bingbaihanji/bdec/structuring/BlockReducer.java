@@ -1,11 +1,13 @@
 package com.bingbaihanji.bdec.structuring;
 
+import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.AssignExpr;
 import com.bingbaihanji.bdec.ast.expr.BinExpr;
 import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
 import com.bingbaihanji.bdec.ast.expr.CastExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
 import com.bingbaihanji.bdec.ast.expr.NewExpr;
@@ -141,6 +143,181 @@ public final class BlockReducer {
         return null;
     }
 
+    /** Check if a statement matches any in a list by comparing expression structure. */
+    private static boolean matchesAny(Statement s, List<Statement> candidates) {
+        if (s instanceof ExpressionStatement es) {
+            for (Statement c : candidates) {
+                if (c instanceof ExpressionStatement ce
+                        && expressionsEquivalent(es.expression(), ce.expression())) {
+                    return true;
+                }
+            }
+        }
+        if (s instanceof ReturnStatement rs && rs.value() != null) {
+            for (Statement c : candidates) {
+                if (c instanceof ReturnStatement rc && rc.value() != null
+                        && expressionsEquivalent(rs.value(), rc.value())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Structural comparison of two Expression trees. */
+    private static boolean expressionsEquivalent(Expression a, Expression b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        if (a.getClass() != b.getClass()) {
+            return false;
+        }
+
+        if (a instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr ia
+                && b instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr ib) {
+            if (!ia.methodName().equals(ib.methodName())) {
+                return false;
+            }
+            if (ia.arguments().size() != ib.arguments().size()) {
+                return false;
+            }
+            for (int i = 0; i < ia.arguments().size(); i++) {
+                if (!expressionsEquivalent(ia.arguments().get(i), ib.arguments().get(i))) {
+                    return false;
+                }
+            }
+            return expressionsEquivalent(ia.target(), ib.target());
+        }
+        if (a instanceof com.bingbaihanji.bdec.ast.expr.LitExpr la
+                && b instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lb) {
+            Object va = la.value(), vb = lb.value();
+            return va == null ? vb == null : va.equals(vb);
+        }
+        if (a instanceof com.bingbaihanji.bdec.ast.expr.VarExpr va
+                && b instanceof com.bingbaihanji.bdec.ast.expr.VarExpr vb) {
+            return va.name().equals(vb.name());
+        }
+        if (a instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
+                && b instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fb) {
+            return fa.fieldName().equals(fb.fieldName())
+                    && expressionsEquivalent(fa.target(), fb.target());
+        }
+        return false;
+    }
+
+    /** Recursively collect all statements, flattening nested BlockStatements. */
+    private static List<Statement> collectStatements(Statement s) {
+        List<Statement> result = new ArrayList<>();
+        if (s instanceof BlockStatement bs) {
+            for (Statement child : bs.statements()) {
+                result.addAll(collectStatements(child));
+            }
+        } else {
+            result.add(s);
+        }
+        return result;
+    }
+
+    /** Check if a value is simple enough to inline (constant or basic expression). */
+    private static boolean isSimpleValue(Value v) {
+        if (v instanceof ConstantValue) {
+            return true;
+        }
+        if (v instanceof InstructionRef ref) {
+            IrOpcode op = ref.instruction().opcode();
+            return op == IrOpcode.CONST || op == IrOpcode.LOAD || op == IrOpcode.CAST
+                    || op == IrOpcode.FIELD_LOAD || op == IrOpcode.ARRAY_LENGTH
+                    || op == IrOpcode.INSTANCE_OF;
+        }
+        return false;
+    }
+
+    /** Check if a statement tree contains a ReturnStatement. */
+    private static boolean hasReturnStmt(Statement s) {
+        if (s instanceof ReturnStatement) {
+            return true;
+        }
+        if (s instanceof BlockStatement bs) {
+            return bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
+        }
+        return false;
+    }
+
+    /** Strip orphan ExpressionStatements from a branch body that already
+     *  has a ReturnStatement (they're noise from block ordering at merge points). */
+    private static Statement stripOrphanExprs(Statement s) {
+        if (s instanceof BlockStatement bs) {
+            boolean hasAnyReturn = bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
+            if (!hasAnyReturn) {
+                return s;
+            }
+            List<Statement> filtered = new ArrayList<>();
+            for (Statement child : bs.statements()) {
+                if (child instanceof ExpressionStatement) {
+                    continue; // strip orphan CONST
+                }
+                if (child instanceof BlockStatement) {
+                    Statement stripped = stripOrphanExprs(child);
+                    if (!isEmptyBlock(stripped)) {
+                        filtered.add(stripped);
+                    }
+                } else {
+                    filtered.add(child);
+                }
+            }
+            if (filtered.isEmpty()) {
+                return new BlockStatement(List.of());
+            }
+            if (filtered.size() == 1) {
+                return filtered.getFirst();
+            }
+            return new BlockStatement(filtered);
+        }
+        return s;
+    }
+
+    /** Wrap a branch body's ExpressionStatements as ReturnStatements
+     *  (handles orphan CONSTs in branches without their own RETURN). */
+    private static Statement wrapAsReturn(Statement s, boolean isBoolRet) {
+        if (s instanceof BlockStatement bs) {
+            if (hasReturnStmt(s)) {
+                return s; // already has RETURN
+            }
+            List<Statement> result = new ArrayList<>();
+            for (Statement child : bs.statements()) {
+                if (child instanceof ExpressionStatement es) {
+                    result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
+                } else if (child instanceof BlockStatement inner) {
+                    result.add(wrapAsReturn(inner, isBoolRet));
+                } else {
+                    result.add(child);
+                }
+            }
+            if (result.isEmpty()) {
+                return new BlockStatement(List.of());
+            }
+            if (result.size() == 1) {
+                return result.getFirst();
+            }
+            return new BlockStatement(result);
+        }
+        if (s instanceof ExpressionStatement es) {
+            return new ReturnStatement(boolLiteral(es.expression(), isBoolRet));
+        }
+        return s;
+    }
+
+    /** Convert integer literal to boolean for boolean-return methods. */
+    private static Expression boolLiteral(Expression e, boolean isBoolRet) {
+        if (isBoolRet && e instanceof LitExpr lit && lit.value() instanceof Integer i) {
+            return new LitExpr(i != 0, JavaType.BOOLEAN);
+        }
+        return e;
+    }
+
     /**
      * Post-processing: wrap statement groups in try-catch based on CFG exception ranges.
      * Runs AFTER if/else/loop structuring so nested control structures are preserved.
@@ -208,10 +385,16 @@ public final class BlockReducer {
                     boolean hasHandler = false;
                     boolean hasTry = false;
                     for (BasicBlock b : g.blocks()) {
-                        if (b == tci.handlerBlock()) hasHandler = true;
-                        if (tci.tryBlocks().contains(b)) hasTry = true;
+                        if (b == tci.handlerBlock()) {
+                            hasHandler = true;
+                        }
+                        if (tci.tryBlocks().contains(b)) {
+                            hasTry = true;
+                        }
                     }
-                    if (hasHandler || hasTry) break; // stop at handler or next try range
+                    if (hasHandler || hasTry) {
+                        break; // stop at handler or next try range
+                    }
                     normalExitEnd = i; // include this group
                 }
             }
@@ -411,6 +594,8 @@ public final class BlockReducer {
         return null;
     }
 
+    // ── Group → Statement translation ──────────────────────────────
+
     private LoopInfo findLoopAnnotation(BlockGroup group, Map<BasicBlock, LoopInfo> loopAnns) {
         for (BasicBlock b : group.blocks()) {
             if (loopAnns.containsKey(b)) {
@@ -437,6 +622,8 @@ public final class BlockReducer {
         }
         return null;
     }
+
+    // ── IR → Statement ─────────────────────────────────────────────
 
     /**
      * Detect if-header directly from CFG structure, bypassing BranchAnalyzer.
@@ -524,6 +711,8 @@ public final class BlockReducer {
         return null;
     }
 
+    // ── IR → Expression ────────────────────────────────────────────
+
     /** Collect all blocks reachable from start up to (but not including) stop. */
     private Set<BasicBlock> collectReachableBlocks(BasicBlock start, BasicBlock stop,
                                                    ControlFlowGraph graph) {
@@ -559,33 +748,50 @@ public final class BlockReducer {
         // Set branch context for PHI resolution
         Set<Integer> prevBranchBlocks = currentBranchBlocks;
         Set<Integer> branchBlockIds = new HashSet<>();
-        for (BasicBlock b : branchBlocks) branchBlockIds.add(b.id());
+        for (BasicBlock b : branchBlocks) {
+            branchBlockIds.add(b.id());
+        }
         currentBranchBlocks = branchBlockIds;
         try {
             List<Statement> bodyStmts = new ArrayList<>();
             for (BlockGroup g : allGroups) {
-                if (consumed.contains(g)) continue;
+                if (consumed.contains(g)) {
+                    continue;
+                }
                 boolean groupInBranch = branchBlocks.contains(g.first());
                 if (!groupInBranch) {
                     for (BasicBlock gb : g.blocks()) {
-                        if (branchBlocks.contains(gb)) { groupInBranch = true; break; }
+                        if (branchBlocks.contains(gb)) {
+                            groupInBranch = true;
+                            break;
+                        }
                     }
                 }
                 if (groupInBranch) {
                     consumed.add(g);
                     Statement stmt = translateGroup(g, ir);
-                    if (stmt != null) bodyStmts.add(stmt);
+                    if (stmt != null) {
+                        bodyStmts.add(stmt);
+                    }
                 }
             }
-            if (bodyStmts.isEmpty()) return new BlockStatement(List.of());
-            if (bodyStmts.size() == 1 && !(bodyStmts.getFirst() instanceof BlockStatement))
+            if (bodyStmts.isEmpty()) {
+                return new BlockStatement(List.of());
+            }
+            if (bodyStmts.size() == 1 && !(bodyStmts.getFirst() instanceof BlockStatement)) {
                 return bodyStmts.getFirst();
+            }
             List<Statement> flat = new ArrayList<>();
             for (Statement s : bodyStmts) {
-                if (s instanceof BlockStatement bs) flat.addAll(bs.statements());
-                else flat.add(s);
+                if (s instanceof BlockStatement bs) {
+                    flat.addAll(bs.statements());
+                } else {
+                    flat.add(s);
+                }
             }
-            if (flat.size() == 1) return flat.getFirst();
+            if (flat.size() == 1) {
+                return flat.getFirst();
+            }
             return new BlockStatement(flat);
         } finally {
             currentBranchBlocks = prevBranchBlocks;
@@ -627,8 +833,6 @@ public final class BlockReducer {
         }
         return null;
     }
-
-    // ── Group → Statement translation ──────────────────────────────
 
     /** Simplify common boolean redundancy patterns:
      *  {@code x == true} → {@code x}, {@code x != false} → {@code x},
@@ -722,8 +926,6 @@ public final class BlockReducer {
         }
         return true;
     }
-
-    // ── IR → Statement ─────────────────────────────────────────────
 
     /**
      * Translate a block group to a statement tree.
@@ -893,8 +1095,6 @@ public final class BlockReducer {
         }
         return new BlockStatement(stmts);
     }
-
-    // ── IR → Expression ────────────────────────────────────────────
 
     private Statement translateStmt(IrInstruction insn) {
         return switch (insn.opcode()) {
@@ -1250,8 +1450,34 @@ public final class BlockReducer {
                 yield new NewExpr(insn.resultType(), dims, List.of());
             }
 
-            // instanceof
-            case INSTANCE_OF -> new VarExpr("/* instanceof */");
+            // instanceof: nameHint carries the target class internal name
+            case INSTANCE_OF -> {
+                Expression obj = !insn.operands().isEmpty()
+                        ? valueToExpr(insn.operands().getFirst()) : new VarExpr("obj");
+                JavaType checkedType = insn.nameHint() != null
+                        ? JavaType.classType(insn.nameHint())
+                        : JavaType.classType("java/lang/Object");
+                yield new InstanceOfExpr(obj, checkedType);
+            }
+
+            // Array element load: a[i]
+            case ARRAY_LOAD -> {
+                Expression arr = insn.operands().size() > 0
+                        ? valueToExpr(insn.operands().get(0)) : new VarExpr("arr");
+                Expression idx = insn.operands().size() > 1
+                        ? valueToExpr(insn.operands().get(1)) : new VarExpr("i");
+                yield new ArrayAccessExpr(arr, idx);
+            }
+            // Array element store: a[i] = v
+            case ARRAY_STORE -> {
+                Expression arr = insn.operands().size() > 0
+                        ? valueToExpr(insn.operands().get(0)) : new VarExpr("arr");
+                Expression idx = insn.operands().size() > 1
+                        ? valueToExpr(insn.operands().get(1)) : new VarExpr("i");
+                Expression val = insn.operands().size() > 2
+                        ? valueToExpr(insn.operands().get(2)) : new VarExpr("?");
+                yield new AssignExpr(new ArrayAccessExpr(arr, idx), val);
+            }
 
             // Array length
             case ARRAY_LENGTH -> {
@@ -1457,7 +1683,9 @@ public final class BlockReducer {
 
         // Consume groups containing case target blocks
         for (BlockGroup g : allGroups) {
-            if (consumed.contains(g)) continue;
+            if (consumed.contains(g)) {
+                continue;
+            }
             for (BasicBlock gb : g.blocks()) {
                 if (allCaseBlocks.contains(gb)) {
                     consumed.add(g);
@@ -1654,72 +1882,6 @@ public final class BlockReducer {
         return new BlockStatement(filtered);
     }
 
-    /** Check if a statement matches any in a list by comparing expression structure. */
-    private static boolean matchesAny(Statement s, List<Statement> candidates) {
-        if (s instanceof ExpressionStatement es) {
-            for (Statement c : candidates) {
-                if (c instanceof ExpressionStatement ce
-                        && expressionsEquivalent(es.expression(), ce.expression())) {
-                    return true;
-                }
-            }
-        }
-        if (s instanceof ReturnStatement rs && rs.value() != null) {
-            for (Statement c : candidates) {
-                if (c instanceof ReturnStatement rc && rc.value() != null
-                        && expressionsEquivalent(rs.value(), rc.value())) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    /** Structural comparison of two Expression trees. */
-    private static boolean expressionsEquivalent(Expression a, Expression b) {
-        if (a == b) return true;
-        if (a == null || b == null) return false;
-        if (a.getClass() != b.getClass()) return false;
-
-        if (a instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr ia
-                && b instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr ib) {
-            if (!ia.methodName().equals(ib.methodName())) return false;
-            if (ia.arguments().size() != ib.arguments().size()) return false;
-            for (int i = 0; i < ia.arguments().size(); i++) {
-                if (!expressionsEquivalent(ia.arguments().get(i), ib.arguments().get(i))) return false;
-            }
-            return expressionsEquivalent(ia.target(), ib.target());
-        }
-        if (a instanceof com.bingbaihanji.bdec.ast.expr.LitExpr la
-                && b instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lb) {
-            Object va = la.value(), vb = lb.value();
-            return va == null ? vb == null : va.equals(vb);
-        }
-        if (a instanceof com.bingbaihanji.bdec.ast.expr.VarExpr va
-                && b instanceof com.bingbaihanji.bdec.ast.expr.VarExpr vb) {
-            return va.name().equals(vb.name());
-        }
-        if (a instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
-                && b instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fb) {
-            return fa.fieldName().equals(fb.fieldName())
-                    && expressionsEquivalent(fa.target(), fb.target());
-        }
-        return false;
-    }
-
-    /** Recursively collect all statements, flattening nested BlockStatements. */
-    private static List<Statement> collectStatements(Statement s) {
-        List<Statement> result = new ArrayList<>();
-        if (s instanceof BlockStatement bs) {
-            for (Statement child : bs.statements()) {
-                result.addAll(collectStatements(child));
-            }
-        } else {
-            result.add(s);
-        }
-        return result;
-    }
-
     /** Translate a single block group to a list of statements. */
     private List<Statement> translateBlockGroup(BlockGroup group, LinearIr ir) {
         return translateGroup(group, ir) instanceof BlockStatement bs
@@ -1801,85 +1963,6 @@ public final class BlockReducer {
 
         currentVarStoreSource = Map.copyOf(varStoreSource);
         currentStoresToSkip = Set.copyOf(storesToSkip);
-    }
-
-    /** Check if a value is simple enough to inline (constant or basic expression). */
-    private static boolean isSimpleValue(Value v) {
-        if (v instanceof ConstantValue) {
-            return true;
-        }
-        if (v instanceof InstructionRef ref) {
-            IrOpcode op = ref.instruction().opcode();
-            return op == IrOpcode.CONST || op == IrOpcode.LOAD || op == IrOpcode.CAST
-                    || op == IrOpcode.FIELD_LOAD || op == IrOpcode.ARRAY_LENGTH
-                    || op == IrOpcode.INSTANCE_OF;
-        }
-        return false;
-    }
-
-    /** Check if a statement tree contains a ReturnStatement. */
-    private static boolean hasReturnStmt(Statement s) {
-        if (s instanceof ReturnStatement) return true;
-        if (s instanceof BlockStatement bs) {
-            return bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
-        }
-        return false;
-    }
-
-    /** Strip orphan ExpressionStatements from a branch body that already
-     *  has a ReturnStatement (they're noise from block ordering at merge points). */
-    private static Statement stripOrphanExprs(Statement s) {
-        if (s instanceof BlockStatement bs) {
-            boolean hasAnyReturn = bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
-            if (!hasAnyReturn) return s;
-            List<Statement> filtered = new ArrayList<>();
-            for (Statement child : bs.statements()) {
-                if (child instanceof ExpressionStatement) continue; // strip orphan CONST
-                if (child instanceof BlockStatement) {
-                    Statement stripped = stripOrphanExprs(child);
-                    if (!isEmptyBlock(stripped)) filtered.add(stripped);
-                } else {
-                    filtered.add(child);
-                }
-            }
-            if (filtered.isEmpty()) return new BlockStatement(List.of());
-            if (filtered.size() == 1) return filtered.getFirst();
-            return new BlockStatement(filtered);
-        }
-        return s;
-    }
-
-    /** Wrap a branch body's ExpressionStatements as ReturnStatements
-     *  (handles orphan CONSTs in branches without their own RETURN). */
-    private static Statement wrapAsReturn(Statement s, boolean isBoolRet) {
-        if (s instanceof BlockStatement bs) {
-            if (hasReturnStmt(s)) return s; // already has RETURN
-            List<Statement> result = new ArrayList<>();
-            for (Statement child : bs.statements()) {
-                if (child instanceof ExpressionStatement es) {
-                    result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
-                } else if (child instanceof BlockStatement inner) {
-                    result.add(wrapAsReturn(inner, isBoolRet));
-                } else {
-                    result.add(child);
-                }
-            }
-            if (result.isEmpty()) return new BlockStatement(List.of());
-            if (result.size() == 1) return result.getFirst();
-            return new BlockStatement(result);
-        }
-        if (s instanceof ExpressionStatement es) {
-            return new ReturnStatement(boolLiteral(es.expression(), isBoolRet));
-        }
-        return s;
-    }
-
-    /** Convert integer literal to boolean for boolean-return methods. */
-    private static Expression boolLiteral(Expression e, boolean isBoolRet) {
-        if (isBoolRet && e instanceof LitExpr lit && lit.value() instanceof Integer i) {
-            return new LitExpr(i != 0, JavaType.BOOLEAN);
-        }
-        return e;
     }
 
     // ── BlockGroup helper ─────────────────────────────────────────────

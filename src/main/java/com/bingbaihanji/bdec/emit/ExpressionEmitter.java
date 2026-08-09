@@ -1,6 +1,7 @@
 package com.bingbaihanji.bdec.emit;
 
 import com.bingbaihanji.bdec.ast.AstVisitor;
+import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.AssignExpr;
 import com.bingbaihanji.bdec.ast.expr.BinExpr;
 import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
@@ -8,6 +9,7 @@ import com.bingbaihanji.bdec.ast.expr.CastExpr;
 import com.bingbaihanji.bdec.ast.expr.CondExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
 import com.bingbaihanji.bdec.ast.expr.NewExpr;
@@ -45,6 +47,81 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    static String opSymbol(BinaryOperator op) {
+        return switch (op) {
+            case ADD -> "+";
+            case SUB -> "-";
+            case MUL -> "*";
+            case DIV -> "/";
+            case REM -> "%";
+            case EQ -> "==";
+            case NE -> "!=";
+            case LT -> "<";
+            case GT -> ">";
+            case LE -> "<=";
+            case GE -> ">=";
+            case AND -> "&&";
+            case OR -> "||";
+            case BIT_AND -> "&";
+            case BIT_OR -> "|";
+            case BIT_XOR -> "^";
+            case SHL -> "<<";
+            case SHR -> ">>";
+            case USHR -> ">>>";
+            case INSTANCEOF -> "instanceof";
+        };
+    }
+
+    // ── AstVisitor ─────────────────────────────────────────────────
+
+    private static String escapeString(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : s.toCharArray()) {
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String escapeChar(char c) {
+        return switch (c) {
+            case '\'' -> "\\'";
+            case '\\' -> "\\\\";
+            case '\n' -> "\\n";
+            case '\r' -> "\\r";
+            case '\t' -> "\\t";
+            default -> String.valueOf(c);
+        };
+    }
+
+    // ── Emit dispatch ──────────────────────────────────────────────
+
+    /** Map BinaryOperator to its compound-assignment symbol prefix. */
+    private static String compoundSym(BinaryOperator op) {
+        return switch (op) {
+            case ADD -> "+";
+            case SUB -> "-";
+            case MUL -> "*";
+            case DIV -> "/";
+            case REM -> "%";
+            case BIT_AND -> "&";
+            case BIT_OR -> "|";
+            case BIT_XOR -> "^";
+            case SHL -> "<<";
+            case SHR -> ">>";
+            case USHR -> ">>>";
+            default -> "?";
+        };
+    }
+
+    // ── Individual emitters ────────────────────────────────────────
+
     /** Resolve a type name to its shortest valid form:
      *  - java.lang.* types → simple name
      *  - types matching an import → simple name
@@ -71,63 +148,6 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         return type.displayName();
     }
 
-    // ── AstVisitor ─────────────────────────────────────────────────
-
-    static String opSymbol(BinaryOperator op) {
-        return switch (op) {
-            case ADD -> "+";
-            case SUB -> "-";
-            case MUL -> "*";
-            case DIV -> "/";
-            case REM -> "%";
-            case EQ -> "==";
-            case NE -> "!=";
-            case LT -> "<";
-            case GT -> ">";
-            case LE -> "<=";
-            case GE -> ">=";
-            case AND -> "&&";
-            case OR -> "||";
-            case BIT_AND -> "&";
-            case BIT_OR -> "|";
-            case BIT_XOR -> "^";
-            case SHL -> "<<";
-            case SHR -> ">>";
-            case USHR -> ">>>";
-            case INSTANCEOF -> "instanceof";
-        };
-    }
-
-    private static String escapeString(String s) {
-        StringBuilder sb = new StringBuilder();
-        for (char c : s.toCharArray()) {
-            switch (c) {
-                case '"' -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default -> sb.append(c);
-            }
-        }
-        return sb.toString();
-    }
-
-    // ── Emit dispatch ──────────────────────────────────────────────
-
-    private static String escapeChar(char c) {
-        return switch (c) {
-            case '\'' -> "\\'";
-            case '\\' -> "\\\\";
-            case '\n' -> "\\n";
-            case '\r' -> "\\r";
-            case '\t' -> "\\t";
-            default -> String.valueOf(c);
-        };
-    }
-
-    // ── Individual emitters ────────────────────────────────────────
-
     @Override
     public Void visitStatement(Statement stmt, Void context) {
         return null; // statements handled by StatementEmitter
@@ -151,8 +171,8 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             case FIELD_ACCESS -> emitFieldAccess((FieldAccessExpr) expr);
             case CAST -> emitCast((CastExpr) expr);
             case NEW -> emitNew((NewExpr) expr);
-            case INSTANCE_OF -> w.write("/* instanceof */");
-            case ARRAY_ACCESS -> w.write("/* array access */");
+            case INSTANCE_OF -> emitInstanceOf((InstanceOfExpr) expr);
+            case ARRAY_ACCESS -> emitArrayAccess((ArrayAccessExpr) expr);
             default -> w.write("/*" + expr.kind() + "*/");
         }
     }
@@ -231,24 +251,6 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         emit(a.value());
     }
 
-    /** Map BinaryOperator to its compound-assignment symbol prefix. */
-    private static String compoundSym(BinaryOperator op) {
-        return switch (op) {
-            case ADD -> "+";
-            case SUB -> "-";
-            case MUL -> "*";
-            case DIV -> "/";
-            case REM -> "%";
-            case BIT_AND -> "&";
-            case BIT_OR -> "|";
-            case BIT_XOR -> "^";
-            case SHL -> "<<";
-            case SHR -> ">>";
-            case USHR -> ">>>";
-            default -> "?";
-        };
-    }
-
     private void emitConditional(CondExpr c) {
         emitWithParens(c.condition(), c.precedence());
         w.write(" ? ");
@@ -281,6 +283,29 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             w.write(".");
         }
         w.write(fa.fieldName());
+    }
+
+    private void emitInstanceOf(InstanceOfExpr io) {
+        if (io.operand() != null) {
+            emitWithParens(io.operand(), io.precedence());
+        } else {
+            w.write("obj");
+        }
+        w.write(" instanceof ");
+        w.write(typeName(io.targetType()));
+    }
+
+    private void emitArrayAccess(ArrayAccessExpr aa) {
+        if (aa.array() != null) {
+            emitWithParens(aa.array(), aa.precedence());
+        } else {
+            w.write("arr");
+        }
+        w.write("[");
+        if (aa.index() != null) {
+            emit(aa.index());
+        }
+        w.write("]");
     }
 
     private void emitCast(CastExpr cast) {

@@ -142,4 +142,29 @@ public class ControlFlowTest {
         String out = harness.decompileSource(source, "TryCatchTest");
         DecompileTestHarness.assertContains(out, "class TryCatchTest", "try", "return");
     }
+
+    @Test
+    public void testArrayAccess() throws Exception {
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/ArraySample.java");
+        DecompileTestHarness.assertContains(out, "class ArraySample", "arr[", "[", "return");
+    }
+
+    @Test
+    public void testInstanceOfExpr() throws Exception {
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/InstanceOfSample.java");
+        DecompileTestHarness.assertContains(out, "class InstanceOfSample", "instanceof", "return");
+        DecompileTestHarness.assertNotContains(out, "/* instanceof */");
+    }
+
+    @Test
+    public void testStaticMethodCall() throws Exception {
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/StaticCallSample.java");
+        DecompileTestHarness.assertContains(out, "class StaticCallSample", "Integer", "toString", "return");
+    }
+
+    @Test
+    public void testNewInstanceWithArgs() throws Exception {
+        String out = harness.decompileResource("decompile-samples/m2-controlflow/NewInstanceSample.java");
+        DecompileTestHarness.assertContains(out, "class NewInstanceSample", "new RuntimeException", "error", "return");
+    }
 }
