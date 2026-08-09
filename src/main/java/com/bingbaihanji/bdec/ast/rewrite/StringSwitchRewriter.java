@@ -167,33 +167,6 @@ public class StringSwitchRewriter implements RewriteRule {
         return new BlockStatement(stmts);
     }
 
-    /** Match result for the hashCode-switch pattern. */
-    private static class HashCodeMatch {
-        final Expression stringVar;              // the String variable
-        final LinkedHashMap<Integer, String> hashToString; // hashCode → string literal
-        final LinkedHashMap<Integer, Integer> hashToTemp; // hashCode → temp int value
-        final String tempVarName;
-        final SwitchStatement.CaseGroup defaultCase; // may be null
-
-        HashCodeMatch(Expression stringVar,
-                      LinkedHashMap<Integer, String> hashToString,
-                      LinkedHashMap<Integer, Integer> hashToTemp,
-                      String tempVarName,
-                      SwitchStatement.CaseGroup defaultCase) {
-            this.stringVar = stringVar;
-            this.hashToString = hashToString;
-            this.hashToTemp = hashToTemp;
-            this.tempVarName = tempVarName;
-            this.defaultCase = defaultCase;
-        }
-    }
-
-    /** Match result for the temp-switch pattern. */
-    private record TempSwitchMatch(
-            String tempVarName,
-            Map<Integer, SwitchStatement.CaseGroup> intToCase,
-            SwitchStatement.CaseGroup defaultCase) {}
-
     /**
      * Detect whether a SwitchStatement matches the hashCode-switch pattern:
      * {@code switch (xxx.hashCode())}.
@@ -251,19 +224,6 @@ public class StringSwitchRewriter implements RewriteRule {
         }
 
         return new HashCodeMatch(stringVar, hashToString, hashToTemp, tempVarName, defaultCase);
-    }
-
-    /** Extracted string from a hashCode case body. */
-    private static class StringMatch {
-        final String stringValue;
-        final String tempVar;
-        final int tempValue;
-
-        StringMatch(String stringValue, String tempVar, int tempValue) {
-            this.stringValue = stringValue;
-            this.tempVar = tempVar;
-            this.tempValue = tempValue;
-        }
     }
 
     /**
@@ -328,17 +288,6 @@ public class StringSwitchRewriter implements RewriteRule {
         }
 
         return new StringMatch(strValue, ar.varName, ar.intValue);
-    }
-
-    /** Extracted assignment result. */
-    private static class AssignmentResult {
-        final String varName;
-        final int intValue;
-
-        AssignmentResult(String varName, int intValue) {
-            this.varName = varName;
-            this.intValue = intValue;
-        }
     }
 
     /**
@@ -465,5 +414,66 @@ public class StringSwitchRewriter implements RewriteRule {
 
         // New discriminant is the original String variable (not hashCode target)
         return new SwitchStatement(hashMatch.stringVar, newCases);
+    }
+
+    /** Match result for the hashCode-switch pattern. */
+    private static class HashCodeMatch {
+
+        final Expression stringVar;              // the String variable
+
+        final LinkedHashMap<Integer, String> hashToString; // hashCode → string literal
+
+        final LinkedHashMap<Integer, Integer> hashToTemp; // hashCode → temp int value
+
+        final String tempVarName;
+
+        final SwitchStatement.CaseGroup defaultCase; // may be null
+
+        HashCodeMatch(Expression stringVar,
+                      LinkedHashMap<Integer, String> hashToString,
+                      LinkedHashMap<Integer, Integer> hashToTemp,
+                      String tempVarName,
+                      SwitchStatement.CaseGroup defaultCase) {
+            this.stringVar = stringVar;
+            this.hashToString = hashToString;
+            this.hashToTemp = hashToTemp;
+            this.tempVarName = tempVarName;
+            this.defaultCase = defaultCase;
+        }
+    }
+
+    /** Match result for the temp-switch pattern. */
+    private record TempSwitchMatch(
+            String tempVarName,
+            Map<Integer, SwitchStatement.CaseGroup> intToCase,
+            SwitchStatement.CaseGroup defaultCase) {}
+
+    /** Extracted string from a hashCode case body. */
+    private static class StringMatch {
+
+        final String stringValue;
+
+        final String tempVar;
+
+        final int tempValue;
+
+        StringMatch(String stringValue, String tempVar, int tempValue) {
+            this.stringValue = stringValue;
+            this.tempVar = tempVar;
+            this.tempValue = tempValue;
+        }
+    }
+
+    /** Extracted assignment result. */
+    private static class AssignmentResult {
+
+        final String varName;
+
+        final int intValue;
+
+        AssignmentResult(String varName, int intValue) {
+            this.varName = varName;
+            this.intValue = intValue;
+        }
     }
 }

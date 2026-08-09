@@ -1,22 +1,7 @@
 package com.bingbaihanji.bdec.emit;
 
 import com.bingbaihanji.bdec.ast.AstVisitor;
-import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
-import com.bingbaihanji.bdec.ast.expr.AssignExpr;
-import com.bingbaihanji.bdec.ast.expr.BinExpr;
-import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
-import com.bingbaihanji.bdec.ast.expr.CastExpr;
-import com.bingbaihanji.bdec.ast.expr.CondExpr;
-import com.bingbaihanji.bdec.ast.expr.Expression;
-import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
-import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
-import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
-import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
-import com.bingbaihanji.bdec.ast.expr.LitExpr;
-import com.bingbaihanji.bdec.ast.expr.NewExpr;
-import com.bingbaihanji.bdec.ast.expr.UnExpr;
-import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
-import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.expr.*;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;

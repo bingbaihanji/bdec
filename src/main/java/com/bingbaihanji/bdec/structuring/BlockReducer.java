@@ -76,6 +76,10 @@ public final class BlockReducer {
     // Cached from the method being decompiled
     private boolean currentMethodReturnsBoolean = false;
 
+    // Current LinearIr (set at start of reduce(), used during expression
+    // translation to check for field/local name conflicts).
+    private LinearIr currentIr = null;
+
     public BlockReducer() {this(true);}
 
     public BlockReducer(boolean isInstanceMethod) {
@@ -252,8 +256,11 @@ public final class BlockReducer {
             }
             List<Statement> filtered = new ArrayList<>();
             for (Statement child : bs.statements()) {
-                if (child instanceof ExpressionStatement) {
-                    continue; // strip orphan CONST
+                // Only strip ExpressionStatements that are noise (var refs, temp refs),
+                // NOT real side-effecting expressions like field assignments.
+                if (child instanceof ExpressionStatement es
+                        && isIgnorableExpr(es.expression())) {
+                    continue; // strip orphan CONST/temp
                 }
                 if (child instanceof BlockStatement) {
                     Statement stripped = stripOrphanExprs(child);
@@ -493,6 +500,7 @@ public final class BlockReducer {
         // Cache method return type info
         currentMethodReturnsBoolean = ir.method().returnType() != null
                 && ir.method().returnType().kind() == TypeKind.BOOLEAN;
+        this.currentIr = ir;
 
         // Compute post-dominator tree once for fallback if-header detection.
         // This gives correct merge points when BranchAnalyzer annotations are missing.
@@ -543,6 +551,14 @@ public final class BlockReducer {
             if (ifInfo != null) {
                 Expression cond = simplifyCondition(extractCondition(group, ir));
 
+                // Translate non-condition statements from the header group.
+                // When the group containing the if-header also has code that runs
+                // BEFORE the condition (e.g., variable assignments that feed into
+                // the condition), those must appear before the IfStatement.
+                // Example: calculateThresholdCapacity's bit manipulation before
+                // the final ternary condition.
+                List<Statement> preIfStmts = translateHeaderNonCondition(group, ir);
+
                 // Translate then-body: find the group(s) containing then-blocks
                 Statement thenBody = translateBranchBody(ifInfo.thenBlocks(), groups, ir, consumed);
 
@@ -559,10 +575,6 @@ public final class BlockReducer {
 
                 // Post-process branch bodies for if-else patterns where both
                 // branches compute values that merge at a common RETURN block.
-                // Due to IrBuilder DFS ordering, one branch's value gets consumed
-                // by the RETURN while the other branch's value is an orphan CONST.
-                // Clean up: strip orphan CONSTs from branches with RETURN, and
-                // wrap orphan CONSTs as RETURN for branches without RETURN.
                 boolean thenHasReturn = hasReturnStmt(thenBody);
                 boolean elseHasReturn = elseBody != null && hasReturnStmt(elseBody);
                 boolean isBoolRet = ir.method().returnType() != null
@@ -570,9 +582,7 @@ public final class BlockReducer {
 
                 if (thenHasReturn != elseHasReturn) {
                     if (thenHasReturn) {
-                        // Strip orphan expressions from then (they're noise)
                         thenBody = stripOrphanExprs(thenBody);
-                        // Wrap orphan expressions in else as return
                         if (elseBody != null) {
                             elseBody = wrapAsReturn(elseBody, isBoolRet);
                         }
@@ -587,6 +597,13 @@ public final class BlockReducer {
                 s = new IfStatement(cond != null ? cond : new VarExpr("/*condition*/"),
                         thenBody != null ? thenBody : new BlockStatement(List.of()),
                         elseBody);
+
+                // Prepend pre-if statements before the IfStatement (if any)
+                if (!preIfStmts.isEmpty()) {
+                    List<Statement> combined = new ArrayList<>(preIfStmts);
+                    combined.add(s);
+                    s = new BlockStatement(combined);
+                }
             }
             // loop: wrap group in LoopStatement (only if we have a valid body)
             else if (loopInfo != null) {
@@ -915,6 +932,103 @@ public final class BlockReducer {
             }
         }
         return result;
+    }
+
+    /** Translate the non-condition, side-effecting statements from an if-header
+     *  group. These are instructions that execute BEFORE the condition check
+     *  and should appear before the IfStatement in the output. */
+    private List<Statement> translateHeaderNonCondition(BlockGroup group, LinearIr ir) {
+        List<IrInstruction> allInsns = group.allIrInstructions(ir);
+        if (allInsns.isEmpty()) {
+            return List.of();
+        }
+
+        // Build consumed set (same logic as translateGroup)
+        Set<Integer> consumed = new HashSet<>();
+        Map<Variable, Integer> loadVarToId = new HashMap<>();
+        for (IrInstruction insn : allInsns) {
+            if (insn.opcode() == IrOpcode.LOAD && !insn.operands().isEmpty()
+                    && insn.operands().getFirst() instanceof Variable v) {
+                loadVarToId.put(v, insn.id());
+            }
+        }
+        for (IrInstruction insn : allInsns) {
+            for (Value op : insn.operands()) {
+                if (op instanceof InstructionRef ref) {
+                    consumed.add(ref.instruction().id());
+                } else if (op instanceof Variable v && loadVarToId.containsKey(v)) {
+                    consumed.add(loadVarToId.get(v));
+                }
+            }
+        }
+
+        // Also build varStoreSource (local to this group) for inlining
+        Map<Variable, Value> varStoreSource = new HashMap<>(currentVarStoreSource);
+        Set<Integer> storesToSkip = new HashSet<>(currentStoresToSkip);
+        for (IrInstruction insn : allInsns) {
+            if (insn.opcode() == IrOpcode.STORE && insn.operands().size() >= 2
+                    && insn.operands().get(0) instanceof Variable v
+                    && !varStoreSource.containsKey(v)) {
+                Value source = insn.operands().get(1);
+                int loadCount = 0;
+                for (IrInstruction other : allInsns) {
+                    if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
+                            && other.operands().getFirst() instanceof Variable lv
+                            && lv.slot() == v.slot() && lv.version() == v.version()) {
+                        loadCount++;
+                    }
+                }
+                if (loadCount == 1 && isSimpleValue(source)) {
+                    for (IrInstruction other : allInsns) {
+                        if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
+                                && other.operands().getFirst() instanceof Variable lv
+                                && lv.slot() == v.slot() && lv.version() == v.version()) {
+                            if (consumed.contains(other.id())) {
+                                varStoreSource.put(v, source);
+                                storesToSkip.add(insn.id());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Swap in local maps
+        Map<Variable, Value> prevVarStore = currentVarStoreSource;
+        Set<Integer> prevStoreSkip = currentStoresToSkip;
+        currentVarStoreSource = Collections.unmodifiableMap(varStoreSource);
+        currentStoresToSkip = Set.copyOf(storesToSkip);
+        try {
+            List<Statement> stmts = new ArrayList<>();
+            for (IrInstruction insn : allInsns) {
+                // Skip CONDITION — it's extracted separately by extractCondition()
+                if (insn.opcode() == IrOpcode.CONDITION) {
+                    continue;
+                }
+                if (currentInitToSkip.contains(insn.id())) {
+                    continue;
+                }
+                if (currentStoresToSkip.contains(insn.id())) {
+                    continue;
+                }
+                if (isStatementRoot(insn)) {
+                    Statement s = translateStmt(insn);
+                    if (s != null) {
+                        stmts.add(s);
+                    }
+                } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
+                    Expression e = translateExpr(insn);
+                    if (e != null && !isIgnorableExpr(e)) {
+                        stmts.add(new ExpressionStatement(e));
+                    }
+                }
+            }
+            return stmts;
+        } finally {
+            currentVarStoreSource = prevVarStore;
+            currentStoresToSkip = prevStoreSkip;
+        }
     }
 
     /** Extract a condition expression from CONDITION IR instructions in the group. */
@@ -1403,13 +1517,17 @@ public final class BlockReducer {
                 yield new AssignExpr(lhs, assignRhs, compoundOp);
             }
 
-            // Field load — on implicit 'this' (slot 0, instance method), just emit field name
+            // Field load — on implicit 'this', use just the field name unless
+            // a local variable with the same name creates ambiguity.
             case FIELD_LOAD -> {
                 Expression obj = insn.operands().isEmpty() ? null : valueToExpr(insn.operands().getFirst());
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
                 // In instance methods, field load on 'this' → just the field name
+                // UNLESS a local variable shadows the field name (e.g., "lock = this.lock")
                 if (isInstanceMethod && obj instanceof VarExpr v && "this".equals(v.name())) {
-                    yield new VarExpr(fName);
+                    if (!localVarShadowsField(fName)) {
+                        yield new VarExpr(fName);
+                    }
                 }
                 yield new FieldAccessExpr(obj, fName);
             }
@@ -1871,10 +1989,26 @@ public final class BlockReducer {
                             JavaType.BOOLEAN);
                 }
             }
-            // Preserve the type from ConstantValue for proper emission
-            return new LitExpr(v != null ? v : "null", cv.type());
+            // Preserve the type from ConstantValue for proper emission.
+            // Pass v directly — null is handled by emitLiteral() as the keyword "null".
+            return new LitExpr(v, cv.type());
         }
         return new VarExpr("/* const */");
+    }
+
+    /** Check if a local variable has the same name as the given field,
+     *  which would create ambiguity when the "this." prefix is stripped. */
+    private boolean localVarShadowsField(String fieldName) {
+        if (currentIr == null || fieldName == null) {
+            return false;
+        }
+        for (Variable v : currentIr.variables()) {
+            String name = v.name();
+            if (name != null && name.equals(fieldName) && !(v.slot() == 0 && v.version() == 0)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Map bytecode opcode to UnaryOperator for UNARY IR instructions. */

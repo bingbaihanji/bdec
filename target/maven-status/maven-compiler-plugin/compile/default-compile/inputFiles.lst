@@ -4,6 +4,7 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\As
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\AstNode.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\AstVisitor.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\CompilationUnit.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\ArrayAccessExpr.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\AssignExpr.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\BinaryOperator.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\BinExpr.java
@@ -11,7 +12,9 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\ex
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\CondExpr.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\Expression.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\FieldAccessExpr.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\InstanceOfExpr.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\InvocationExpr.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\LambdaExpr.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\LitExpr.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\NewExpr.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\expr\UnaryOperator.java
@@ -20,6 +23,7 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\ex
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\AstRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\BoxingRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\EnumRewriter.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\EnumSwitchRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\ForEachRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\LambdaRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\MethodRefRewriter.java
@@ -28,6 +32,7 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\re
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\RewriteRule.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\SealedClassRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\StringConcatRewriter.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\SwitchExprRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\TernaryRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\TextBlockRewriter.java

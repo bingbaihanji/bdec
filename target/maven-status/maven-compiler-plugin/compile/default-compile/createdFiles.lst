@@ -1,4 +1,5 @@
 com\bingbaihanji\bdec\ast\stmt\TryStmt.class
+com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter.class
 com\bingbaihanji\bdec\semantic\SemanticReconstructor.class
 com\bingbaihanji\bdec\ast\AstKind.class
 com\bingbaihanji\bdec\ast\rewrite\PatternMatchRewriter.class
@@ -6,6 +7,7 @@ com\bingbaihanji\bdec\emit\StatementEmitter$1.class
 com\bingbaihanji\bdec\structuring\BranchAnalyzer.class
 com\bingbaihanji\bdec\ast\stmt\LabeledStmt.class
 com\bingbaihanji\bdec\cfg\EdgeKind.class
+com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter$AssignmentResult.class
 com\bingbaihanji\bdec\BdecCli.class
 com\bingbaihanji\bdec\bytecode\model\Instruction.class
 com\bingbaihanji\bdec\bytecode\parser\InstructionDecoder.class
@@ -20,6 +22,7 @@ com\bingbaihanji\bdec\ast\rewrite\TextBlockRewriter.class
 com\bingbaihanji\bdec\bytecode\model\MethodModel.class
 com\bingbaihanji\bdec\BdecConfig.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpMethodRef.class
+com\bingbaihanji\bdec\ast\expr\LambdaExpr.class
 com\bingbaihanji\bdec\ast\rewrite\SwitchExprRewriter.class
 com\bingbaihanji\bdec\emit\ExpressionEmitter$1.class
 com\bingbaihanji\bdec\ast\stmt\SwitchStatement.class
@@ -29,6 +32,7 @@ com\bingbaihanji\bdec\structuring\BlockReducer$BlockGroup.class
 com\bingbaihanji\bdec\cfg\BasicBlock.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpDouble.class
 com\bingbaihanji\bdec\emit\ExpressionEmitter.class
+com\bingbaihanji\bdec\ast\expr\InstanceOfExpr.class
 com\bingbaihanji\bdec\ir\TypeInference.class
 com\bingbaihanji\bdec\bytecode\model\ExceptionHandlerModel.class
 com\bingbaihanji\bdec\ast\stmt\BreakStmt.class
@@ -36,6 +40,7 @@ com\bingbaihanji\bdec\emit\Precedence.class
 com\bingbaihanji\bdec\emit\SourceEmitter.class
 com\bingbaihanji\bdec\ast\stmt\Statement.class
 com\bingbaihanji\bdec\cfg\ControlFlowEdge.class
+com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter$TempSwitchMatch.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpUtf8.class
 com\bingbaihanji\bdec\ast\stmt\SwitchStmt.class
 com\bingbaihanji\bdec\structuring\IrreducibleHandler.class
@@ -67,7 +72,9 @@ com\bingbaihanji\bdec\ast\stmt\ReturnStatement.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpInvokeDynamic.class
 com\bingbaihanji\bdec\ast\SourceRange.class
 com\bingbaihanji\bdec\structuring\BlockReducer$1.class
+com\bingbaihanji\bdec\ast\expr\LambdaExpr$Param.class
 com\bingbaihanji\bdec\semantic\SemanticTag.class
+com\bingbaihanji\bdec\ast\expr\ArrayAccessExpr.class
 com\bingbaihanji\bdec\ast\rewrite\EnumRewriter.class
 com\bingbaihanji\bdec\ir\DeadCodeElimination$1.class
 com\bingbaihanji\bdec\ir\IrBuilder.class
@@ -77,6 +84,7 @@ com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpNameAndTyp
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpPackage.class
 com\bingbaihanji\bdec\ir\IrBuilder$1.class
 com\bingbaihanji\bdec\ast\AstNode.class
+com\bingbaihanji\bdec\ast\rewrite\EnumSwitchRewriter.class
 com\bingbaihanji\bdec\ast\expr\FieldAccessExpr.class
 com\bingbaihanji\bdec\ast\stmt\ThrowStmt.class
 com\bingbaihanji\bdec\semantic\DefUseExpressionMerger$1.class
@@ -92,6 +100,7 @@ com\bingbaihanji\bdec\ir\IrInstruction.class
 com\bingbaihanji\bdec\ast\stmt\ContinueStmt.class
 com\bingbaihanji\bdec\ast\expr\CastExpr.class
 com\bingbaihanji\bdec\ast\rewrite\ForEachRewriter.class
+com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter$StringMatch.class
 com\bingbaihanji\bdec\ir\SsaForm.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpDynamic.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpLong.class
@@ -136,6 +145,7 @@ com\bingbaihanji\bdec\type\TypeKind.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\ConstantPoolEntry$CpInterfaceMethodRef.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\InnerClassEntry.class
 com\bingbaihanji\bdec\bytecode\model\constantpool\RecordComponentEntry.class
+com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter$HashCodeMatch.class
 com\bingbaihanji\bdec\ast\rewrite\MethodRefRewriter.class
 com\bingbaihanji\bdec\decompiler\Decompiler.class
 com\bingbaihanji\bdec\ir\ForLoopRecognizer.class

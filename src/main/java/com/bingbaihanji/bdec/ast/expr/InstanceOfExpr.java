@@ -11,6 +11,7 @@ import java.util.List;
 public final class InstanceOfExpr extends Expression {
 
     private final Expression operand;
+
     private final JavaType targetType;
 
     public InstanceOfExpr(Expression operand, JavaType targetType) {
