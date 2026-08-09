@@ -117,25 +117,70 @@ public final class IrBuilder {
 
     // ─── Predecessor merge ────────────────────────────────────────────
 
+    /** Return blocks in an order where each block's predecessors are processed
+     *  before it (when possible). Uses a worklist that only emits a block when
+     *  all its predecessors have been processed, falling back to DFS for
+     *  irreducible loops. This enables correct PHI creation at merge points. */
     private List<BasicBlock> orderBlocks(ControlFlowGraph cfg) {
         List<BasicBlock> result = new ArrayList<>();
-        Set<BasicBlock> visited = new HashSet<>();
-        Deque<BasicBlock> stack = new ArrayDeque<>();
-        stack.push(cfg.entryBlock());
-        while (!stack.isEmpty()) {
-            BasicBlock b = stack.pop();
-            if (!visited.add(b)) {
-                continue;
+        Set<BasicBlock> emitted = new HashSet<>();
+        Set<BasicBlock> inQueue = new HashSet<>();
+        Deque<BasicBlock> queue = new ArrayDeque<>();
+
+        // Start with entry's successors (entry itself isn't simulated)
+        for (BasicBlock succ : cfg.successorsOf(cfg.entryBlock())) {
+            if (succ != cfg.exitBlock()) {
+                queue.add(succ);
+                inQueue.add(succ);
             }
-            if (b != cfg.entryBlock() && b != cfg.exitBlock()) {
+        }
+
+        int maxIter = cfg.blockCount() * 4; // safety limit for irreducible loops
+        while (!queue.isEmpty() && maxIter-- > 0) {
+            BasicBlock b = queue.poll();
+            inQueue.remove(b);
+            if (emitted.contains(b)) continue;
+
+            // Can we emit this block? Only if all predecessors are emitted
+            // (or are entry/exit), OR if we've waited too long (fallback).
+            boolean allPredsReady = true;
+            for (BasicBlock pred : cfg.predecessorsOf(b)) {
+                if (pred != cfg.entryBlock() && pred != cfg.exitBlock()
+                        && !emitted.contains(pred)) {
+                    allPredsReady = false;
+                    break;
+                }
+            }
+
+            if (allPredsReady) {
+                emitted.add(b);
                 result.add(b);
+                // Enqueue successors
+                for (BasicBlock succ : cfg.successorsOf(b)) {
+                    if (succ != cfg.exitBlock() && !emitted.contains(succ)
+                            && !inQueue.contains(succ)) {
+                        queue.add(succ);
+                        inQueue.add(succ);
+                    }
+                }
+            } else {
+                // Put back at end — try again after predecessors are processed
+                queue.add(b);
+                inQueue.add(b);
             }
-            for (BasicBlock succ : cfg.successorsOf(b)) {
-                if (!visited.contains(succ)) {
-                    stack.push(succ);
+        }
+
+        // Fallback: any unprocessed blocks (irreducible loops) — use DFS
+        if (emitted.size() < cfg.blockCount() - 2) { // minus entry+exit
+            for (BasicBlock b : cfg.blocks()) {
+                if (b != cfg.entryBlock() && b != cfg.exitBlock()
+                        && !emitted.contains(b)) {
+                    result.add(b);
+                    emitted.add(b);
                 }
             }
         }
+
         return result;
     }
 
@@ -221,6 +266,39 @@ public final class IrBuilder {
         if (hasExceptionEdge && !predStates.get(0).stack().isEmpty()) {
             // Exception handler: keep the exception reference on stack
             mergedStack = new ArrayDeque<>(predStates.get(0).stack());
+        } else if (!hasExceptionEdge && predStates.size() >= 2) {
+            // Normal merge with multiple predecessors: check if all preds
+            // push the same number of values. If so, create PHI nodes.
+            boolean allSameDepth = true;
+            int depth = predStates.get(0).stack().size();
+            for (FrameState ps : predStates) {
+                if (ps.stack().size() != depth) { allSameDepth = false; break; }
+            }
+            if (allSameDepth && depth > 0) {
+                // Create PHI for each stack slot
+                Deque<Value> phiStack = new ArrayDeque<>();
+                // Build the stack from bottom to top using lists
+                List<List<Value>> slotValues = new ArrayList<>();
+                for (int i = 0; i < depth; i++) slotValues.add(new ArrayList<>());
+                for (FrameState ps : predStates) {
+                    int si = 0;
+                    for (Value v : ps.stack()) {
+                        slotValues.get(si++).add(v);
+                    }
+                }
+                for (int si = 0; si < depth; si++) {
+                    List<Value> phiOps = slotValues.get(si);
+                    JavaType phiType = phiOps.get(0).type();
+                    IrInstruction phi = new IrInstruction(nextId(), IrOpcode.PHI,
+                            phiType, phiOps, -1, block.id());
+                    instructions.add(phi);
+                    phi.setResultValue(new InstructionRef(phi, phiType));
+                    phiStack.addLast(new InstructionRef(phi, phiType));
+                }
+                mergedStack = phiStack;
+            } else {
+                mergedStack = new ArrayDeque<>();
+            }
         } else {
             // Normal merge point: stack must be empty per JVM verification
             mergedStack = new ArrayDeque<>();
