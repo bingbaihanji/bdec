@@ -62,10 +62,49 @@ public final class IrBuilder {
             maxLocals = method.isStatic() ? 0 : 1;
         }
 
+        // Pre-seed initial FrameState with parameter variables that have the
+        // CORRECT Java types from the method descriptor. This is critical for
+        // boolean parameters: the JVM uses int (ILOAD/ISTORE), but the actual
+        // Java type is boolean. Without this, downstream passes can't distinguish
+        // "boolean flag == 0" (→ !flag) from "int x == 0".
+        FrameState initialFrame = FrameState.withLocals(maxLocals);
+        Value[] initLocals = initialFrame.locals();
+        int slot = 0;
+        if (!method.isStatic()) {
+            // slot 0 = 'this'
+            JavaType thisType = com.bingbaihanji.bdec.type.JavaType.classType(
+                    "java/lang/Object");
+            Variable thisVar = new Variable(slot, 0, thisType, false, slot);
+            thisVar.setName("this");
+            variables.add(thisVar);
+            initLocals[slot] = thisVar;
+            slot++;
+        }
+        if (method.parameterTypes() != null) {
+            for (JavaType pt : method.parameterTypes()) {
+                if (slot < maxLocals) {
+                    Variable pv = new Variable(slot, 0, pt, true, slot);
+                    // Apply LVT name if available
+                    String lvtName = method.localVarNames().get(slot);
+                    if (lvtName != null) {
+                        pv.setName(lvtName);
+                    }
+                    variables.add(pv);
+                    initLocals[slot] = pv;
+                    slot++;
+                    // Long and double take two JVM slots
+                    if (pt.kind() == com.bingbaihanji.bdec.type.TypeKind.LONG
+                            || pt.kind() == com.bingbaihanji.bdec.type.TypeKind.DOUBLE) {
+                        slot++;
+                    }
+                }
+            }
+        }
+
         for (BasicBlock block : blocks) {
             FrameState entry = mergePredecessorStates(block, blockOutputs, cfg, allInstructions, variables);
             if (entry == null) {
-                entry = FrameState.withLocals(maxLocals);
+                entry = initialFrame.copy();
             }
             FrameState exit = simulateBlock(block, entry, allInstructions, variables, cfg, method, constantPool,
                     method.localVarNames());
@@ -172,7 +211,9 @@ public final class IrBuilder {
                     break;
                 }
             }
-            if (hasExceptionEdge) break;
+            if (hasExceptionEdge) {
+                break;
+            }
         }
 
         Deque<Value> mergedStack;
