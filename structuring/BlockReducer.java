@@ -1270,10 +1270,14 @@ public final class BlockReducer {
             BlockGroup finallyGroup = new BlockGroup(info.handlerBlock());
             Statement finallyBody = translateGroup(finallyGroup, ir);
 
-            // Filter out the THROW from the emitted statements
+            // Filter out the THROW from the emitted statements.
+            // THROW IR translates to ThrowStatement; also handle legacy VarExpr placeholder.
             if (finallyBody instanceof BlockStatement bs) {
                 List<Statement> stmts = new ArrayList<>();
                 for (Statement s : bs.statements()) {
+                    if (s instanceof ThrowStatement) {
+                        continue; // suppress re-throw in finally body
+                    }
                     if (s instanceof ExpressionStatement es
                             && es.expression() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
                             && "/* throw */".equals(v.name())) {
