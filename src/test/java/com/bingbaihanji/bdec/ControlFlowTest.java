@@ -52,8 +52,9 @@ public class ControlFlowTest {
     @Test
     public void testSwitch() throws Exception {
         String out = harness.decompileResource("decompile-samples/m2-controlflow/SwitchSample.java");
-        DecompileTestHarness.assertContains(out, "class SwitchSample", "switch");
-        // TODO: fix case body inlining (return statements are consumed but not emitted)
+        DecompileTestHarness.assertContains(out, "class SwitchSample", "switch", "return");
+        // Case body regression: return statements should now be emitted
+        DecompileTestHarness.assertContains(out, "\"one\"", "\"two\"", "\"other\"");
     }
 
     @Test
@@ -179,10 +180,10 @@ public class ControlFlowTest {
     @Test
     public void testStringSwitch() throws Exception {
         // String switch generates complex hashCode/equals bytecode scaffolding.
-        // For now just verify decompilation doesn't crash. Tighten after StringSwitchRewriter.
+        // With the translateBlockGroup fix, case bodies should now be emitted.
         String out = harness.decompileResource("decompile-samples/m2-controlflow/StringSwitchSample.java");
-        DecompileTestHarness.assertContains(out, "class StringSwitchSample");
-        // TODO: when StringSwitchRewriter collapses hashCode scaffolding:
+        DecompileTestHarness.assertContains(out, "class StringSwitchSample", "return");
+        // TODO: when StringSwitchRewriter fully activates:
         // DecompileTestHarness.assertContains(out, "\"foo\"", "\"bar\"");
         // DecompileTestHarness.assertNotContains(out, "hashCode");
     }
@@ -191,6 +192,7 @@ public class ControlFlowTest {
     public void testLambda() throws Exception {
         String out = harness.decompileResource("decompile-samples/m2-controlflow/LambdaSample.java");
         DecompileTestHarness.assertContains(out, "class LambdaSample", "->");
+        // TODO: add "return" check when INVOKEDYNAMIC RETURN path is fixed
         // TODO: re-enable when LambdaRewriter filtering is active end-to-end
         // DecompileTestHarness.assertNotContains(out, "lambda$test");
     }
@@ -202,6 +204,7 @@ public class ControlFlowTest {
         //       (return keyword is currently missing from method-ref-only method bodies).
         String out = harness.decompileResource("decompile-samples/m2-controlflow/MethodRefSample.java");
         DecompileTestHarness.assertContains(out, "class MethodRefSample");
+        // TODO: add "return" check when INVOKEDYNAMIC RETURN path is fixed
         // String::length method reference detected from bootstrap method info
         DecompileTestHarness.assertContains(out, "String::length");
         // Should NOT use lambda arrow notation for method references
