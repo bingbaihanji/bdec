@@ -75,7 +75,13 @@ public final class BranchAnalyzer {
             if (curr == stop || !result.add(curr)) {
                 continue;
             }
-            for (BasicBlock succ : graph.successorsOf(curr)) {
+            // Only follow non-exception edges — handler blocks must not be
+            // included in if/else branch bodies.
+            for (var edge : graph.outgoingOf(curr)) {
+                if (edge.kind() == EdgeKind.EXCEPTION) {
+                    continue;
+                }
+                BasicBlock succ = edge.target();
                 if (succ != stop) {
                     queue.add(succ);
                 }
