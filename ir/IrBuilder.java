@@ -15,7 +15,6 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -46,6 +45,25 @@ public final class IrBuilder {
     }
 
     // ─── Block ordering ───────────────────────────────────────────────
+
+    /** Follow InstructionRef chains to find the underlying ConstantValue. */
+    private static ConstantValue unwrapConstant(Value v) {
+        if (v instanceof ConstantValue cv) {
+            return cv;
+        }
+        if (v instanceof InstructionRef ref) {
+            IrInstruction def = ref.instruction();
+            if (def.opcode() == IrOpcode.CONST && !def.operands().isEmpty()) {
+                Value inner = def.operands().getFirst();
+                if (inner instanceof ConstantValue cv) {
+                    return cv;
+                }
+            }
+        }
+        return null;
+    }
+
+    // ─── Predecessor merge ────────────────────────────────────────────
 
     /**
      * Build LinearIr from CFG by symbolic execution of each basic block.
@@ -115,7 +133,7 @@ public final class IrBuilder {
         return new LinearIr(method, cfg, allInstructions, variables);
     }
 
-    // ─── Predecessor merge ────────────────────────────────────────────
+    // ─── Main block simulation ────────────────────────────────────────
 
     /** Return blocks in an order where each block's predecessors are processed
      *  before it (when possible). Uses a worklist that only emits a block when
@@ -139,7 +157,9 @@ public final class IrBuilder {
         while (!queue.isEmpty() && maxIter-- > 0) {
             BasicBlock b = queue.poll();
             inQueue.remove(b);
-            if (emitted.contains(b)) continue;
+            if (emitted.contains(b)) {
+                continue;
+            }
 
             // Can we emit this block? Only if all predecessors are emitted
             // (or are entry/exit), OR if we've waited too long (fallback).
@@ -184,7 +204,11 @@ public final class IrBuilder {
         return result;
     }
 
-    // ─── Main block simulation ────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    //  Handler methods — one per opcode category
+    // ═══════════════════════════════════════════════════════════════════
+
+    // ── Stack manipulation ───────────────────────────────────────
 
     /**
      * Merge states from all predecessors of a block.
@@ -272,14 +296,19 @@ public final class IrBuilder {
             boolean allSameDepth = true;
             int depth = predStates.get(0).stack().size();
             for (FrameState ps : predStates) {
-                if (ps.stack().size() != depth) { allSameDepth = false; break; }
+                if (ps.stack().size() != depth) {
+                    allSameDepth = false;
+                    break;
+                }
             }
             if (allSameDepth && depth > 0) {
                 // Create PHI for each stack slot
                 Deque<Value> phiStack = new ArrayDeque<>();
                 // Build the stack from bottom to top using lists
                 List<List<Value>> slotValues = new ArrayList<>();
-                for (int i = 0; i < depth; i++) slotValues.add(new ArrayList<>());
+                for (int i = 0; i < depth; i++) {
+                    slotValues.add(new ArrayList<>());
+                }
                 for (FrameState ps : predStates) {
                     int si = 0;
                     for (Value v : ps.stack()) {
@@ -306,12 +335,6 @@ public final class IrBuilder {
 
         return new FrameState(mergedStack, mergedLocals);
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    //  Handler methods — one per opcode category
-    // ═══════════════════════════════════════════════════════════════════
-
-    // ── Stack manipulation ───────────────────────────────────────
 
     /**
      * Symbolically execute one basic block. Each opcode dispatches to a
@@ -405,6 +428,22 @@ public final class IrBuilder {
                 case NEW -> handleNew(insn, stack, instructions, cp, offset, blockId);
                 case NEWARRAY, ANEWARRAY -> handleNewArray(op, insn, stack, instructions, cp, offset, blockId);
                 case ARRAYLENGTH -> handleArrayLength(stack, instructions, offset, blockId);
+                // Array element load: pop index, pop array → push element
+                case IALOAD, BALOAD, CALOAD, SALOAD ->
+                        handleArrayLoad(stack, instructions, JavaType.INT, offset, blockId, op.code());
+                case LALOAD -> handleArrayLoad(stack, instructions, JavaType.LONG, offset, blockId, op.code());
+                case FALOAD -> handleArrayLoad(stack, instructions, JavaType.FLOAT, offset, blockId, op.code());
+                case DALOAD -> handleArrayLoad(stack, instructions, JavaType.DOUBLE, offset, blockId, op.code());
+                case AALOAD -> handleArrayLoad(stack, instructions,
+                        JavaType.classType("java/lang/Object"), offset, blockId, op.code());
+                // Array element store: pop value, pop index, pop array
+                case IASTORE, BASTORE, CASTORE, SASTORE ->
+                        handleArrayStore(stack, instructions, JavaType.INT, offset, blockId, op.code());
+                case LASTORE -> handleArrayStore(stack, instructions, JavaType.LONG, offset, blockId, op.code());
+                case FASTORE -> handleArrayStore(stack, instructions, JavaType.FLOAT, offset, blockId, op.code());
+                case DASTORE -> handleArrayStore(stack, instructions, JavaType.DOUBLE, offset, blockId, op.code());
+                case AASTORE -> handleArrayStore(stack, instructions,
+                        JavaType.classType("java/lang/Object"), offset, blockId, op.code());
 
                 // Type
                 case CHECKCAST -> handleCheckCast(op, insn, stack, instructions, cp, offset, blockId);
@@ -464,6 +503,8 @@ public final class IrBuilder {
             stack.pop();
         }
     }
+
+    // ── Constants ─────────────────────────────────────────────────
 
     private void handleDup(Opcode op, Deque<Value> stack) {
         switch (op) {
@@ -526,8 +567,6 @@ public final class IrBuilder {
         }
     }
 
-    // ── Constants ─────────────────────────────────────────────────
-
     private void handleConstant(Opcode op, Instruction insn, Deque<Value> stack,
                                 List<IrInstruction> instructions, int offset, int blockId) {
         ConstantValue cv = switch (op) {
@@ -563,8 +602,10 @@ public final class IrBuilder {
         }
     }
 
+    // ── Loads ────────────────────────────────────────────────────
+
     private void handleLdc(Instruction insn, Deque<Value> stack, ConstantPoolEntry[] cp,
-                          List<IrInstruction> instructions, int offset, int blockId) {
+                           List<IrInstruction> instructions, int offset, int blockId) {
         int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
         ConstantValue cv = cpIdx > 0 && cpIdx < cp.length
                 ? cpValue(cp[cpIdx], cp)
@@ -576,8 +617,6 @@ public final class IrBuilder {
         constInsn.setResultValue(new InstructionRef(constInsn, cv.type()));
         stack.push(new InstructionRef(constInsn, cv.type()));
     }
-
-    // ── Loads ────────────────────────────────────────────────────
 
     private void handleLoad(Opcode op, Instruction insn, Deque<Value> stack,
                             Value[] locals, List<Variable> variables,
@@ -598,6 +637,8 @@ public final class IrBuilder {
         stack.push(v);
     }
 
+    // ── Stores ───────────────────────────────────────────────────
+
     private JavaType loadType(Opcode op) {
         return switch (op) {
             case ILOAD, ILOAD_0, ILOAD_1, ILOAD_2, ILOAD_3 -> JavaType.INT;
@@ -608,7 +649,7 @@ public final class IrBuilder {
         };
     }
 
-    // ── Stores ───────────────────────────────────────────────────
+    // ── IINC ─────────────────────────────────────────────────────
 
     private void handleStore(Opcode op, Instruction insn, Deque<Value> stack,
                              Value[] locals, List<Variable> variables,
@@ -627,7 +668,7 @@ public final class IrBuilder {
         instructions.add(IrInstruction.store(nextId(), var, val, offset, blockId));
     }
 
-    // ── IINC ─────────────────────────────────────────────────────
+    // ── Arithmetic ───────────────────────────────────────────────
 
     private void handleIinc(Instruction insn, List<Variable> variables,
                             List<IrInstruction> instructions, int offset, int blockId,
@@ -646,8 +687,6 @@ public final class IrBuilder {
                 offset, blockId));
     }
 
-    // ── Arithmetic ───────────────────────────────────────────────
-
     private void handleArithmetic(Opcode op, Deque<Value> stack,
                                   List<IrInstruction> instructions,
                                   JavaType type, int offset, int blockId) {
@@ -663,6 +702,8 @@ public final class IrBuilder {
         stack.push(new InstructionRef(bin, type));
     }
 
+    // ── Comparisons ──────────────────────────────────────────────
+
     private void handleNegate(Opcode op, Deque<Value> stack,
                               List<IrInstruction> instructions, int offset, int blockId) {
         if (stack.isEmpty()) {
@@ -676,7 +717,7 @@ public final class IrBuilder {
         stack.push(new InstructionRef(un, v.type()));
     }
 
-    // ── Comparisons ──────────────────────────────────────────────
+    // ── Fields ───────────────────────────────────────────────────
 
     private void handleComparison(Opcode op, Deque<Value> stack,
                                   List<IrInstruction> instructions, int offset, int blockId) {
@@ -691,8 +732,6 @@ public final class IrBuilder {
         cmp.setResultValue(new InstructionRef(cmp, JavaType.INT));
         stack.push(new InstructionRef(cmp, JavaType.INT));
     }
-
-    // ── Fields ───────────────────────────────────────────────────
 
     private void handleFieldLoad(Opcode op, Instruction insn, Deque<Value> stack,
                                  List<IrInstruction> instructions, ConstantPoolEntry[] cp,
@@ -743,6 +782,8 @@ public final class IrBuilder {
         return null;
     }
 
+    // ── Invoke ───────────────────────────────────────────────────
+
     /** Resolve a method name from the constant pool via a method-ref instruction. */
     private String resolveMethodName(Instruction insn, ConstantPoolEntry[] cp) {
         if (insn.rawOperands().isEmpty()) {
@@ -769,7 +810,7 @@ public final class IrBuilder {
         return null;
     }
 
-    // ── Invoke ───────────────────────────────────────────────────
+    // ── InvokeDynamic ────────────────────────────────────────────
 
     private void handleInvoke(Opcode op, Instruction insn, Deque<Value> stack,
                               List<IrInstruction> instructions, ConstantPoolEntry[] cp,
@@ -870,7 +911,7 @@ public final class IrBuilder {
         }
     }
 
-    // ── InvokeDynamic ────────────────────────────────────────────
+    // ── Object / Array ───────────────────────────────────────────
 
     private void handleInvokeDynamic(Instruction insn, Deque<Value> stack,
                                      List<IrInstruction> instructions, ConstantPoolEntry[] cp,
@@ -913,8 +954,6 @@ public final class IrBuilder {
             stack.push(new InstructionRef(inv, returnType));
         }
     }
-
-    // ── Object / Array ───────────────────────────────────────────
 
     private void handleNew(Instruction insn, Deque<Value> stack,
                            List<IrInstruction> instructions,
@@ -966,6 +1005,37 @@ public final class IrBuilder {
         stack.push(new InstructionRef(na, na.resultType()));
     }
 
+    // ── Array element load/store ──────────────────────────────────
+
+    private void handleArrayLoad(Deque<Value> stack, List<IrInstruction> instructions,
+                                 JavaType elementType, int offset, int blockId, int opcode) {
+        if (stack.size() < 2) {
+            return;
+        }
+        Value index = stack.pop();
+        Value arr = stack.pop();
+        IrInstruction al = new IrInstruction(nextId(), IrOpcode.ARRAY_LOAD,
+                elementType, List.of(arr, index), offset, blockId, opcode, null);
+        instructions.add(al);
+        al.setResultValue(new InstructionRef(al, elementType));
+        stack.push(new InstructionRef(al, elementType));
+    }
+
+    private void handleArrayStore(Deque<Value> stack, List<IrInstruction> instructions,
+                                  JavaType elementType, int offset, int blockId, int opcode) {
+        if (stack.size() < 3) {
+            return;
+        }
+        Value value = stack.pop();
+        Value index = stack.pop();
+        Value arr = stack.pop();
+        IrInstruction ast = new IrInstruction(nextId(), IrOpcode.ARRAY_STORE,
+                JavaType.VOID, List.of(arr, index, value), offset, blockId, opcode, null);
+        instructions.add(ast);
+    }
+
+    // ── Type / Cast ──────────────────────────────────────────────
+
     private void handleArrayLength(Deque<Value> stack, List<IrInstruction> instructions,
                                    int offset, int blockId) {
         if (stack.isEmpty()) {
@@ -978,8 +1048,6 @@ public final class IrBuilder {
         al.setResultValue(new InstructionRef(al, JavaType.INT));
         stack.push(new InstructionRef(al, JavaType.INT));
     }
-
-    // ── Type / Cast ──────────────────────────────────────────────
 
     private void handleCheckCast(Opcode op, Instruction insn, Deque<Value> stack,
                                  List<IrInstruction> instructions, ConstantPoolEntry[] cp,
@@ -1004,8 +1072,9 @@ public final class IrBuilder {
         }
         Value obj = stack.pop(); // preserve the object as an operand
         JavaType targetType = resolveClassType(insn, cp);
+        // nameHint carries the target class internal name for BlockReducer.
         IrInstruction io = new IrInstruction(nextId(), IrOpcode.INSTANCE_OF,
-                JavaType.INT, List.of(obj), offset, blockId, op.code(), null);
+                JavaType.INT, List.of(obj), offset, blockId, op.code(), targetType.internalName());
         io.setResultValue(new InstructionRef(io, JavaType.INT));
         instructions.add(io);
         stack.push(new InstructionRef(io, JavaType.INT));
@@ -1023,6 +1092,8 @@ public final class IrBuilder {
         return JavaType.classType("java/lang/Object");
     }
 
+    // ── Branches ─────────────────────────────────────────────────
+
     private void handleConversion(Opcode op, Deque<Value> stack,
                                   List<IrInstruction> instructions, int offset, int blockId) {
         if (stack.isEmpty()) {
@@ -1035,8 +1106,6 @@ public final class IrBuilder {
         conv.setResultValue(new InstructionRef(conv, to));
         stack.push(new InstructionRef(conv, to));
     }
-
-    // ── Branches ─────────────────────────────────────────────────
 
     private void handleCondition(Opcode op, Deque<Value> stack,
                                  List<IrInstruction> instructions, int offset, int blockId) {
@@ -1065,6 +1134,10 @@ public final class IrBuilder {
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    //  Shared helpers
+    // ═══════════════════════════════════════════════════════════════════
+
     private void handleNullCheck(Opcode op, Deque<Value> stack, List<IrInstruction> instructions,
                                  int offset, int blockId) {
         Value ref = !stack.isEmpty() ? stack.pop() : ConstantValue.NULL;
@@ -1072,13 +1145,14 @@ public final class IrBuilder {
                 JavaType.INT, List.of(ref, ConstantValue.NULL), offset, blockId, op.code(), null));
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  Shared helpers
-    // ═══════════════════════════════════════════════════════════════════
-
     private int nextId() {return nextInsnId++;}
 
     private int varIndex(Instruction insn, Opcode op) {
+        // Prefer instruction-level varIndex (set by WIDE or explicit operand decoding).
+        // Fall back to opcode implicit (e.g. iload_0 → 0), then first raw operand.
+        if (insn.varIndex() >= 0 && insn.opcode() == op.code()) {
+            return insn.varIndex();
+        }
         if (op.implicitVarIndex() >= 0) {
             return op.implicitVarIndex();
         }
@@ -1151,23 +1225,6 @@ public final class IrBuilder {
             instructions.add(load);
             load.setResultValue(new InstructionRef(load, v.type()));
         }
-    }
-
-    /** Follow InstructionRef chains to find the underlying ConstantValue. */
-    private static ConstantValue unwrapConstant(Value v) {
-        if (v instanceof ConstantValue cv) {
-            return cv;
-        }
-        if (v instanceof InstructionRef ref) {
-            IrInstruction def = ref.instruction();
-            if (def.opcode() == IrOpcode.CONST && !def.operands().isEmpty()) {
-                Value inner = def.operands().getFirst();
-                if (inner instanceof ConstantValue cv) {
-                    return cv;
-                }
-            }
-        }
-        return null;
     }
 
     private ConstantValue cpValue(ConstantPoolEntry entry, ConstantPoolEntry[] pool) {

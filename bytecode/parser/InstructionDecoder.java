@@ -37,6 +37,13 @@ public final class InstructionDecoder {
             return decodeSwitch(in, offset, op);
         }
 
+        // WIDE: extends the next instruction's local variable index to u2.
+        // WIDE + IINC: 2-byte index + 2-byte signed const.
+        // WIDE + ILOAD/FLOAD/ALOAD/LLOAD/DLOAD/ISTORE/FSTORE/ASTORE/LSTORE/DSTORE/RET: 2-byte index.
+        if (op == Opcode.WIDE) {
+            return decodeWide(in, offset);
+        }
+
         // IINC: 2 bytes but they are TWO separate u1 values (index + const),
         // NOT one u2. Handle before the general case 2 branch.
         if (op == Opcode.IINC) {
@@ -153,6 +160,34 @@ public final class InstructionDecoder {
         int[] jumpTargets = jumpTargetsList.stream().mapToInt(Integer::intValue).toArray();
         return new Instruction(offset, op.code(), op.mnemonic(),
                 operands, op.canFallThrough(), op.isTerminal(), jumpTargets, varIndex(op));
+    }
+
+    /** Decode a WIDE-prefixed instruction. */
+    private Instruction decodeWide(DataInputStream in, int offset) throws IOException {
+        int widenedOpcode = in.readUnsignedByte();
+        Opcode widenedOp;
+        try {
+            widenedOp = Opcode.byCode(widenedOpcode);
+        } catch (IllegalArgumentException e) {
+            System.err.println("WARNING: unknown widened opcode " + widenedOpcode + " at offset " + offset);
+            return null;
+        }
+
+        int widenedIndex = in.readUnsignedShort(); // 2-byte index
+        List<Integer> operands = new ArrayList<>();
+        operands.add(widenedIndex);
+
+        // WIDE + IINC: 2-byte index + 2-byte signed const
+        if (widenedOp == Opcode.IINC) {
+            int incr = in.readShort(); // signed
+            operands.add(incr);
+        }
+
+        // Use the widened opcode (not 196) so IrBuilder dispatches correctly.
+        // The mnemonic keeps the "wide" prefix for debugging.
+        return new Instruction(offset, widenedOpcode, "wide " + widenedOp.mnemonic(),
+                operands, widenedOp.canFallThrough(), widenedOp.isTerminal(),
+                new int[0], widenedIndex);
     }
 
     /** Get the implicit variable index for a switch (not applicable — returns -1). */
