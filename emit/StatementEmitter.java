@@ -55,6 +55,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
     // ── Emit dispatch ──────────────────────────────────────────────
 
     public void emit(Statement stmt) {
+        if (stmt == null) {
+            System.err.println("WARNING: StatementEmitter.emit() called with null statement, skipping");
+            new Exception("null stmt trace").printStackTrace(System.err);
+            return;
+        }
         switch (stmt.kind()) {
             case BLOCK -> emitBlock((BlockStatement) stmt);
             case IF -> emitIf((IfStatement) stmt);
@@ -79,7 +84,13 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
     private void emitBlock(BlockStatement b) {
         w.write("{").newLine();
         w.indent();
-        for (Statement s : b.statements()) {
+        List<Statement> stmts = b.statements();
+        for (int i = 0; i < stmts.size(); i++) {
+            Statement s = stmts.get(i);
+            if (s == null) {
+                System.err.println("WARNING: null statement at index " + i + " in BlockStatement, skipping");
+                continue;
+            }
             emit(s);
         }
         w.dedent();

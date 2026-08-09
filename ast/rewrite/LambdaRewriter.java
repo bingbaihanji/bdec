@@ -36,6 +36,9 @@ import java.util.List;
  */
 public class LambdaRewriter implements RewriteRule {
 
+    /** ACC_SYNTHETIC flag (0x1000). */
+    private static final int ACC_SYNTHETIC = 0x1000;
+
     @Override
     public String name() {return "lambda";}
 
@@ -52,9 +55,6 @@ public class LambdaRewriter implements RewriteRule {
         }
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
-
-    /** ACC_SYNTHETIC flag (0x1000). */
-    private static final int ACC_SYNTHETIC = 0x1000;
 
     private TypeDeclaration rewriteType(TypeDeclaration td,
                                         List<BootstrapMethodEntry> bootstrapMethods) {
@@ -97,7 +97,9 @@ public class LambdaRewriter implements RewriteRule {
                                        List<BootstrapMethodEntry> bootstrapMethods) {
         if (s instanceof BlockStatement bs) {
             return new BlockStatement(bs.statements().stream()
-                    .map(st -> rewriteStatement(st, bootstrapMethods)).toList());
+                    .map(st -> rewriteStatement(st, bootstrapMethods))
+                    .filter(st -> st != null)
+                    .toList());
         }
         if (s instanceof ExpressionStatement es) {
             return new ExpressionStatement(

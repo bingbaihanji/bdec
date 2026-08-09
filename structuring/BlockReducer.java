@@ -1,20 +1,6 @@
 package com.bingbaihanji.bdec.structuring;
 
-import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
-import com.bingbaihanji.bdec.ast.expr.AssignExpr;
-import com.bingbaihanji.bdec.ast.expr.BinExpr;
-import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
-import com.bingbaihanji.bdec.ast.expr.CastExpr;
-import com.bingbaihanji.bdec.ast.expr.Expression;
-import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
-import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
-import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
-import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
-import com.bingbaihanji.bdec.ast.expr.LitExpr;
-import com.bingbaihanji.bdec.ast.expr.NewExpr;
-import com.bingbaihanji.bdec.ast.expr.UnExpr;
-import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
-import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.expr.*;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
@@ -60,6 +46,15 @@ import java.util.Set;
  * are resolved into expression trees by following {@link InstructionRef} chains.
  */
 public final class BlockReducer {
+
+    /** Known SAM (Single Abstract Method) names for common functional interfaces. */
+    private static final Set<String> SAM_METHOD_NAMES = Set.of(
+            "run", "call", "get", "apply", "accept", "test",
+            "compare", "compareTo", "getAsBoolean", "getAsInt",
+            "getAsLong", "getAsDouble", "thenApply", "thenAccept",
+            "thenRun", "thenCompose", "thenCombine", "supply",
+            "applyAsInt", "applyAsLong", "applyAsDouble",
+            "andThen", "compose", "negate", "or", "and");
 
     private final boolean isInstanceMethod;
 
@@ -118,6 +113,8 @@ public final class BlockReducer {
         return false;
     }
 
+    // ── Block grouping ────────────────────────────────────────────────
+
     private static boolean isBooleanLit(Expression e, boolean expected) {
         if (e instanceof LitExpr lit) {
             Object v = lit.value();
@@ -125,8 +122,6 @@ public final class BlockReducer {
         }
         return false;
     }
-
-    // ── Block grouping ────────────────────────────────────────────────
 
     /** Detect increment/decrement: x = x + 1 → x++, x = x - 1 → x--. */
     private static UnaryOperator detectIncrement(BinExpr bin) {
@@ -319,6 +314,64 @@ public final class BlockReducer {
         return e;
     }
 
+    /** Check if a method name is a known SAM (functional interface) method name. */
+    private static boolean isSamMethodName(String name) {
+        return name != null && SAM_METHOD_NAMES.contains(name);
+    }
+
+    /** Check if the type looks like a functional interface (java.util.function.* or similar). */
+    private static boolean isFunctionalInterfaceLike(JavaType type) {
+        if (type == null) {
+            return false;
+        }
+        String desc = type.descriptor();
+        if (desc == null) {
+            return false;
+        }
+        // Functional interfaces in java.util.function
+        return desc.contains("java/util/function/")
+                || desc.contains("java/util/Comparator")
+                || desc.contains("java/lang/Runnable")
+                || desc.contains("java/util/concurrent/Callable");
+    }
+
+    // ── Group → Statement translation ──────────────────────────────
+
+    /** Extract a short display name from a functional interface type. */
+    private static String functionalInterfaceShortName(JavaType type) {
+        if (type == null) {
+            return null;
+        }
+        String desc = type.descriptor();
+        if (desc == null) {
+            return null;
+        }
+        // Extract the class name from "Ljava/util/function/Function;"
+        if (desc.startsWith("L") && desc.endsWith(";")) {
+            String internal = desc.substring(1, desc.length() - 1);
+            int slash = internal.lastIndexOf('/');
+            return slash >= 0 ? internal.substring(slash + 1) : internal;
+        }
+        return desc;
+    }
+
+    /** Simplify a fully-qualified internal class name to a short name.
+     *  "java/lang/String" → "String" */
+    private static String simplifyClassName(String internalName) {
+        if (internalName == null) {
+            return null;
+        }
+        int slash = internalName.lastIndexOf('/');
+        if (slash >= 0) {
+            return internalName.substring(slash + 1);
+        }
+        int dollar = internalName.lastIndexOf('$');
+        if (dollar >= 0) {
+            return internalName.substring(dollar + 1);
+        }
+        return internalName;
+    }
+
     /**
      * Post-processing: wrap statement groups in try-catch based on CFG exception ranges.
      * Runs AFTER if/else/loop structuring so nested control structures are preserved.
@@ -422,6 +475,8 @@ public final class BlockReducer {
 
         return new BlockStatement(stmts);
     }
+
+    // ── IR → Statement ─────────────────────────────────────────────
 
     public BlockStatement reduce(ControlFlowGraph graph, LinearIr ir,
                                  Map<BasicBlock, LoopInfo> loopAnns,
@@ -610,6 +665,12 @@ public final class BlockReducer {
         }
 
         // Post-process: wrap statement groups in try-catch based on annotations.
+        // Filter out any null statements that may have leaked from rewriters
+        // or edge cases in structurer. Null entries cause downstream NPEs.
+        statements = statements.stream()
+                .filter(s -> s != null)
+                .toList();
+
         // Avoid double-wrapping: if there's only one statement and it's already
         // a BlockStatement, use it directly as the root instead of nesting.
         BlockStatement root;
@@ -621,6 +682,8 @@ public final class BlockReducer {
         return wrapTryCatchBlocks(root, groups, tryCatchAnns, ir);
     }
 
+    // ── IR → Expression ────────────────────────────────────────────
+
     /** Find if any block in the group has an IfInfo annotation. */
     private IfInfo findIfAnnotation(BlockGroup group, Map<BasicBlock, IfInfo> ifAnns) {
         for (BasicBlock b : group.blocks()) {
@@ -630,8 +693,6 @@ public final class BlockReducer {
         }
         return null;
     }
-
-    // ── Group → Statement translation ──────────────────────────────
 
     private LoopInfo findLoopAnnotation(BlockGroup group, Map<BasicBlock, LoopInfo> loopAnns) {
         for (BasicBlock b : group.blocks()) {
@@ -659,8 +720,6 @@ public final class BlockReducer {
         }
         return null;
     }
-
-    // ── IR → Statement ─────────────────────────────────────────────
 
     /**
      * Detect if-header directly from CFG structure, bypassing BranchAnalyzer.
@@ -747,8 +806,6 @@ public final class BlockReducer {
         }
         return null;
     }
-
-    // ── IR → Expression ────────────────────────────────────────────
 
     /** Collect all blocks reachable from start up to (but not including) stop. */
     private Set<BasicBlock> collectReachableBlocks(BasicBlock start, BasicBlock stop,
@@ -870,6 +927,12 @@ public final class BlockReducer {
         }
         return null;
     }
+
+    /**
+     * Translate a single IR instruction to an AST expression.
+     * For intermediate values (LOAD, BINARY, etc.) this produces the
+     * appropriate expression node that will be inlined into the parent statement.
+     */
 
     /** Simplify common boolean redundancy patterns:
      *  {@code x == true} → {@code x}, {@code x != false} → {@code x},
@@ -1165,12 +1228,6 @@ public final class BlockReducer {
         };
     }
 
-    /**
-     * Translate a single IR instruction to an AST expression.
-     * For intermediate values (LOAD, BINARY, etc.) this produces the
-     * appropriate expression node that will be inlined into the parent statement.
-     */
-
     /** Translate an invokedynamic INVOKE into a LambdaExpr.
      *  Detects lambda expressions (lambda$method$N pattern) and method references.
      *  For string concat (makeConcatWithConstants), delegates to normal INVOKE handling.
@@ -1280,71 +1337,6 @@ public final class BlockReducer {
             }
         }
         return null;
-    }
-
-    /** Known SAM (Single Abstract Method) names for common functional interfaces. */
-    private static final Set<String> SAM_METHOD_NAMES = Set.of(
-            "run", "call", "get", "apply", "accept", "test",
-            "compare", "compareTo", "getAsBoolean", "getAsInt",
-            "getAsLong", "getAsDouble", "thenApply", "thenAccept",
-            "thenRun", "thenCompose", "thenCombine", "supply",
-            "applyAsInt", "applyAsLong", "applyAsDouble",
-            "andThen", "compose", "negate", "or", "and");
-
-    /** Check if a method name is a known SAM (functional interface) method name. */
-    private static boolean isSamMethodName(String name) {
-        return name != null && SAM_METHOD_NAMES.contains(name);
-    }
-
-    /** Check if the type looks like a functional interface (java.util.function.* or similar). */
-    private static boolean isFunctionalInterfaceLike(JavaType type) {
-        if (type == null) {
-            return false;
-        }
-        String desc = type.descriptor();
-        if (desc == null) {
-            return false;
-        }
-        // Functional interfaces in java.util.function
-        return desc.contains("java/util/function/")
-                || desc.contains("java/util/Comparator")
-                || desc.contains("java/lang/Runnable")
-                || desc.contains("java/util/concurrent/Callable");
-    }
-
-    /** Extract a short display name from a functional interface type. */
-    private static String functionalInterfaceShortName(JavaType type) {
-        if (type == null) {
-            return null;
-        }
-        String desc = type.descriptor();
-        if (desc == null) {
-            return null;
-        }
-        // Extract the class name from "Ljava/util/function/Function;"
-        if (desc.startsWith("L") && desc.endsWith(";")) {
-            String internal = desc.substring(1, desc.length() - 1);
-            int slash = internal.lastIndexOf('/');
-            return slash >= 0 ? internal.substring(slash + 1) : internal;
-        }
-        return desc;
-    }
-
-    /** Simplify a fully-qualified internal class name to a short name.
-     *  "java/lang/String" → "String" */
-    private static String simplifyClassName(String internalName) {
-        if (internalName == null) {
-            return null;
-        }
-        int slash = internalName.lastIndexOf('/');
-        if (slash >= 0) {
-            return internalName.substring(slash + 1);
-        }
-        int dollar = internalName.lastIndexOf('$');
-        if (dollar >= 0) {
-            return internalName.substring(dollar + 1);
-        }
-        return internalName;
     }
 
     /** Fallback: treat INDY as a regular method invocation. */
