@@ -24,12 +24,13 @@ public class AstRewriter {
 
     private boolean isEnabled(String name, BdecConfig config) {
         return switch (name) {
-            case "enum" -> config.decodeEnums();
+            case "enum", "enum-switch" -> config.decodeEnums();
             case "lambda" -> config.decodeLambdas();
             case "ternary" -> config.decodeTernary();
             case "string-concat" -> config.decodeStringConcat();
             case "try-resource" -> config.decodeTryResource();
             case "for-each" -> config.decodeForEach();
+            case "string-switch" -> config.decodeStringSwitch();
             default -> true;
         };
     }
