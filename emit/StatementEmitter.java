@@ -31,6 +31,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         this.className = className;
     }
 
+    /** Resolve a type name using imports (delegates to ExpressionEmitter). */
+    private String typeName(com.bingbaihanji.bdec.type.JavaType t) {
+        return exprs.typeName(t);
+    }
+
     // ── AstVisitor ─────────────────────────────────────────────────
 
     @Override
@@ -193,7 +198,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         if (isConstructor) {
             w.write(methodName).write("(");
         } else {
-            w.write(m.returnType().displayName()).space().write(methodName).write("(");
+            w.write(typeName(m.returnType())).space().write(methodName).write("(");
         }
 
         // Parameters
@@ -201,7 +206,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             if (i > 0) {
                 w.write(", ");
             }
-            w.write(m.parameterTypes()[i].displayName()).space().write(m.parameterNames()[i]);
+            w.write(typeName(m.parameterTypes()[i])).space().write(m.parameterNames()[i]);
         }
         w.write(")").space();
 
@@ -220,7 +225,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
 
     private void emitFieldDecl(FieldDeclaration f) {
         emitFieldModifiers(f.accessFlags());
-        w.write(f.type().displayName()).space().write(f.name());
+        w.write(typeName(f.type())).space().write(f.name());
         if (f.initializer() != null) {
             w.space().write("=").space();
             exprs.emit(f.initializer());

@@ -15,7 +15,7 @@ public class SourceEmitter {
         IndentWriter w = new IndentWriter(config.indentSize());
         Map<Integer, Integer> lineMapping = new HashMap<>();
 
-        ExpressionEmitter exprs = new ExpressionEmitter(w);
+        ExpressionEmitter exprs = new ExpressionEmitter(w, unit.imports());
 
         // Register a line-mapping hook: when the writer advances to a new line
         // the caller can associate bytecode offsets via the IndentWriter.
