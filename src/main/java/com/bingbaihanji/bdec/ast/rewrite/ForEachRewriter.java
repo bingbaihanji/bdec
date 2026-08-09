@@ -4,9 +4,16 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
-import com.bingbaihanji.bdec.type.JavaType;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
+import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
+import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +35,7 @@ import java.util.List;
 public class ForEachRewriter implements RewriteRule {
 
     @Override
-    public String name() { return "for-each"; }
+    public String name() {return "for-each";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -87,15 +94,21 @@ public class ForEachRewriter implements RewriteRule {
                 Statement s = stmts.get(i);
                 // Look for: ExpressionStatement containing iterator() assignment
                 ForEachCandidate candidate = matchIteratorDecl(s);
-                if (candidate == null) continue;
+                if (candidate == null) {
+                    continue;
+                }
 
                 // Check next statement is a while-loop
                 if (!(stmts.get(i + 1) instanceof LoopStatement loop)
-                        || loop.loopKind() != LoopStatement.LoopKind.WHILE) continue;
+                        || loop.loopKind() != LoopStatement.LoopKind.WHILE) {
+                    continue;
+                }
 
                 // Match: while(iter.hasNext())
                 ForEachCandidate result = matchWhileLoop(loop, candidate);
-                if (result == null) continue;
+                if (result == null) {
+                    continue;
+                }
 
                 // Build for-each loop
                 LoopStatement forEach = new LoopStatement(
@@ -118,18 +131,30 @@ public class ForEachRewriter implements RewriteRule {
 
     /** Match: {@code Iterator iter = collection.iterator();} */
     private ForEachCandidate matchIteratorDecl(Statement s) {
-        if (!(s instanceof ExpressionStatement es)) return null;
-        if (!(es.expression() instanceof AssignExpr assign)) return null;
-        if (!(assign.value() instanceof InvocationExpr inv)) return null;
-        if (!"iterator".equals(inv.methodName())) return null;
-        if (inv.target() == null) return null;
+        if (!(s instanceof ExpressionStatement es)) {
+            return null;
+        }
+        if (!(es.expression() instanceof AssignExpr assign)) {
+            return null;
+        }
+        if (!(assign.value() instanceof InvocationExpr inv)) {
+            return null;
+        }
+        if (!"iterator".equals(inv.methodName())) {
+            return null;
+        }
+        if (inv.target() == null) {
+            return null;
+        }
 
         // Extract variable name
         String varName = null;
         if (assign.target() instanceof VarExpr vx) {
             varName = vx.name();
         }
-        if (varName == null) return null;
+        if (varName == null) {
+            return null;
+        }
 
         return new ForEachCandidate(varName, inv.target());
     }
@@ -137,22 +162,44 @@ public class ForEachRewriter implements RewriteRule {
     /** Match: {@code while(iter.hasNext()) { E e = iter.next(); ... }} */
     private ForEachCandidate matchWhileLoop(LoopStatement loop, ForEachCandidate candidate) {
         // Check condition: iter.hasNext()
-        if (!(loop.condition() instanceof InvocationExpr condInv)) return null;
-        if (!"hasNext".equals(condInv.methodName())) return null;
-        if (!(condInv.target() instanceof VarExpr var)) return null;
-        if (!candidate.iterVar.equals(var.name())) return null;
+        if (!(loop.condition() instanceof InvocationExpr condInv)) {
+            return null;
+        }
+        if (!"hasNext".equals(condInv.methodName())) {
+            return null;
+        }
+        if (!(condInv.target() instanceof VarExpr var)) {
+            return null;
+        }
+        if (!candidate.iterVar.equals(var.name())) {
+            return null;
+        }
 
         // Check body: first statement is E element = iter.next()
         List<Statement> bodyStmts = getBodyStatements(loop.body());
-        if (bodyStmts.isEmpty()) return null;
+        if (bodyStmts.isEmpty()) {
+            return null;
+        }
 
         Statement first = bodyStmts.get(0);
-        if (!(first instanceof ExpressionStatement es)) return null;
-        if (!(es.expression() instanceof AssignExpr assign)) return null;
-        if (!(assign.value() instanceof InvocationExpr nextInv)) return null;
-        if (!"next".equals(nextInv.methodName())) return null;
-        if (!(nextInv.target() instanceof VarExpr nextVar)) return null;
-        if (!candidate.iterVar.equals(nextVar.name())) return null;
+        if (!(first instanceof ExpressionStatement es)) {
+            return null;
+        }
+        if (!(es.expression() instanceof AssignExpr assign)) {
+            return null;
+        }
+        if (!(assign.value() instanceof InvocationExpr nextInv)) {
+            return null;
+        }
+        if (!"next".equals(nextInv.methodName())) {
+            return null;
+        }
+        if (!(nextInv.target() instanceof VarExpr nextVar)) {
+            return null;
+        }
+        if (!candidate.iterVar.equals(nextVar.name())) {
+            return null;
+        }
 
         // Build new body (minus the next() call)
         List<Statement> newBodyStmts = new ArrayList<>(bodyStmts);
@@ -171,14 +218,20 @@ public class ForEachRewriter implements RewriteRule {
     }
 
     private List<Statement> getBodyStatements(Statement s) {
-        if (s instanceof BlockStatement bs) return new ArrayList<>(bs.statements());
+        if (s instanceof BlockStatement bs) {
+            return new ArrayList<>(bs.statements());
+        }
         return new ArrayList<>(List.of(s));
     }
 
     private static class ForEachCandidate {
+
         final String iterVar;
+
         final Expression iterableExpr;
+
         final Expression elementVar; // null for decl pattern
+
         final Statement body;       // null for decl pattern
 
         // Iterator declaration pattern

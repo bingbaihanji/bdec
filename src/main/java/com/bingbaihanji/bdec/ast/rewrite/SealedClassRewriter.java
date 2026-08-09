@@ -19,7 +19,7 @@ public class SealedClassRewriter implements RewriteRule {
     private static final int ACC_SEALED = 0x1000;
 
     @Override
-    public String name() { return "sealed"; }
+    public String name() {return "sealed";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -32,7 +32,9 @@ public class SealedClassRewriter implements RewriteRule {
 
     private TypeDeclaration rewriteType(TypeDeclaration td) {
         boolean isSealed = (td.accessFlags() & ACC_SEALED) != 0;
-        if (!isSealed) return td;
+        if (!isSealed) {
+            return td;
+        }
 
         // Add "permits" to kind name or emit as annotation
         // The permitted subclass names come from the class file attribute

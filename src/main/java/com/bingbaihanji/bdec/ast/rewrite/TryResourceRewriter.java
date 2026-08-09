@@ -4,9 +4,18 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
-import com.bingbaihanji.bdec.type.JavaType;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
+import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.TryStatement;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,7 +38,7 @@ import java.util.List;
 public class TryResourceRewriter implements RewriteRule {
 
     @Override
-    public String name() { return "try-resource"; }
+    public String name() {return "try-resource";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -95,14 +104,22 @@ public class TryResourceRewriter implements RewriteRule {
                     initExpr = assign.value();
                 }
             }
-            if (varName == null) continue;
+            if (varName == null) {
+                continue;
+            }
 
             // Find try-finally immediately after
-            if (!(stmts.get(i + 1) instanceof TryStatement ts)) continue;
-            if (ts.finallyBody() == null) continue;
+            if (!(stmts.get(i + 1) instanceof TryStatement ts)) {
+                continue;
+            }
+            if (ts.finallyBody() == null) {
+                continue;
+            }
 
             // Check finally body contains close() call on the variable
-            if (!finallyContainsClose(ts.finallyBody(), varName)) continue;
+            if (!finallyContainsClose(ts.finallyBody(), varName)) {
+                continue;
+            }
 
             // Build try-with-resources
             List<Expression> resources = new ArrayList<>();
@@ -161,7 +178,9 @@ public class TryResourceRewriter implements RewriteRule {
             }
             filtered.add(s);
         }
-        if (filtered.isEmpty()) return null;
+        if (filtered.isEmpty()) {
+            return null;
+        }
         return new BlockStatement(filtered);
     }
 

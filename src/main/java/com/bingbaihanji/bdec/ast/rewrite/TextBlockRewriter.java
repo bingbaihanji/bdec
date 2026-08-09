@@ -4,8 +4,19 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
+import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
 import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
@@ -30,7 +41,7 @@ import java.util.List;
 public class TextBlockRewriter implements RewriteRule {
 
     @Override
-    public String name() { return "text-block"; }
+    public String name() {return "text-block";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -116,10 +127,14 @@ public class TextBlockRewriter implements RewriteRule {
     /** Check if a string literal should be converted to a text block.
      *  Requires: contains newlines, at least 3 lines, not just whitespace. */
     private boolean shouldConvert(String s) {
-        if (s == null || s.isEmpty()) return false;
+        if (s == null || s.isEmpty()) {
+            return false;
+        }
         // Count lines
         long lines = s.lines().count();
-        if (lines < 3) return false;
+        if (lines < 3) {
+            return false;
+        }
         // Must contain actual newlines (not just \r\n at end)
         return s.contains("\n") || s.contains("\r\n");
     }

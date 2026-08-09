@@ -6,7 +6,6 @@ import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
-import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -42,7 +41,7 @@ public class RecordRewriter implements RewriteRule {
             "toString", "hashCode", "equals");
 
     @Override
-    public String name() { return "record"; }
+    public String name() {return "record";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -54,7 +53,9 @@ public class RecordRewriter implements RewriteRule {
     }
 
     private TypeDeclaration rewriteType(TypeDeclaration td) {
-        if (!isRecord(td)) return td;
+        if (!isRecord(td)) {
+            return td;
+        }
 
         // Collect field names for component identification
         Set<String> componentFields = new HashSet<>();
@@ -70,11 +71,17 @@ public class RecordRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                if (isCanonicalConstructor(md, componentFields)) continue;
-                if (isSyntheticAccessor(md, componentFields)) continue;
+                if (isCanonicalConstructor(md, componentFields)) {
+                    continue;
+                }
+                if (isSyntheticAccessor(md, componentFields)) {
+                    continue;
+                }
                 // Keep only custom (non-synthetic) toString/hashCode/equals
                 if (SYNTHETIC_METHODS.contains(md.name())
-                        && md.parameterNames().length == 0) continue;
+                        && md.parameterNames().length == 0) {
+                    continue;
+                }
             }
             members.add(m);
         }
@@ -108,17 +115,25 @@ public class RecordRewriter implements RewriteRule {
 
     /** Check if a constructor is the canonical (all-fields) constructor. */
     private boolean isCanonicalConstructor(MethodDeclaration md, Set<String> fields) {
-        if (!"<init>".equals(md.name())) return false;
-        if (md.parameterNames().length != fields.size()) return false;
+        if (!"<init>".equals(md.name())) {
+            return false;
+        }
+        if (md.parameterNames().length != fields.size()) {
+            return false;
+        }
         for (String param : md.parameterNames()) {
-            if (!fields.contains(param)) return false;
+            if (!fields.contains(param)) {
+                return false;
+            }
         }
         return true;
     }
 
     /** Check if a method is a synthetic accessor (name matches a field). */
     private boolean isSyntheticAccessor(MethodDeclaration md, Set<String> fields) {
-        if (md.parameterNames().length != 0) return false;
+        if (md.parameterNames().length != 0) {
+            return false;
+        }
         return fields.contains(md.name());
     }
 }

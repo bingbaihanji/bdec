@@ -4,8 +4,16 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
+import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
+import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +31,7 @@ import java.util.List;
 public class SwitchExprRewriter implements RewriteRule {
 
     @Override
-    public String name() { return "switch-expr"; }
+    public String name() {return "switch-expr";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -85,12 +93,16 @@ public class SwitchExprRewriter implements RewriteRule {
      * followed by {@code break}.
      */
     private boolean isSwitchExpression(SwitchStatement sw) {
-        if (sw.cases().isEmpty()) return false;
+        if (sw.cases().isEmpty()) {
+            return false;
+        }
         String commonTarget = null;
 
         for (SwitchStatement.CaseGroup cg : sw.cases()) {
             List<Statement> body = cg.body();
-            if (body.isEmpty()) return false;
+            if (body.isEmpty()) {
+                return false;
+            }
             Statement last = body.getLast();
 
             if (last instanceof ReturnStatement) {

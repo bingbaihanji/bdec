@@ -4,10 +4,16 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
+import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
-import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,7 +37,7 @@ import java.util.List;
 public class LambdaRewriter implements RewriteRule {
 
     @Override
-    public String name() { return "lambda"; }
+    public String name() {return "lambda";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -48,7 +54,7 @@ public class LambdaRewriter implements RewriteRule {
     }
 
     private TypeDeclaration rewriteType(TypeDeclaration td,
-                                         List<BootstrapMethodEntry> bootstrapMethods) {
+                                        List<BootstrapMethodEntry> bootstrapMethods) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
@@ -64,7 +70,7 @@ public class LambdaRewriter implements RewriteRule {
     }
 
     private Statement rewriteStatement(Statement s,
-                                        List<BootstrapMethodEntry> bootstrapMethods) {
+                                       List<BootstrapMethodEntry> bootstrapMethods) {
         if (s instanceof BlockStatement bs) {
             return new BlockStatement(bs.statements().stream()
                     .map(st -> rewriteStatement(st, bootstrapMethods)).toList());
@@ -88,10 +94,12 @@ public class LambdaRewriter implements RewriteRule {
     }
 
     private Expression rewriteExpr(Expression e,
-                                    List<BootstrapMethodEntry> bootstrapMethods) {
+                                   List<BootstrapMethodEntry> bootstrapMethods) {
         if (e instanceof InvocationExpr inv) {
             String name = inv.methodName();
-            if (name == null) return e;
+            if (name == null) {
+                return e;
+            }
 
             // Detect lambda: method name starts with "lambda$"
             if (name.startsWith("lambda$") && inv.target() == null) {
@@ -129,7 +137,9 @@ public class LambdaRewriter implements RewriteRule {
         StringBuilder lambdaText = new StringBuilder("(");
         if (!args.isEmpty()) {
             for (int i = 0; i < args.size(); i++) {
-                if (i > 0) lambdaText.append(", ");
+                if (i > 0) {
+                    lambdaText.append(", ");
+                }
                 lambdaText.append("arg").append(i);
             }
         }

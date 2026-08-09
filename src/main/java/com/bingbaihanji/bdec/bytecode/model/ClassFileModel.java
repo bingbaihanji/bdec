@@ -5,7 +5,6 @@ import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.RecordComponentEntry;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 

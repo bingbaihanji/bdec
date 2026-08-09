@@ -10,8 +10,13 @@ import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
 import com.bingbaihanji.bdec.ast.expr.NewExpr;
-import com.bingbaihanji.bdec.ast.expr.VarExpr;
-import com.bingbaihanji.bdec.ast.stmt.*;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
+import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
 import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
@@ -33,7 +38,7 @@ import java.util.List;
 public class StringConcatRewriter implements RewriteRule {
 
     @Override
-    public String name() { return "string-concat"; }
+    public String name() {return "string-concat";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -86,7 +91,9 @@ public class StringConcatRewriter implements RewriteRule {
         if (e instanceof InvocationExpr inv && "toString".equals(inv.methodName())
                 && inv.arguments().isEmpty() && inv.target() != null) {
             Expression chain = unwindStringBuilder(inv.target());
-            if (chain != null) return chain;
+            if (chain != null) {
+                return chain;
+            }
         }
 
         // InvokeDynamic concat: makeConcatWithConstants(arg1, arg2, ...)
@@ -134,8 +141,12 @@ public class StringConcatRewriter implements RewriteRule {
 
     /** Build a chain of + from a list of expressions. */
     private Expression buildConcatExpr(List<Expression> parts) {
-        if (parts.isEmpty()) return new LitExpr("", JavaType.classType("java/lang/String"));
-        if (parts.size() == 1) return parts.get(0);
+        if (parts.isEmpty()) {
+            return new LitExpr("", JavaType.classType("java/lang/String"));
+        }
+        if (parts.size() == 1) {
+            return parts.get(0);
+        }
         Expression result = parts.get(0);
         for (int i = 1; i < parts.size(); i++) {
             result = new BinExpr(BinaryOperator.ADD, result, parts.get(i));

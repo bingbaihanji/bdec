@@ -18,6 +18,26 @@ import com.bingbaihanji.bdec.type.TypeKind;
  */
 public final class TypeAwareConstantFolder {
 
+    /** Follow InstructionRef chains (including PHI nodes) to find ConstantValue. */
+    private static ConstantValue unwrapConstant(Value v) {
+        if (v instanceof ConstantValue cv) {
+            return cv;
+        }
+        if (v instanceof InstructionRef ref) {
+            IrInstruction def = ref.instruction();
+            // Direct CONST
+            if (def.opcode() == IrOpcode.CONST && !def.operands().isEmpty()
+                    && def.operands().getFirst() instanceof ConstantValue cv) {
+                return cv;
+            }
+            // PHI → pick first operand and recurse
+            if (def.opcode() == IrOpcode.PHI && !def.operands().isEmpty()) {
+                return unwrapConstant(def.operands().getFirst());
+            }
+        }
+        return null;
+    }
+
     /**
      * Fold boolean constants in a method's IR.
      *
@@ -69,23 +89,5 @@ public final class TypeAwareConstantFolder {
             }
         }
         return false;
-    }
-
-    /** Follow InstructionRef chains (including PHI nodes) to find ConstantValue. */
-    private static ConstantValue unwrapConstant(Value v) {
-        if (v instanceof ConstantValue cv) return cv;
-        if (v instanceof InstructionRef ref) {
-            IrInstruction def = ref.instruction();
-            // Direct CONST
-            if (def.opcode() == IrOpcode.CONST && !def.operands().isEmpty()
-                    && def.operands().getFirst() instanceof ConstantValue cv) {
-                return cv;
-            }
-            // PHI → pick first operand and recurse
-            if (def.opcode() == IrOpcode.PHI && !def.operands().isEmpty()) {
-                return unwrapConstant(def.operands().getFirst());
-            }
-        }
-        return null;
     }
 }

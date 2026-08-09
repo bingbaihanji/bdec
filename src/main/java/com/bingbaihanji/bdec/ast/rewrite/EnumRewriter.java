@@ -4,15 +4,8 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
-import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
-import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
-import com.bingbaihanji.bdec.ast.stmt.Statement;
-import com.bingbaihanji.bdec.ast.expr.Expression;
-import com.bingbaihanji.bdec.ast.expr.VarExpr;
-import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,7 +23,7 @@ public class EnumRewriter implements RewriteRule {
     private static final int ACC_ENUM = 0x4000;
 
     @Override
-    public String name() { return "enum"; }
+    public String name() {return "enum";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -42,13 +35,19 @@ public class EnumRewriter implements RewriteRule {
     }
 
     private TypeDeclaration rewriteType(TypeDeclaration td) {
-        if (!isEnum(td)) return td;
+        if (!isEnum(td)) {
+            return td;
+        }
 
         // Filter out synthetic enum members
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
-            if (m instanceof FieldDeclaration fd && isValuesField(fd)) continue;
-            if (m instanceof MethodDeclaration md && isEnumSyntheticMethod(md)) continue;
+            if (m instanceof FieldDeclaration fd && isValuesField(fd)) {
+                continue;
+            }
+            if (m instanceof MethodDeclaration md && isEnumSyntheticMethod(md)) {
+                continue;
+            }
             members.add(m);
         }
 

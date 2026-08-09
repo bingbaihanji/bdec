@@ -39,13 +39,13 @@ public final class FinallyRecognizer {
      * @return the merged statement tree (may be the same object if no changes)
      */
     public BlockStatement merge(BlockStatement root,
-                                 Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
+                                Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
         List<Statement> merged = mergeList(root.statements(), tryCatchAnns);
         return new BlockStatement(merged);
     }
 
     private List<Statement> mergeList(List<Statement> stmts,
-                                       Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
+                                      Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
         // Build index: for each TryStatement, find its handler block
         // We use TryCatchInfo.handlerBlock() as the merge key
         Map<Statement, BasicBlock> tryToHandler = new HashMap<>();
@@ -151,9 +151,9 @@ public final class FinallyRecognizer {
      * is stored during buildTryCatch).
      */
     private void findTryStatements(Statement s,
-                                    Map<BasicBlock, TryCatchInfo> tryCatchAnns,
-                                    Map<Statement, BasicBlock> result,
-                                    Set<Statement> visited) {
+                                   Map<BasicBlock, TryCatchInfo> tryCatchAnns,
+                                   Map<Statement, BasicBlock> result,
+                                   Set<Statement> visited) {
         if (!visited.add(s)) {
             return;
         }
