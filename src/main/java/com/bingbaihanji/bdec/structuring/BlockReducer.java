@@ -716,6 +716,25 @@ public final class BlockReducer {
                 if (compoundOp != null && rhs instanceof BinExpr bin) {
                     assignRhs = bin.right(); // strip the duplicated left operand
                 }
+                // x += 1 → x++  /  x -= 1 → x--
+                if (compoundOp != null && assignRhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
+                        && lr.value() instanceof Integer i && i == 1) {
+                    if (compoundOp == BinaryOperator.ADD) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, lhs);
+                    } else if (compoundOp == BinaryOperator.SUB) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC, lhs);
+                    }
+                }
+                // Increment/decrement detection: x = x + 1 → x++, x = x - 1 → x--
+                if (compoundOp == null && rhs instanceof BinExpr bin
+                        && expressionsMatch(lhs, bin.left())) {
+                    UnaryOperator incOp = detectIncrement(bin);
+                    if (incOp != null) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(incOp, lhs);
+                    }
+                }
                 yield new AssignExpr(lhs, assignRhs, compoundOp);
             }
 
@@ -747,7 +766,31 @@ public final class BlockReducer {
                     lhs = new FieldAccessExpr(null, fName);
                 }
                 Expression rhs = val != null ? valueToExpr(val) : new VarExpr("?");
-                yield new AssignExpr(lhs, rhs);
+                // Apply compound assignment and increment detection for field stores too
+                BinaryOperator compoundOp = detectCompoundOp(lhs, rhs);
+                Expression assignRhs = rhs;
+                if (compoundOp != null && rhs instanceof BinExpr bin) {
+                    assignRhs = bin.right();
+                }
+                // += 1 → ++, -= 1 → --
+                if (compoundOp != null && assignRhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
+                        && lr.value() instanceof Integer i && i == 1) {
+                    if (compoundOp == BinaryOperator.ADD) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, lhs);
+                    } else if (compoundOp == BinaryOperator.SUB) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC, lhs);
+                    }
+                }
+                if (compoundOp == null && rhs instanceof BinExpr bin
+                        && expressionsMatch(lhs, bin.left())) {
+                    UnaryOperator incOp = detectIncrement(bin);
+                    if (incOp != null) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(incOp, lhs);
+                    }
+                }
+                yield new AssignExpr(lhs, assignRhs, compoundOp);
             }
 
             // Binary arithmetic — use original bytecode opcode to infer operator
@@ -1005,7 +1048,19 @@ public final class BlockReducer {
         return null;
     }
 
-    /** Check if two expressions are structurally equivalent (same variable/field). */
+    /** Detect increment/decrement: x = x + 1 → x++, x = x - 1 → x--. */
+    private static UnaryOperator detectIncrement(BinExpr bin) {
+        boolean isOne = bin.right() instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
+                && lr.value() instanceof Integer i && i == 1;
+        if (!isOne) return null;
+        if (bin.operator() == BinaryOperator.ADD) return com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC;
+        if (bin.operator() == BinaryOperator.SUB) return com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC;
+        return null;
+    }
+
+    /** Check if two expressions are structurally equivalent (same variable/field).
+     *  Handles the equivalence: {@code VarExpr("size") ≈ FieldAccessExpr(this, "size")}
+     *  which arises because {@code FIELD_LOAD on this} emits bare field names. */
     private boolean expressionsMatch(Expression a, Expression b) {
         if (a instanceof VarExpr va && b instanceof VarExpr vb) {
             return va.name().equals(vb.name());
@@ -1015,6 +1070,15 @@ public final class BlockReducer {
                     && (fa.target() == null && fb.target() == null
                         || (fa.target() != null && fb.target() != null
                             && expressionsMatch(fa.target(), fb.target())));
+        }
+        // Cross-type: VarExpr("size") matches FieldAccessExpr(this, "size")
+        if (a instanceof VarExpr va && b instanceof FieldAccessExpr fb) {
+            return fb.target() instanceof VarExpr t && "this".equals(t.name())
+                    && va.name().equals(fb.fieldName());
+        }
+        if (b instanceof VarExpr vb && a instanceof FieldAccessExpr fa) {
+            return fa.target() instanceof VarExpr t && "this".equals(t.name())
+                    && vb.name().equals(fa.fieldName());
         }
         return false;
     }
