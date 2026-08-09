@@ -37,11 +37,23 @@ public final class InstructionDecoder {
             return decodeSwitch(in, offset, op);
         }
 
+        // IINC: 2 bytes but they are TWO separate u1 values (index + const),
+        // NOT one u2. Handle before the general case 2 branch.
+        if (op == Opcode.IINC) {
+            int index = in.readUnsignedByte();
+            int incr = in.readByte(); // signed
+            operands.add(index);
+            operands.add(incr);
+            varIndex = index;
+            return new Instruction(offset, opcodeByte, op.mnemonic(),
+                    operands, op.canFallThrough(), op.isTerminal(), jumpTargets, varIndex);
+        }
+
         switch (op.operandBytes()) {
             case 1 -> {
                 int val = in.readUnsignedByte();
                 operands.add(val);
-                if (op.implicitVarIndex() == 0) {
+                if (op.implicitVarIndex() < 0) {
                     varIndex = val;
                 }
             }
