@@ -182,6 +182,12 @@ public final class BlockReducer {
 
         List<BlockGroup> groups = groupAdjacentBlocks(sorted, graph);
         Set<BlockGroup> consumed = new HashSet<>();
+        // Collect handler blocks so we can skip their groups (they'll be
+        // absorbed into try-finally by wrapTryCatchBlocks).
+        Set<BasicBlock> handlerBlocks = new HashSet<>();
+        for (TryCatchInfo tci : tryCatchAnns.values()) {
+            handlerBlocks.add(tci.handlerBlock());
+        }
         List<Statement> statements = new ArrayList<>();
 
         for (int gi = 0; gi < groups.size(); gi++) {
@@ -247,6 +253,11 @@ public final class BlockReducer {
             // are properly wrapped AFTER inner structures are built.
             else if (tryCatchInfo != null) {
                 s = translateGroup(group, ir);
+            }
+            // Handler-only groups (pure exception handlers) are absorbed into
+            // try-finally by wrapTryCatchBlocks — skip them to avoid dead code.
+            else if (group.blocks().size() == 1 && handlerBlocks.contains(group.first())) {
+                continue; // skip handler block — absorbed by try-finally
             }
             // synchronized
             else if (groupHasSynchronizedAnnotation(group, ir)) {
