@@ -1,209 +1,162 @@
 package com.bingbaihanji.bdec.ast.rewrite;
 
 import com.bingbaihanji.bdec.DecompileContext;
-import com.bingbaihanji.bdec.ast.AstNode;
-import com.bingbaihanji.bdec.ast.CompilationUnit;
-import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.ast.*;
 import com.bingbaihanji.bdec.ast.expr.*;
 import com.bingbaihanji.bdec.ast.stmt.*;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
-
 import java.util.*;
 
 /**
- * Final safety-net cleanup that fixes common compile errors in decompiled output.
- * Handles: void returns in non-void methods, undeclared exception variables,
- * duplicate variable declarations, and undeclared variable uses.
+ * Minimal safety-net rewriter. Only fixes patterns that cause compile errors:
+ * (1) void method calls wrapped in return statements
+ * (2) undeclared exception variables in throw statements
+ * (3) duplicate variable declarations in the same block
  */
 public class SourceCleanup implements RewriteRule {
-
     @Override public String name() {return "source-cleanup";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext ctx) {
         List<TypeDeclaration> types = new ArrayList<>();
-        for (TypeDeclaration td : unit.types()) {
-            types.add(cleanupType(td));
-        }
+        for (TypeDeclaration td : unit.types()) types.add(cleanupType(td));
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
     private TypeDeclaration cleanupType(TypeDeclaration td) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
-            if (m instanceof MethodDeclaration md) {
-                members.add(cleanupMethod(md));
-            } else {
-                members.add(m);
-            }
+            if (m instanceof MethodDeclaration md && md.body() != null) {
+                boolean nonVoid = md.returnType() != null
+                        && md.returnType().kind() != TypeKind.VOID;
+                members.add(new MethodDeclaration(md.accessFlags(), md.name(),
+                        md.returnType(), md.parameterNames(), md.parameterTypes(),
+                        md.typeParameters(),
+                        fix(md.body(), nonVoid, md.returnType())));
+            } else members.add(m);
         }
         return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
-    private MethodDeclaration cleanupMethod(MethodDeclaration md) {
-        if (md.body() == null) return md;
-        boolean nonVoid = md.returnType() != null
-                && md.returnType().kind() != TypeKind.VOID;
-        JavaType retType = md.returnType();
-        Set<String> declared = new HashSet<>();
-        // Parameters are already declared
-        if (md.parameterNames() != null) {
-            for (String p : md.parameterNames()) declared.add(p);
-        }
-        Statement cleaned = fix(md.body(), declared, nonVoid, retType);
-        return new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                md.parameterNames(), md.parameterTypes(), md.typeParameters(), cleaned);
-    }
-
-    /** Recursively fix compile errors in statements. */
-    private Statement fix(Statement s, Set<String> declared, boolean nonVoid, JavaType retType) {
+    private Statement fix(Statement s, boolean nonVoid, JavaType retType) {
         if (s == null) return null;
-        if (s instanceof VariableDeclaration vd) {
-            declared.add(vd.name());
-            return s;
-        }
-        if (s instanceof ReturnStatement rs && rs.value() != null) {
-            Expression val = rs.value();
-            if (isVoidCall(val) && nonVoid) {
-                // "return voidCall();" → "voidCall(); return 0;"
+        if (s instanceof ReturnStatement rs && rs.value() != null && nonVoid) {
+            Expression v = rs.value();
+            if (v instanceof InvocationExpr inv && isVoid(inv)) {
                 return new BlockStatement(List.of(
-                        new ExpressionStatement(val),
+                        new ExpressionStatement(v),
                         new ReturnStatement(defaultVal(retType))));
             }
             return s;
         }
-        if (s instanceof ThrowStatement ts
-                && ts.expression() instanceof VarExpr v) {
-            if (!declared.contains(v.name())) {
-                // "throw var4;" → "Throwable var4; throw var4;"
-                declared.add(v.name());
-                return new BlockStatement(List.of(
-                        new VariableDeclaration(
-                                JavaType.classType("java/lang/Throwable"),
-                                v.name(), null),
-                        s));
-            }
-            return s;
+        if (s instanceof ThrowStatement ts && ts.expression() instanceof VarExpr ve
+                && ve.name().startsWith("var")) {
+            return new BlockStatement(List.of(
+                    new VariableDeclaration(JavaType.classType("java/lang/Throwable"),
+                            ve.name(), null), s));
         }
         if (s instanceof BlockStatement bs) {
             List<Statement> cleaned = new ArrayList<>();
-            Set<String> blockDecl = new HashSet<>();
-            for (Statement child : bs.statements()) {
-                // Check for undeclared variable uses BEFORE processing
-                List<Statement> preDecls = checkUndeclared(child, declared);
-                cleaned.addAll(preDecls);
-                // Fix duplicate declarations
-                if (child instanceof VariableDeclaration vd) {
-                    if (blockDecl.contains(vd.name())) {
-                        // Duplicate → convert to assignment
-                        if (vd.initializer() != null) {
-                            cleaned.add(new ExpressionStatement(
-                                    new AssignExpr(new VarExpr(vd.name()),
-                                            vd.initializer())));
-                        }
+            Set<String> seen = new HashSet<>();
+            // First pass: collect all declared names in this block
+            Set<String> allDeclared = new HashSet<>();
+            collectDeclared(bs, allDeclared);
+            for (Statement c : bs.statements()) {
+                if (c instanceof VariableDeclaration vd) {
+                    if (!seen.add(vd.name()) && vd.initializer() != null) {
+                        cleaned.add(new ExpressionStatement(
+                                new AssignExpr(new VarExpr(vd.name()), vd.initializer())));
                         continue;
                     }
-                    blockDecl.add(vd.name());
-                    declared.add(vd.name());
                 }
-                cleaned.add(fix(child, declared, nonVoid, retType));
+                // Check for undeclared variable uses before this statement
+                Set<String> used = new HashSet<>();
+                collectVarNames(c, used);
+                for (String u : used) {
+                    if (!allDeclared.contains(u) && !seen.contains(u)
+                            && !isBuiltin(u)) {
+                        cleaned.add(new VariableDeclaration(
+                                JavaType.INT, u, null));
+                        seen.add(u);
+                        allDeclared.add(u);
+                    }
+                }
+                cleaned.add(fix(c, nonVoid, retType));
             }
             return new BlockStatement(cleaned);
         }
         if (s instanceof IfStatement i) {
             return new IfStatement(i.condition(),
-                    fix(i.thenBranch(), declared, nonVoid, retType),
-                    i.elseBranch() != null
-                            ? fix(i.elseBranch(), declared, nonVoid, retType) : null);
+                    fix(i.thenBranch(), nonVoid, retType),
+                    i.elseBranch() != null ? fix(i.elseBranch(), nonVoid, retType) : null);
         }
         if (s instanceof LoopStatement l) {
             return new LoopStatement(l.loopKind(), l.condition(),
-                    fix(l.body(), declared, nonVoid, retType));
+                    fix(l.body(), nonVoid, retType));
         }
         if (s instanceof TryStatement t) {
-            List<TryStatement.CatchClause> clauses = new ArrayList<>();
-            for (TryStatement.CatchClause cc : t.catchClauses()) {
-                declared.add(cc.varName());
-                clauses.add(new TryStatement.CatchClause(cc.exceptionType(), cc.varName(),
-                        fix(cc.body(), declared, nonVoid, retType)));
-            }
-            return new TryStatement(
-                    fix(t.tryBody(), declared, nonVoid, retType),
-                    clauses,
-                    t.finallyBody() != null
-                            ? fix(t.finallyBody(), declared, nonVoid, retType) : null);
-        }
-        if (s instanceof ExpressionStatement es) {
-            checkUndeclaredInExpr(es.expression(), declared);
-            return s;
+            List<TryStatement.CatchClause> cc = new ArrayList<>();
+            for (var c : t.catchClauses())
+                cc.add(new TryStatement.CatchClause(c.exceptionType(), c.varName(),
+                        fix(c.body(), nonVoid, retType)));
+            return new TryStatement(fix(t.tryBody(), nonVoid, retType), cc,
+                    t.finallyBody() != null ? fix(t.finallyBody(), nonVoid, retType) : null);
         }
         return s;
     }
 
-    /** Check for undeclared variable references and add declarations if needed.
-     *  Returns statements to insert BEFORE the current statement. */
-    private List<Statement> checkUndeclared(Statement s, Set<String> declared) {
-        Set<String> refs = new HashSet<>();
-        collectVarRefs(s, refs);
-        List<Statement> result = new ArrayList<>();
-        for (String name : refs) {
-            if (!declared.contains(name) && !name.equals("null")
-                    && !name.equals("this") && !name.equals("true")
-                    && !name.equals("false") && !name.startsWith("/*")) {
-                declared.add(name);
-                result.add(new VariableDeclaration(
-                        JavaType.classType("java/lang/Object"),
-                        name, null));
-            }
-        }
-        return result;
+    private boolean isVoid(InvocationExpr inv) {
+        return inv.returnType() != null && inv.returnType().kind() == TypeKind.VOID;
     }
 
-    /** Collect variable names referenced in a statement tree. */
-    private void collectVarRefs(Statement s, Set<String> refs) {
-        if (s instanceof ExpressionStatement es) {
-            collectVarRefsInExpr(es.expression(), refs);
-        } else if (s instanceof ReturnStatement rs && rs.value() != null) {
-            collectVarRefsInExpr(rs.value(), refs);
-        } else if (s instanceof ThrowStatement ts && ts.expression() != null) {
-            collectVarRefsInExpr(ts.expression(), refs);
-        }
+    private void collectDeclared(Statement s, Set<String> out) {
+        if (s instanceof VariableDeclaration vd) out.add(vd.name());
+        else if (s instanceof BlockStatement bs)
+            bs.statements().forEach(c -> collectDeclared(c, out));
     }
 
-    private void collectVarRefsInExpr(Expression e, Set<String> refs) {
-        if (e instanceof VarExpr v) refs.add(v.name());
-        if (e instanceof BinExpr b) {
-            collectVarRefsInExpr(b.left(), refs);
-            collectVarRefsInExpr(b.right(), refs);
-        }
-        if (e instanceof InvocationExpr inv) {
-            if (inv.target() != null) collectVarRefsInExpr(inv.target(), refs);
-            for (Expression arg : inv.arguments()) collectVarRefsInExpr(arg, refs);
-        }
-        if (e instanceof FieldAccessExpr fa && fa.target() != null) {
-            collectVarRefsInExpr(fa.target(), refs);
-        }
-        if (e instanceof AssignExpr a) {
-            collectVarRefsInExpr(a.target(), refs);
-            collectVarRefsInExpr(a.value(), refs);
+    private void collectVarNames(Statement s, Set<String> out) {
+        if (s instanceof ExpressionStatement es) collectVarNamesInExpr(es.expression(), out);
+        else if (s instanceof ReturnStatement rs && rs.value() != null)
+            collectVarNamesInExpr(rs.value(), out);
+        else if (s instanceof ThrowStatement ts && ts.expression() != null)
+            collectVarNamesInExpr(ts.expression(), out);
+        else if (s instanceof IfStatement i) {
+            collectVarNamesInExpr(i.condition(), out);
+            collectVarNames(i.thenBranch(), out);
+            if (i.elseBranch() != null) collectVarNames(i.elseBranch(), out);
+        } else if (s instanceof VariableDeclaration vd && vd.initializer() != null)
+            collectVarNamesInExpr(vd.initializer(), out);
+    }
+
+    private void collectVarNamesInExpr(Expression e, Set<String> out) {
+        if (e == null) return;
+        if (e instanceof VarExpr v) out.add(v.name());
+        else if (e instanceof BinExpr b) {
+            collectVarNamesInExpr(b.left(), out);
+            collectVarNamesInExpr(b.right(), out);
+        } else if (e instanceof InvocationExpr inv) {
+            if (inv.target() != null) collectVarNamesInExpr(inv.target(), out);
+            for (Expression a : inv.arguments()) collectVarNamesInExpr(a, out);
+        } else if (e instanceof FieldAccessExpr fa && fa.target() != null)
+            collectVarNamesInExpr(fa.target(), out);
+        else if (e instanceof AssignExpr a) {
+            collectVarNamesInExpr(a.target(), out);
+            collectVarNamesInExpr(a.value(), out);
         }
     }
 
-    private void checkUndeclaredInExpr(Expression e, Set<String> declared) {
-        // no-op for now
+    private boolean isBuiltin(String name) {
+        return name.equals("null") || name.equals("this")
+                || name.equals("true") || name.equals("false")
+                || name.equals("super");
     }
 
-    private boolean isVoidCall(Expression e) {
-        return e instanceof InvocationExpr inv
-                && inv.returnType() != null
-                && inv.returnType().kind() == TypeKind.VOID;
-    }
-
-    private Expression defaultVal(JavaType type) {
-        if (type == null) return new VarExpr("null");
-        return switch (type.kind()) {
+    private Expression defaultVal(JavaType t) {
+        if (t == null) return new VarExpr("null");
+        return switch (t.kind()) {
             case INT, SHORT, BYTE, CHAR -> new LitExpr(0, JavaType.INT);
             case LONG -> new LitExpr(0L, JavaType.LONG);
             case FLOAT -> new LitExpr(0.0f, JavaType.FLOAT);

@@ -1427,6 +1427,20 @@ public final class BlockReducer {
             return new BlockStatement(List.of());
         }
 
+        // Post-pass: fix duplicate variable declarations in the same block.
+        // When scoping fails, the same variable may get multiple "Type name = ..."
+        // declarations. Convert duplicates to plain assignments.
+        Set<String> seenDecls = new HashSet<>();
+        for (int i = 0; i < stmts.size(); i++) {
+            if (stmts.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
+                if (!seenDecls.add(vd.name()) && vd.initializer() != null) {
+                    // Duplicate → convert to plain assignment
+                    stmts.set(i, new ExpressionStatement(
+                            new AssignExpr(new VarExpr(vd.name()), vd.initializer())));
+                }
+            }
+        }
+
         // Post-pass: strip unreachable statements after RETURN/THROW/BREAK/CONTINUE.
         // When CFG structuring fails, unconditional control transfer instructions
         // are followed by dead code that causes compile errors.
@@ -1484,7 +1498,18 @@ public final class BlockReducer {
                     yield new ReturnStatement(retVal);
                 }
             }
-            case THROW -> new ThrowStatement(translateExpr(insn));
+            case THROW -> {
+                Expression thrown = translateExpr(insn);
+                if (thrown instanceof VarExpr v && v.name().startsWith("var")
+                        && tryDeclareVar("$exc$" + v.name())) {
+                    yield new com.bingbaihanji.bdec.ast.stmt.BlockStatement(List.of(
+                            new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
+                                    JavaType.classType("java/lang/Throwable"),
+                                    v.name(), null),
+                            new ThrowStatement(thrown)));
+                }
+                yield new ThrowStatement(thrown);
+            }
             case STORE -> {
                 // Emit "Type name = value;" for the first store to each
                 // logical variable. Use both slot+version: version 1 at any
