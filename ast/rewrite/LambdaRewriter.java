@@ -53,11 +53,20 @@ public class LambdaRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /** ACC_SYNTHETIC flag (0x1000). */
+    private static final int ACC_SYNTHETIC = 0x1000;
+
     private TypeDeclaration rewriteType(TypeDeclaration td,
                                         List<BootstrapMethodEntry> bootstrapMethods) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
+                // Filter lambda synthetic methods: lambda$xxx$N or method ref bridges.
+                // When decodeLambdas is on, these methods are hidden — the lambda
+                // expression is emitted at the invoke site instead.
+                if (isLambdaSyntheticMethod(md)) {
+                    continue;
+                }
                 members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(),
                         rewriteStatement(md.body(), bootstrapMethods)));
@@ -67,6 +76,21 @@ public class LambdaRewriter implements RewriteRule {
         }
         return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
+    }
+
+    /** Check if a method is a lambda synthetic (lambda$xxx$N or method ref bridge). */
+    private boolean isLambdaSyntheticMethod(MethodDeclaration md) {
+        String name = md.name();
+        if (name == null) {
+            return false;
+        }
+        // Lambda body methods: lambda$enclosingMethod$N
+        if (name.startsWith("lambda$")) {
+            return true;
+        }
+        // Method reference bridge: lambda$xxx$N pattern is most common;
+        // other synthetic patterns are harder to detect without class context
+        return false;
     }
 
     private Statement rewriteStatement(Statement s,

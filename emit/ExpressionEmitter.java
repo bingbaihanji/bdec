@@ -11,6 +11,7 @@ import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
 import com.bingbaihanji.bdec.ast.expr.NewExpr;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
@@ -173,6 +174,7 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             case NEW -> emitNew((NewExpr) expr);
             case INSTANCE_OF -> emitInstanceOf((InstanceOfExpr) expr);
             case ARRAY_ACCESS -> emitArrayAccess((ArrayAccessExpr) expr);
+            case LAMBDA -> emitLambda((LambdaExpr) expr);
             default -> w.write("/*" + expr.kind() + "*/");
         }
     }
@@ -293,6 +295,38 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
         w.write(" instanceof ");
         w.write(typeName(io.targetType()));
+    }
+
+    private void emitLambda(LambdaExpr lambda) {
+        if (lambda.isMethodRef()) {
+            w.write(lambda.methodRefOwner());
+            w.write("::");
+            w.write(lambda.methodRefName());
+            return;
+        }
+        // Lambda expression
+        w.write("(");
+        List<LambdaExpr.Param> params = lambda.parameters();
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) {
+                w.write(", ");
+            }
+            LambdaExpr.Param p = params.get(i);
+            if (p.type() != null && p.type().kind() != com.bingbaihanji.bdec.type.TypeKind.CLASS) {
+                w.write(typeName(p.type()));
+                w.write(" ");
+            }
+            w.write(p.name());
+        }
+        w.write(") -> ");
+        if (lambda.isExpressionBody() && lambda.bodyExpr() != null) {
+            emit(lambda.bodyExpr());
+        } else if (lambda.bodyBlock() != null) {
+            // Block lambda — delegate to statement emitter via a visitor pattern
+            w.write("{ /* lambda block */ }");
+        } else {
+            w.write("{}");
+        }
     }
 
     private void emitArrayAccess(ArrayAccessExpr aa) {

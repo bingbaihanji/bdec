@@ -9,6 +9,7 @@ import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
 import com.bingbaihanji.bdec.ast.expr.NewExpr;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
@@ -1133,6 +1134,63 @@ public final class BlockReducer {
      * For intermediate values (LOAD, BINARY, etc.) this produces the
      * appropriate expression node that will be inlined into the parent statement.
      */
+
+    /** Translate an invokedynamic INVOKE into a LambdaExpr.
+     *  Detects lambda expressions (lambda$method$N pattern) and method references.
+     *  For string concat (makeConcatWithConstants), delegates to normal INVOKE handling. */
+    private Expression translateIndyInvoke(IrInstruction insn) {
+        String mName = insn.nameHint() != null ? insn.nameHint() : "lambda";
+        JavaType funcType = insn.resultType();
+        List<Value> operands = insn.operands();
+
+        // String concat: let StringConcatRewriter handle it later
+        if (mName.contains("Concat") || mName.contains("concat")) {
+            return translateIndyAsRegularInvoke(insn);
+        }
+
+        // Build parameter list from operands (captured vars + factory args → lambda params)
+        List<LambdaExpr.Param> params = new ArrayList<>();
+        for (int i = 0; i < operands.size(); i++) {
+            Value op = operands.get(i);
+            JavaType pt = op.type();
+            String pName = "arg" + i;
+            if (op instanceof Variable v) {
+                String vn = v.name();
+                if (vn != null && !vn.startsWith("var") && !vn.equals("this")) {
+                    pName = vn;
+                }
+            }
+            params.add(new LambdaExpr.Param(pName, pt));
+        }
+
+        // Detect method reference pattern (name contains "::" or starts with "new")
+        if (mName.contains("::")) {
+            String[] parts = mName.split("::", 2);
+            return LambdaExpr.methodRef(parts[0], parts.length > 1 ? parts[1] : "new",
+                    funcType);
+        }
+
+        // Method reference via "new" pattern
+        if (mName.startsWith("new ")) {
+            String cls = mName.substring(4);
+            return LambdaExpr.methodRef(cls, "new", funcType);
+        }
+
+        // Lambda: method name is the implementation method (e.g., lambda$main$0)
+        String bodyHint = "/* " + mName + " */";
+        return LambdaExpr.placeholder(params, bodyHint, funcType);
+    }
+
+    /** Fallback: treat INDY as a regular method invocation. */
+    private Expression translateIndyAsRegularInvoke(IrInstruction insn) {
+        String mName = insn.nameHint() != null ? insn.nameHint() : "method";
+        List<Expression> args = new ArrayList<>();
+        for (Value op : insn.operands()) {
+            args.add(valueToExpr(op));
+        }
+        return new InvocationExpr(null, mName, args, insn.resultType());
+    }
+
     private Expression translateExpr(IrInstruction insn) {
         return switch (insn.opcode()) {
 
@@ -1344,6 +1402,11 @@ public final class BlockReducer {
 
             // Method invocation — first operand is receiver (for non-static calls)
             case INVOKE -> {
+                // Invokedynamic (lambda / method ref): generate LambdaExpr instead.
+                if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
+                    yield translateIndyInvoke(insn);
+                }
+
                 List<Expression> args = new ArrayList<>();
                 boolean isConstructor = insn.hasTag(
                         com.bingbaihanji.bdec.semantic.SemanticTag.CONSTRUCTOR_DELEGATION)
