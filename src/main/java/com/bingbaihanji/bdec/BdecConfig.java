@@ -28,6 +28,8 @@ public final class BdecConfig {
 
     private final boolean decodeForEach;
 
+    private final boolean decodeStringSwitch;
+
     private final boolean collapseImports;
 
     // === SSA ===
@@ -49,6 +51,7 @@ public final class BdecConfig {
         this.decodeStringConcat = b.decodeStringConcat;
         this.decodeTryResource = b.decodeTryResource;
         this.decodeForEach = b.decodeForEach;
+        this.decodeStringSwitch = b.decodeStringSwitch;
         this.collapseImports = b.collapseImports;
         this.ssaThreshold = b.ssaThreshold;
         this.debugDumpCfg = b.debugDumpCfg;
@@ -83,6 +86,8 @@ public final class BdecConfig {
 
     public boolean decodeForEach() {return decodeForEach;}
 
+    public boolean decodeStringSwitch() {return decodeStringSwitch;}
+
     public boolean collapseImports() {return collapseImports;}
 
     public int ssaThreshold() {return ssaThreshold;}
@@ -112,6 +117,8 @@ public final class BdecConfig {
         private boolean decodeTryResource = true;
 
         private boolean decodeForEach = true;
+
+        private boolean decodeStringSwitch = true;
 
         private boolean collapseImports = true;
 
@@ -168,6 +175,11 @@ public final class BdecConfig {
 
         public Builder decodeForEach(boolean v) {
             this.decodeForEach = v;
+            return this;
+        }
+
+        public Builder decodeStringSwitch(boolean v) {
+            this.decodeStringSwitch = v;
             return this;
         }
 

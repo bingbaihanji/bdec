@@ -132,7 +132,7 @@ public class SsaBuilderTest {
         MethodModel method = new MethodModel(0, "test", desc, returnType,
                 new JavaType[0], insns, List.of(), 4, 4);
         ControlFlowGraph cfg = cfgBuilder.build(method);
-        return irBuilder.build(cfg, method, new ConstantPoolEntry[0]);
+        return irBuilder.build(cfg, method, new ConstantPoolEntry[0], List.of());
     }
 
     private ControlFlowGraph buildEmptyCfg() {

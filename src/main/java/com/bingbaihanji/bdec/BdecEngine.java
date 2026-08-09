@@ -5,6 +5,7 @@ import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.rewrite.AstRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.BoxingRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.EnumRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.EnumSwitchRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.ForEachRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.LambdaRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.MethodRefRewriter;
@@ -12,6 +13,7 @@ import com.bingbaihanji.bdec.ast.rewrite.PatternMatchRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.RecordRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.SealedClassRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.StringConcatRewriter;
+import com.bingbaihanji.bdec.ast.rewrite.StringSwitchRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.SwitchExprRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.TernaryRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.TextBlockRewriter;
@@ -75,6 +77,8 @@ public class BdecEngine implements Decompiler {
                     new ForEachRewriter(), new TryResourceRewriter(),
                     new SwitchExprRewriter(), new PatternMatchRewriter(),
                     new TernaryRewriter(), new BoxingRewriter(),
+                    new StringSwitchRewriter(),
+                    new EnumSwitchRewriter(),
                     new EnumRewriter()));
 
     private final SourceEmitter sourceEmitter = new SourceEmitter();
@@ -123,7 +127,8 @@ public class BdecEngine implements Decompiler {
                     ControlFlowGraph cfg = cfgBuilder.build(method);
 
                     // Phase 3: LinearIr
-                    LinearIr ir = irBuilder.build(cfg, method, classFile.constantPool());
+                    LinearIr ir = irBuilder.build(cfg, method, classFile.constantPool(),
+                            classFile.bootstrapMethods());
 
                     // Phase 3.5: Semantic Reconstruction (NEW)
                     ir = semanticReconstructor.reconstruct(ir, method, cfg, classFile);

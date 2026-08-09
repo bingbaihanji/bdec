@@ -128,7 +128,7 @@ public class IrBuilderTest {
                 JavaType.VOID, new JavaType[0],
                 List.of(), List.of(), 0, 0);
         ControlFlowGraph cfg = cfgBuilder.build(method);
-        LinearIr ir = builder.build(cfg, method, new ConstantPoolEntry[0]);
+        LinearIr ir = builder.build(cfg, method, new ConstantPoolEntry[0], List.of());
         assertNotNull(ir);
         assertEquals(method, ir.method());
     }
@@ -188,6 +188,6 @@ public class IrBuilderTest {
         MethodModel method = new MethodModel(0, "test", desc, returnType,
                 new JavaType[0], insns, List.of(), 4, 4);
         ControlFlowGraph cfg = cfgBuilder.build(method);
-        return builder.build(cfg, method, new ConstantPoolEntry[0]);
+        return builder.build(cfg, method, new ConstantPoolEntry[0], List.of());
     }
 }

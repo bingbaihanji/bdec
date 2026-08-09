@@ -75,8 +75,15 @@ public class DecompileTestHarness {
                 throw new RuntimeException("No .class file produced for: " + className);
             }
 
-            // Decompile the first class file
-            Path classFile = classFiles.get(0);
+            // Decompile the main class file (prefer exact match over inner/anonymous classes).
+            // When javac compiles sources with inner classes or enums, it produces multiple
+            // .class files (e.g. Foo.class, Foo$Inner.class, Foo$1.class). We need the
+            // top-level class, which has no '$' in its simple file name.
+            String expectedFileName = extractSimpleName(className) + ".class";
+            Path classFile = classFiles.stream()
+                    .filter(p -> p.getFileName().toString().equals(expectedFileName))
+                    .findFirst()
+                    .orElse(classFiles.get(0));
             BdecEngine engine = new BdecEngine(config, d -> {});
             BdecResult result = engine.decompile(classFile,
                     DecompileContext.empty(config));
