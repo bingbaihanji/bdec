@@ -2,6 +2,7 @@ package com.bingbaihanji.bdec.ir;
 
 import com.bingbaihanji.bdec.bytecode.model.Instruction;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
+import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
 import com.bingbaihanji.bdec.bytecode.opcode.Opcode;
 import com.bingbaihanji.bdec.bytecode.parser.ConstantPoolParser;
@@ -38,6 +39,9 @@ public final class IrBuilder {
     /** Current method's LVT names (slot → name), set during simulateBlock. */
     private java.util.Map<Integer, String> currentLvtNames = java.util.Collections.emptyMap();
 
+    /** Bootstrap methods from the class file, needed for invokedynamic resolution. */
+    private List<BootstrapMethodEntry> currentBootstrapMethods = java.util.Collections.emptyList();
+
     /** Check if a value is category 2 (long or double, occupies two JVM stack slots). */
     private static boolean isCategory2(Value v) {
         return v.type() != null && (v.type().kind() == TypeKind.LONG
@@ -69,7 +73,10 @@ public final class IrBuilder {
      * Build LinearIr from CFG by symbolic execution of each basic block.
      */
     public LinearIr build(ControlFlowGraph cfg, MethodModel method,
-                          ConstantPoolEntry[] constantPool) {
+                          ConstantPoolEntry[] constantPool,
+                          List<BootstrapMethodEntry> bootstrapMethods) {
+        this.currentBootstrapMethods = bootstrapMethods != null
+                ? bootstrapMethods : java.util.Collections.emptyList();
         List<IrInstruction> allInstructions = new ArrayList<>();
         List<Variable> variables = new ArrayList<>();
         Map<BasicBlock, FrameState> blockOutputs = new HashMap<>();
@@ -921,6 +928,7 @@ public final class IrBuilder {
         int argCount = 0;
         JavaType returnType = JavaType.classType("java/lang/Object");
         String methodName = "invokeDynamic";
+        String descriptor = "";
         int bootstrapIdx = -1;
 
         if (cpIdx > 0 && cpIdx < cp.length) {
@@ -931,11 +939,11 @@ public final class IrBuilder {
                     int natIdx = indy.nameAndTypeIndex();
                     if (natIdx > 0 && natIdx < cp.length
                             && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
-                        String desc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
+                        descriptor = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
                         methodName = ConstantPoolParser.utf8(cp, nat.nameIndex());
-                        var params = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(desc);
+                        var params = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(descriptor);
                         argCount = params.length;
-                        returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(desc);
+                        returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(descriptor);
                     }
                 }
             } catch (Exception ignored) {
@@ -951,15 +959,83 @@ public final class IrBuilder {
 
         IrInstruction inv = IrInstruction.invoke(nextId(), null, args, returnType,
                 offset, blockId, methodName);
-        // Tag as invokedynamic — BlockReducer uses this to generate LambdaExpr.
+
+        // Resolve bootstrap method info for downstream detection of lambda vs method ref.
+        java.util.Map<String, Object> annotProps = new java.util.LinkedHashMap<>();
+        annotProps.put("bootstrapIdx", bootstrapIdx);
+        annotProps.put("indyName", methodName);
+        annotProps.put("descriptor", descriptor);
+
+        if (bootstrapIdx >= 0 && !currentBootstrapMethods.isEmpty()
+                && bootstrapIdx < currentBootstrapMethods.size()) {
+            try {
+                BootstrapMethodEntry bsm = currentBootstrapMethods.get(bootstrapIdx);
+                resolveBootstrapMethod(bsm, cp, annotProps);
+            } catch (Exception ignored) {
+                // bootstrap resolution is best-effort
+            }
+        }
+
         inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
-                com.bingbaihanji.bdec.semantic.SemanticTag.INDY,
-                "bootstrapIdx", bootstrapIdx,
-                "indyName", methodName));
+                com.bingbaihanji.bdec.semantic.SemanticTag.INDY, annotProps));
         instructions.add(inv);
         if (returnType.kind() != TypeKind.VOID) {
             inv.setResultValue(new InstructionRef(inv, returnType));
             stack.push(new InstructionRef(inv, returnType));
+        }
+    }
+
+    /** Resolve bootstrap method arguments to extract the implementation method handle.
+     *  For LambdaMetafactory patterns, argument[1] is the MethodHandle for the
+     *  lambda body / method reference target. */
+    private void resolveBootstrapMethod(BootstrapMethodEntry bsm, ConstantPoolEntry[] cp,
+                                        java.util.Map<String, Object> annotProps) {
+        java.util.List<Integer> arguments = bsm.arguments();
+        if (arguments.size() < 2) {
+            return;
+        }
+
+        // Argument 1 is the implementation method handle
+        int implHandleIdx = arguments.get(1);
+        if (implHandleIdx <= 0 || implHandleIdx >= cp.length) {
+            return;
+        }
+
+        ConstantPoolEntry implHandleEntry = cp[implHandleIdx];
+        if (!(implHandleEntry instanceof ConstantPoolEntry.CpMethodHandle implHandle)) {
+            return;
+        }
+
+        int refKind = implHandle.referenceKind();
+        int refIdx = implHandle.referenceIndex();
+        annotProps.put("implKind", refKind);
+
+        if (refIdx <= 0 || refIdx >= cp.length) {
+            return;
+        }
+
+        ConstantPoolEntry refEntry = cp[refIdx];
+        int classIdx = -1;
+        int natIdx = -1;
+        if (refEntry instanceof ConstantPoolEntry.CpMethodRef mr) {
+            classIdx = mr.classIndex();
+            natIdx = mr.nameAndTypeIndex();
+        } else if (refEntry instanceof ConstantPoolEntry.CpInterfaceMethodRef imr) {
+            classIdx = imr.classIndex();
+            natIdx = imr.nameAndTypeIndex();
+        } else {
+            return;
+        }
+
+        if (classIdx > 0) {
+            String implOwner = ConstantPoolParser.className(cp, classIdx);
+            annotProps.put("implOwner", implOwner);
+        }
+
+        if (natIdx > 0 && natIdx < cp.length
+                && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
+            String implName = ConstantPoolParser.utf8(cp, nat.nameIndex());
+            annotProps.put("implName", implName);
         }
     }
 

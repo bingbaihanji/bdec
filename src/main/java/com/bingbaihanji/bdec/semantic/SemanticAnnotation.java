@@ -55,6 +55,12 @@ public record SemanticAnnotation(
         return new SemanticAnnotation(tag, Collections.unmodifiableMap(props));
     }
 
+    /** Create an annotation with a tag and a map of properties. */
+    public static SemanticAnnotation of(SemanticTag tag, Map<String, Object> properties) {
+        return new SemanticAnnotation(tag, Collections.unmodifiableMap(
+                new LinkedHashMap<>(properties)));
+    }
+
     /** Convenience: get a property value with a default. */
     public Object get(String key, Object defaultValue) {
         return properties.getOrDefault(key, defaultValue);
