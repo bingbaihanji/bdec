@@ -243,6 +243,22 @@ public final class BlockReducer {
         if (s instanceof BlockStatement bs) {
             return bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
         }
+        // Recurse into compound statements that may contain returns
+        if (s instanceof IfStatement i) {
+            return hasReturnStmt(i.thenBranch())
+                    || (i.elseBranch() != null && hasReturnStmt(i.elseBranch()));
+        }
+        if (s instanceof LoopStatement l) {
+            return hasReturnStmt(l.body());
+        }
+        if (s instanceof TryStatement t) {
+            boolean inTry = hasReturnStmt(t.tryBody());
+            boolean inCatch = t.catchClauses().stream()
+                    .anyMatch(cc -> hasReturnStmt(cc.body()));
+            boolean inFinally = t.finallyBody() != null
+                    && hasReturnStmt(t.finallyBody());
+            return inTry || inCatch || inFinally;
+        }
         return false;
     }
 
@@ -560,12 +576,12 @@ public final class BlockReducer {
                 List<Statement> preIfStmts = translateHeaderNonCondition(group, ir);
 
                 // Translate then-body: find the group(s) containing then-blocks
-                Statement thenBody = translateBranchBody(ifInfo.thenBlocks(), groups, ir, consumed);
+                Statement thenBody = translateBranchBody(ifInfo.thenBlocks(), groups, ir, consumed, graph, postDom);
 
                 // Translate else-body: find the group(s) containing else-blocks
                 Statement elseBody = null;
                 if (!ifInfo.elseBlocks().isEmpty()) {
-                    elseBody = translateBranchBody(ifInfo.elseBlocks(), groups, ir, consumed);
+                    elseBody = translateBranchBody(ifInfo.elseBlocks(), groups, ir, consumed, graph, postDom);
                 }
 
                 // Eliminate empty else blocks — don't emit "else { }"
@@ -824,7 +840,10 @@ public final class BlockReducer {
         return null;
     }
 
-    /** Collect all blocks reachable from start up to (but not including) stop. */
+    /** Collect all blocks reachable from start up to (but not including) stop.
+     *  Only follows non-exception edges (FALL_THROUGH, TRUE_BRANCH, FALSE_BRANCH,
+     *  BACK_EDGE). Exception edges to handlers must NOT be followed, otherwise
+     *  handler blocks get included in if/else branch bodies. */
     private Set<BasicBlock> collectReachableBlocks(BasicBlock start, BasicBlock stop,
                                                    ControlFlowGraph graph) {
         Set<BasicBlock> result = new LinkedHashSet<>();
@@ -835,13 +854,80 @@ public final class BlockReducer {
             if (curr == stop || !result.add(curr)) {
                 continue;
             }
-            for (BasicBlock succ : graph.successorsOf(curr)) {
+            for (var edge : graph.outgoingOf(curr)) {
+                if (edge.kind() == EdgeKind.EXCEPTION) {
+                    continue; // skip exception edges — handler blocks are not part of the branch
+                }
+                BasicBlock succ = edge.target();
                 if (succ != stop) {
                     queue.add(succ);
                 }
             }
         }
         return result;
+    }
+
+    /** Translate a single group within a branch body, recursively detecting
+     *  nested if-else structures. Uses detectIfHeader on the group to check
+     *  whether it's a nested condition header. */
+    private Statement translateBranchGroup(BlockGroup group, LinearIr ir,
+                                           List<BlockGroup> allGroups,
+                                           Set<BlockGroup> consumed,
+                                           ControlFlowGraph graph,
+                                           PostDominatorTree postDom) {
+        // Try to detect if this group is a nested if-header
+        IfInfo nestedIf = detectIfHeader(group, graph, ir, postDom);
+        if (nestedIf != null) {
+            Expression cond = simplifyCondition(extractCondition(group, ir));
+
+            // Translate pre-condition statements from the header
+            List<Statement> preIfStmts = translateHeaderNonCondition(group, ir);
+
+            Statement thenBody = translateBranchBody(nestedIf.thenBlocks(), allGroups,
+                    ir, consumed, graph, postDom);
+            Statement elseBody = null;
+            if (!nestedIf.elseBlocks().isEmpty()) {
+                elseBody = translateBranchBody(nestedIf.elseBlocks(), allGroups,
+                        ir, consumed, graph, postDom);
+            }
+            if (elseBody != null && isEmptyBlock(elseBody)) {
+                elseBody = null;
+            }
+
+            // Post-process branch bodies
+            boolean thenHasReturn = hasReturnStmt(thenBody);
+            boolean elseHasReturn = elseBody != null && hasReturnStmt(elseBody);
+            boolean isBoolRet = ir.method().returnType() != null
+                    && ir.method().returnType().kind() == TypeKind.BOOLEAN;
+            if (thenHasReturn != elseHasReturn) {
+                if (thenHasReturn) {
+                    thenBody = stripOrphanExprs(thenBody);
+                    if (elseBody != null) {
+                        elseBody = wrapAsReturn(elseBody, isBoolRet);
+                    }
+                } else {
+                    if (thenBody != null) {
+                        thenBody = wrapAsReturn(thenBody, isBoolRet);
+                    }
+                    elseBody = elseBody != null ? stripOrphanExprs(elseBody) : null;
+                }
+            }
+
+            Statement ifStmt = new IfStatement(
+                    cond != null ? cond : new VarExpr("/*condition*/"),
+                    thenBody != null ? thenBody : new BlockStatement(List.of()),
+                    elseBody);
+
+            if (!preIfStmts.isEmpty()) {
+                List<Statement> combined = new ArrayList<>(preIfStmts);
+                combined.add(ifStmt);
+                return new BlockStatement(combined);
+            }
+            return ifStmt;
+        }
+
+        // Not a nested if-header — translate normally
+        return translateGroup(group, ir);
     }
 
     /**
@@ -851,11 +937,15 @@ public final class BlockReducer {
      * Checks if any block in a group belongs to the branch (not just the first),
      * so groups formed after CFG folding that start with non-branch blocks
      * are still correctly matched.
+     *
+     * Recursively detects nested if-else/loop patterns within the branch body.
      */
     private Statement translateBranchBody(Set<BasicBlock> branchBlocks,
                                           List<BlockGroup> allGroups,
                                           LinearIr ir,
-                                          Set<BlockGroup> consumed) {
+                                          Set<BlockGroup> consumed,
+                                          ControlFlowGraph graph,
+                                          PostDominatorTree postDom) {
         // Set branch context for PHI resolution
         Set<Integer> prevBranchBlocks = currentBranchBlocks;
         Set<Integer> branchBlockIds = new HashSet<>();
@@ -880,7 +970,8 @@ public final class BlockReducer {
                 }
                 if (groupInBranch) {
                     consumed.add(g);
-                    Statement stmt = translateGroup(g, ir);
+                    // Recursively detect nested if-else within the branch
+                    Statement stmt = translateBranchGroup(g, ir, allGroups, consumed, graph, postDom);
                     if (stmt != null) {
                         bodyStmts.add(stmt);
                     }
