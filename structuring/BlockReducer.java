@@ -561,6 +561,14 @@ public final class BlockReducer {
                 ifInfo = detectIfHeader(group, graph, ir, postDom);
             }
 
+            // Handler-only groups: skip before any structure detection.
+            // Exception handlers are absorbed into try-finally by wrapTryCatchBlocks.
+            // Without early skip, they may be misidentified as loops (due to
+            // self-referencing exception edges in finally handlers).
+            if (group.blocks().size() == 1 && handlerBlocks.contains(group.first())) {
+                continue; // skip handler block
+            }
+
             Statement s;
 
             // if-else: build proper IfStatement with both then and else bodies
@@ -2242,22 +2250,88 @@ public final class BlockReducer {
      *  Detects finally blocks: when the handler is catch-all (null or Throwable)
      *  and ends with THROW (the re-throw pattern), extract the handler body
      *  minus the throw as a finally block. */
+    /** Collect all IR instructions from the handler, following fallthrough chain
+     *  when the CFG splits the handler block due to self-referencing exception edges. */
+    private List<IrInstruction> collectHandlerInstructions(TryCatchInfo info, LinearIr ir) {
+        List<IrInstruction> result = new ArrayList<>();
+        ControlFlowGraph cfg = ir.controlFlowGraph();
+        BasicBlock current = info.handlerBlock();
+        Set<BasicBlock> visited = new HashSet<>();
+        while (current != null && visited.add(current)) {
+            result.addAll(ir.instructionsOf(current));
+            // Follow the single fallthrough successor (if any)
+            List<BasicBlock> succs = cfg.successorsOf(current);
+            // Filter to non-exception edges only
+            BasicBlock next = null;
+            for (var edge : cfg.outgoingOf(current)) {
+                if (edge.kind() != EdgeKind.EXCEPTION) {
+                    if (next == null) {
+                        next = edge.target();
+                    } else {
+                        next = null; // multiple non-exception successors → stop
+                        break;
+                    }
+                }
+            }
+            if (next == null || next == cfg.exitBlock()) {
+                break;
+            }
+            current = next;
+        }
+        return result;
+    }
+
+    /** Translate handler instructions (minus the final THROW) into a Statement body. */
+    private Statement translateHandlerWithoutThrow(TryCatchInfo info, LinearIr ir,
+                                                    List<IrInstruction> handlerInsns) {
+        // Create a synthetic BlockGroup for translation.
+        // Use the handler block as the base, but the translation will
+        // emit all side-effecting instructions from handlerInsns.
+        BlockGroup finallyGroup = new BlockGroup(info.handlerBlock());
+        // Add any successor handler blocks' instructions to the group
+        // by creating a multi-block group. We can't easily add blocks to
+        // BlockGroup, so instead we translate directly.
+        Statement finallyBody = translateGroup(finallyGroup, ir);
+
+        // Filter out the THROW from the emitted statements.
+        if (finallyBody instanceof BlockStatement bs) {
+            List<Statement> stmts = new ArrayList<>();
+            for (Statement s : bs.statements()) {
+                if (s instanceof ThrowStatement) {
+                    continue;
+                }
+                if (s instanceof ExpressionStatement es
+                        && es.expression() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
+                        && "/* throw */".equals(v.name())) {
+                    continue;
+                }
+                stmts.add(s);
+            }
+            return new BlockStatement(stmts);
+        }
+        if (finallyBody instanceof ThrowStatement) {
+            return new BlockStatement(List.of());
+        }
+        return finallyBody;
+    }
+
     private TryStatement buildTryCatch(TryCatchInfo info, Statement tryBody, LinearIr ir) {
         boolean isCatchAll = info.catchType() == null
                 || "java/lang/Throwable".equals(info.catchType());
 
-        // Get the handler block's instructions
-        List<IrInstruction> handlerInsns = ir.instructionsOf(info.handlerBlock());
+        // Collect all handler instructions by following the fallthrough chain.
+        // The CFG may split the handler block (due to self-referencing exception
+        // edges in finally handlers), so the THROW might be in a successor block.
+        List<IrInstruction> handlerInsns = collectHandlerInstructions(info, ir);
 
         // Check if this is a finally pattern: catch-all + ends with THROW
         boolean isFinally = isCatchAll && !handlerInsns.isEmpty()
                 && handlerInsns.getLast().opcode() == IrOpcode.THROW;
 
         if (isFinally) {
-            // Extract finally body: the handler instructions minus the final THROW
-            List<IrInstruction> finallyInsns = handlerInsns.subList(0, handlerInsns.size() - 1);
-            BlockGroup finallyGroup = new BlockGroup(info.handlerBlock());
-            Statement finallyBody = translateGroup(finallyGroup, ir);
+            // Extract finally body: all handler instructions minus the final THROW.
+            // Build a synthetic BlockGroup spanning all handler blocks for translation.
+            Statement finallyBody = translateHandlerWithoutThrow(info, ir, handlerInsns);
 
             // Filter out the THROW from the emitted statements.
             if (finallyBody instanceof BlockStatement bs) {
