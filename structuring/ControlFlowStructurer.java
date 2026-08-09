@@ -188,6 +188,12 @@ public class ControlFlowStructurer {
         return buildFoldedGraph(graph, allFolded, virtualBlock, info.header());
     }
 
+    /**
+     * Merge adjacent fallthrough blocks into sequences.
+     * Respects exception range boundaries: blocks with different exception
+     * coverage (one has exception edges, the other doesn't) are NOT merged,
+     * ensuring pre-try code (like lock.lock()) stays separate from the try body.
+     */
     private ControlFlowGraph foldSequences(ControlFlowGraph graph) {
         List<BasicBlock> regularBlocks = new ArrayList<>();
         for (BasicBlock b : graph.blocks()) {
@@ -203,6 +209,16 @@ public class ControlFlowStructurer {
                 boolean onlyFallthrough = graph.outgoingOf(b1).stream()
                         .allMatch(e -> e.kind() == EdgeKind.FALL_THROUGH);
                 if (onlyFallthrough && graph.predecessorsOf(b2).size() == 1) {
+                    // Don't merge if blocks have different exception coverage.
+                    // This keeps pre-try code (no exception edges) separate
+                    // from the try body (has exception edges to handler).
+                    boolean b1hasException = graph.outgoingOf(b1).stream()
+                            .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
+                    boolean b2hasException = graph.outgoingOf(b2).stream()
+                            .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
+                    if (b1hasException != b2hasException) {
+                        continue;
+                    }
                     List<Instruction> merged = new ArrayList<>();
                     merged.addAll(b1.instructions());
                     merged.addAll(b2.instructions());

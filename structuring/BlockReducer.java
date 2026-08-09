@@ -26,6 +26,7 @@ import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.DominatorTree;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
+import com.bingbaihanji.bdec.cfg.PostDominatorTree;
 import com.bingbaihanji.bdec.ir.ConstantValue;
 import com.bingbaihanji.bdec.ir.InstructionRef;
 import com.bingbaihanji.bdec.ir.IrInstruction;
@@ -180,6 +181,10 @@ public final class BlockReducer {
             return new BlockStatement(List.of());
         }
 
+        // Compute post-dominator tree once for fallback if-header detection.
+        // This gives correct merge points when BranchAnalyzer annotations are missing.
+        PostDominatorTree postDom = PostDominatorTree.compute(graph);
+
         List<BlockGroup> groups = groupAdjacentBlocks(sorted, graph);
         Set<BlockGroup> consumed = new HashSet<>();
         // Collect handler blocks so we can skip their groups (they'll be
@@ -206,9 +211,10 @@ public final class BlockReducer {
             SwitchInfo switchInfo = findSwitchAnnotation(group, switchAnns);
 
             // Fallback: if no IfInfo annotation found, try to detect if-header
-            // directly from CFG structure (condition block with 2 successors)
+            // directly from CFG structure (condition block with 2 successors).
+            // Uses post-dominator tree for correct merge point computation.
             if (ifInfo == null) {
-                ifInfo = detectIfHeader(group, graph, ir);
+                ifInfo = detectIfHeader(group, graph, ir, postDom);
             }
 
             Statement s;
@@ -320,23 +326,29 @@ public final class BlockReducer {
      * Detect if-header directly from CFG structure, bypassing BranchAnalyzer.
      * Checks: the group's last block has a CONDITION instruction and exactly
      * 2 outgoing TRUE_BRANCH/FALSE_BRANCH edges.
+     *
+     * Uses the post-dominator tree to find the correct merge point (follow)
+     * instead of hardcoding Exit. This is critical for correct if-else
+     * detection: without the correct follow, both branch block sets would
+     * include all code after the if, causing the first branch to consume
+     * all groups and leaving nothing for the second branch.
      */
-    private IfInfo detectIfHeader(BlockGroup group, ControlFlowGraph graph, LinearIr ir) {
+    private IfInfo detectIfHeader(BlockGroup group, ControlFlowGraph graph, LinearIr ir,
+                                   PostDominatorTree postDom) {
         for (BasicBlock b : group.blocks()) {
             // Check if any instruction in this block is a CONDITION
             boolean hasCondition = ir.instructionsOf(b).stream()
                     .anyMatch(i -> i.opcode() == IrOpcode.CONDITION);
             if (!hasCondition) continue;
 
-            // Find TRUE_BRANCH and FALSE_BRANCH edges (relaxed: allow any count)
+            // Find TRUE_BRANCH and FALSE_BRANCH edges
             BasicBlock trueTarget = null, falseTarget = null;
             for (var edge : graph.outgoingOf(b)) {
                 if (edge.kind() == EdgeKind.TRUE_BRANCH) trueTarget = edge.target();
                 else if (edge.kind() == EdgeKind.FALSE_BRANCH) falseTarget = edge.target();
             }
-            // Need at least one conditional edge
             if (trueTarget == null && falseTarget == null) continue;
-            // Fill missing: use remaining successors
+            // Fill missing with remaining successors
             List<BasicBlock> succs = graph.successorsOf(b);
             if (trueTarget == null && succs.size() >= 1) {
                 for (BasicBlock s : succs) {
@@ -350,9 +362,32 @@ public final class BlockReducer {
             }
             if (trueTarget == null || falseTarget == null) continue;
 
-            BasicBlock follow = graph.exitBlock();
-            Set<BasicBlock> thenBlocks = collectReachableBlocks(trueTarget, follow, graph);
-            Set<BasicBlock> elseBlocks = collectReachableBlocks(falseTarget, follow, graph);
+            // Compute the merge point using post-dominator tree.
+            // This is the first block that must be traversed on all paths
+            // from the condition block to Exit. For if-return-else-return,
+            // this is Exit itself. For if-else with merge, this is the join point.
+            BasicBlock follow = postDom.immediatePostDominator(b);
+            if (follow == null) {
+                follow = graph.exitBlock();
+            }
+
+            // If one successor IS the follow, this is if-then (no else).
+            // If neither successor is the follow, both branches eventually
+            // reach follow → if-else.
+            Set<BasicBlock> thenBlocks, elseBlocks;
+            if (trueTarget == follow) {
+                // true branch goes to follow → false branch is the "then" body
+                thenBlocks = collectReachableBlocks(falseTarget, follow, graph);
+                elseBlocks = Set.of();
+            } else if (falseTarget == follow) {
+                // false branch goes to follow → true branch is the "then" body
+                thenBlocks = collectReachableBlocks(trueTarget, follow, graph);
+                elseBlocks = Set.of();
+            } else {
+                // Both branches reach follow → if-else
+                thenBlocks = collectReachableBlocks(trueTarget, follow, graph);
+                elseBlocks = collectReachableBlocks(falseTarget, follow, graph);
+            }
             return new IfInfo(b, follow, thenBlocks, elseBlocks);
         }
         return null;
@@ -377,6 +412,10 @@ public final class BlockReducer {
     /**
      * Translate the blocks belonging to one branch (then or else) of an if-statement.
      * Consumes the matching groups so they aren't emitted again.
+     *
+     * Checks if any block in a group belongs to the branch (not just the first),
+     * so groups formed after CFG folding that start with non-branch blocks
+     * are still correctly matched.
      */
     private Statement translateBranchBody(Set<BasicBlock> branchBlocks,
                                           List<BlockGroup> allGroups,
@@ -387,8 +426,18 @@ public final class BlockReducer {
             if (consumed.contains(g)) {
                 continue;
             }
-            // If this group's first block is part of the branch body, consume it
-            if (branchBlocks.contains(g.first())) {
+            // Check if any block in this group belongs to the branch.
+            // Use first() as primary check (fast path), fall back to full scan.
+            boolean groupInBranch = branchBlocks.contains(g.first());
+            if (!groupInBranch) {
+                for (BasicBlock gb : g.blocks()) {
+                    if (branchBlocks.contains(gb)) {
+                        groupInBranch = true;
+                        break;
+                    }
+                }
+            }
+            if (groupInBranch) {
                 consumed.add(g);
                 Statement stmt = translateGroup(g, ir);
                 if (stmt != null) {
@@ -527,12 +576,33 @@ public final class BlockReducer {
         return groups;
     }
 
+    /**
+     * Check if two blocks should be treated as adjacent (same group).
+     * Adjacent blocks have a single fallthrough edge from prev to next,
+     * AND share the same exception coverage — blocks with different
+     * exception handlers should NOT be grouped together, otherwise
+     * pre-try code (like lock.lock()) gets merged with the try body
+     * and can't be properly wrapped.
+     */
     private boolean isAdjacent(BasicBlock prev, BasicBlock next, ControlFlowGraph graph) {
         List<BasicBlock> succs = graph.successorsOf(prev);
         if (succs.size() != 1 || succs.get(0) != next) {
             return false;
         }
-        return graph.outgoingOf(prev).stream().allMatch(e -> e.kind() == EdgeKind.FALL_THROUGH);
+        if (!graph.outgoingOf(prev).stream().allMatch(e -> e.kind() == EdgeKind.FALL_THROUGH)) {
+            return false;
+        }
+        // Respect try boundaries: if blocks have different exception coverage
+        // (one has exception edges and the other doesn't), don't merge them.
+        // This ensures pre-try code stays in its own group separate from the try body.
+        boolean prevHasException = graph.outgoingOf(prev).stream()
+                .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
+        boolean nextHasException = graph.outgoingOf(next).stream()
+                .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
+        if (prevHasException != nextHasException) {
+            return false;
+        }
+        return true;
     }
 
     /**
