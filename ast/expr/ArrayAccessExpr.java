@@ -11,6 +11,7 @@ import java.util.List;
 public final class ArrayAccessExpr extends Expression {
 
     private final Expression array;
+
     private final Expression index;
 
     public ArrayAccessExpr(Expression array, Expression index) {

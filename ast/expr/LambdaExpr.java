@@ -12,15 +12,18 @@ import java.util.List;
 /** Lambda expression: {@code (args) -> body} or method reference: {@code Class::method}. */
 public final class LambdaExpr extends Expression {
 
-    /** Parameter name and type pair. */
-    public record Param(String name, JavaType type) {}
-
     private final List<Param> parameters;
+
     private final Expression bodyExpr;      // expression lambda: x -> expr
+
     private final BlockStatement bodyBlock; // block lambda: x -> { ... }
+
     private final boolean isMethodRef;
+
     private final String methodRefOwner;    // for Class::method: "Class"
+
     private final String methodRefName;     // for Class::method: "method"
+
     private final JavaType functionalType;   // functional interface return type
 
     private LambdaExpr(List<Param> parameters, Expression bodyExpr, BlockStatement bodyBlock,
@@ -77,8 +80,12 @@ public final class LambdaExpr extends Expression {
     @Override
     public List<AstNode> children() {
         List<AstNode> c = new ArrayList<>();
-        if (bodyExpr != null) c.add(bodyExpr);
-        if (bodyBlock != null) c.add(bodyBlock);
+        if (bodyExpr != null) {
+            c.add(bodyExpr);
+        }
+        if (bodyBlock != null) {
+            c.add(bodyBlock);
+        }
         return c;
     }
 
@@ -87,4 +94,7 @@ public final class LambdaExpr extends Expression {
 
     @Override
     public <R, C> R accept(AstVisitor<R, C> v, C c) {return v.visitExpression(this, c);}
+
+    /** Parameter name and type pair. */
+    public record Param(String name, JavaType type) {}
 }

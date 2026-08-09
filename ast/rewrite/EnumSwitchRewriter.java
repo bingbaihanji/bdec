@@ -48,6 +48,21 @@ import java.util.Set;
  */
 public class EnumSwitchRewriter implements RewriteRule {
 
+    /** Check if a field name indicates a SwitchMap int array. */
+    private static boolean isSwitchMapFieldName(String name) {
+        return name.startsWith("$SwitchMap$") || name.contains("SwitchMap");
+    }
+
+    /** Extract the field name from an expression that might be a {@link FieldAccessExpr}. */
+    private static String extractFieldName(Expression expr) {
+        if (expr instanceof FieldAccessExpr fae) {
+            return fae.fieldName();
+        }
+        return null;
+    }
+
+    // ── Phase 1: collect SwitchMap info ────────────────────────────────
+
     @Override
     public String name() {return "enum-switch";}
 
@@ -70,14 +85,14 @@ public class EnumSwitchRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), newTypes);
     }
 
-    // ── Phase 1: collect SwitchMap info ────────────────────────────────
-
     /** Recursively collect field names that look like SwitchMap arrays. */
     private void collectSwitchMapFieldNames(List<TypeDeclaration> types, Set<String> names) {
         for (TypeDeclaration td : types) {
             collectFromType(td, names);
         }
     }
+
+    // ── Phase 2: rewrite types ─────────────────────────────────────────
 
     private void collectFromType(TypeDeclaration td, Set<String> names) {
         for (AstNode member : td.children()) {
@@ -91,13 +106,6 @@ public class EnumSwitchRewriter implements RewriteRule {
             }
         }
     }
-
-    /** Check if a field name indicates a SwitchMap int array. */
-    private static boolean isSwitchMapFieldName(String name) {
-        return name.startsWith("$SwitchMap$") || name.contains("SwitchMap");
-    }
-
-    // ── Phase 2: rewrite types ─────────────────────────────────────────
 
     /**
      * Rewrite a TypeDeclaration:
@@ -129,6 +137,8 @@ public class EnumSwitchRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), newMembers);
     }
 
+    // ── Method and statement rewriting ─────────────────────────────────
+
     /**
      * Determine if a type is a synthetic SwitchMap holder that should be removed.
      * Checks the type name for SwitchMap-like patterns, and also checks whether
@@ -151,8 +161,6 @@ public class EnumSwitchRewriter implements RewriteRule {
         }
         return false;
     }
-
-    // ── Method and statement rewriting ─────────────────────────────────
 
     private MethodDeclaration rewriteMethod(MethodDeclaration md, Set<String> switchMapFieldNames) {
         Statement newBody = rewriteStatement(md.body(), switchMapFieldNames);
@@ -273,13 +281,5 @@ public class EnumSwitchRewriter implements RewriteRule {
         }
 
         return enumTarget;
-    }
-
-    /** Extract the field name from an expression that might be a {@link FieldAccessExpr}. */
-    private static String extractFieldName(Expression expr) {
-        if (expr instanceof FieldAccessExpr fae) {
-            return fae.fieldName();
-        }
-        return null;
     }
 }

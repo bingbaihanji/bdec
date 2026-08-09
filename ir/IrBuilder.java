@@ -1294,8 +1294,11 @@ public final class IrBuilder {
             }
         }
         Variable v = new Variable(slot, maxVersion + 1, type, false, slot);
-        // Carry forward LVT name so new versions retain original parameter names
-        if (currentLvtNames.containsKey(slot)) {
+        // Carry forward LVT name so new versions retain original parameter names.
+        // BUT skip slot 0 in instance methods: "this" is version 0 only;
+        // stores to slot 0 are a DIFFERENT variable reusing the slot.
+        if (currentLvtNames.containsKey(slot)
+                && !(slot == 0 && maxVersion > 0)) {
             v.setName(currentLvtNames.get(slot));
         }
         variables.add(v);
