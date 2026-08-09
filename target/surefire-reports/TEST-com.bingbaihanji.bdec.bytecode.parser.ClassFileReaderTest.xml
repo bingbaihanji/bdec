@@ -15,7 +15,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="CN"/>
     <property name="sun.boot.library.path" value="D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin"/>
-    <property name="sun.java.command" value="C:\Users\bingb\AppData\Local\Temp\surefire13118932938087349990\surefirebooter-20260809212634760_3.jar C:\Users\bingb\AppData\Local\Temp\surefire13118932938087349990 2026-08-09T21-26-34_600-jvmRun1 surefire-20260809212634760_1tmp surefire_0-20260809212634760_2tmp"/>
+    <property name="sun.java.command" value="C:\Users\bingb\AppData\Local\Temp\surefire6917861021074457624\surefirebooter-20260809214825484_3.jar C:\Users\bingb\AppData\Local\Temp\surefire6917861021074457624 2026-08-09T21-48-25_369-jvmRun1 surefire-20260809214825484_1tmp surefire_0-20260809214825484_2tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="D:\bingbaihanji\fxdecomplie\bdec\bdec\target\test-classes;D:\bingbaihanji\fxdecomplie\bdec\bdec\target\classes;D:\develop\maven\apache-maven-3.9.9\repository\junit\junit\4.13.2\junit-4.13.2.jar;D:\develop\maven\apache-maven-3.9.9\repository\org\hamcrest\hamcrest-core\1.3\hamcrest-core-1.3.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -30,7 +30,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\bingb\AppData\Local\Temp\surefire13118932938087349990\surefirebooter-20260809212634760_3.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\bingb\AppData\Local\Temp\surefire6917861021074457624\surefirebooter-20260809214825484_3.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="25.0.3+12-LTS"/>
@@ -64,7 +64,7 @@
     <system-out><![CDATA[String.class not found, skipping test
 ]]></system-out>
   </testcase>
-  <testcase name="testParseObjectClass" classname="com.bingbaihanji.bdec.bytecode.parser.ClassFileReaderTest" time="0.002">
+  <testcase name="testParseObjectClass" classname="com.bingbaihanji.bdec.bytecode.parser.ClassFileReaderTest" time="0.001">
     <system-out><![CDATA[Object.class not found at expected paths, skipping test
 ]]></system-out>
   </testcase>

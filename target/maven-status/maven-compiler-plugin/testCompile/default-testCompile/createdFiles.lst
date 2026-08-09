@@ -1,8 +1,8 @@
 com\bingbaihanji\bdec\type\TypeResolverTest.class
-com\bingbaihanji\bdec\QuickCheck.class
 com\bingbaihanji\bdec\bytecode\parser\ClassFileReaderTest.class
 com\bingbaihanji\bdec\ControlFlowTest.class
 com\bingbaihanji\bdec\DecompileTestHarness.class
+com\bingbaihanji\bdec\DebugOutputTest.class
 com\bingbaihanji\bdec\decompiler\diagnostic\DecompilerDiagnosticTest.class
 com\bingbaihanji\bdec\BdecEngineTest.class
 com\bingbaihanji\bdec\bytecode\parser\InstructionDecoderTest.class
@@ -13,4 +13,5 @@ com\bingbaihanji\bdec\BdecConfigTest.class
 com\bingbaihanji\bdec\DecompileContextTest.class
 com\bingbaihanji\bdec\ir\SsaBuilderTest.class
 com\bingbaihanji\bdec\BdecIntegrationTest.class
+com\bingbaihanji\bdec\C.class
 com\bingbaihanji\bdec\cfg\DominatorTreeTest.class

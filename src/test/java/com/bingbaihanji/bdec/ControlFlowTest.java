@@ -64,11 +64,9 @@ public class ControlFlowTest {
     @Test
     public void testBooleanMethod() throws Exception {
         String out = harness.decompileResource("decompile-samples/m2-controlflow/BooleanMethodSample.java");
-        DecompileTestHarness.assertContains(out, "class BooleanMethodSample", "return");
-        // P1 fix: condition should be "n > 0" (with LVT: parameter name "n")
-        // P3 fix: variable should use LVT name, not "var1"
-        // With -g debug info, javac emits LocalVariableTable with param names
-        DecompileTestHarness.assertContains(out, "n");
+        DecompileTestHarness.assertContains(out, "class BooleanMethodSample", "return", "n");
+        // PHI/merge-point fix: if-else-return should produce correct ternary
+        DecompileTestHarness.assertContains(out, "?");
     }
 
     @Test

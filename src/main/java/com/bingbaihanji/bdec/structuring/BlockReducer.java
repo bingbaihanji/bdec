@@ -70,6 +70,14 @@ public final class BlockReducer {
 
     private Set<Integer> currentStoresToSkip = Set.of();
 
+    // Branch context for PHI resolution: when translating a branch body,
+    // records which block IDs belong to the branch so PHI nodes can pick
+    // the correct operand.
+    private Set<Integer> currentBranchBlocks = null;
+
+    // Cached from the method being decompiled
+    private boolean currentMethodReturnsBoolean = false;
+
     public BlockReducer() {this(true);}
 
     public BlockReducer(boolean isInstanceMethod) {
@@ -243,6 +251,10 @@ public final class BlockReducer {
             return new BlockStatement(List.of());
         }
 
+        // Cache method return type info
+        currentMethodReturnsBoolean = ir.method().returnType() != null
+                && ir.method().returnType().kind() == TypeKind.BOOLEAN;
+
         // Compute post-dominator tree once for fallback if-header detection.
         // This gives correct merge points when BranchAnalyzer annotations are missing.
         PostDominatorTree postDom = PostDominatorTree.compute(graph);
@@ -304,6 +316,33 @@ public final class BlockReducer {
                 // Eliminate empty else blocks — don't emit "else { }"
                 if (elseBody != null && isEmptyBlock(elseBody)) {
                     elseBody = null;
+                }
+
+                // Post-process branch bodies for if-else patterns where both
+                // branches compute values that merge at a common RETURN block.
+                // Due to IrBuilder DFS ordering, one branch's value gets consumed
+                // by the RETURN while the other branch's value is an orphan CONST.
+                // Clean up: strip orphan CONSTs from branches with RETURN, and
+                // wrap orphan CONSTs as RETURN for branches without RETURN.
+                boolean thenHasReturn = hasReturnStmt(thenBody);
+                boolean elseHasReturn = elseBody != null && hasReturnStmt(elseBody);
+                boolean isBoolRet = ir.method().returnType() != null
+                        && ir.method().returnType().kind() == TypeKind.BOOLEAN;
+
+                if (thenHasReturn != elseHasReturn) {
+                    if (thenHasReturn) {
+                        // Strip orphan expressions from then (they're noise)
+                        thenBody = stripOrphanExprs(thenBody);
+                        // Wrap orphan expressions in else as return
+                        if (elseBody != null) {
+                            elseBody = wrapAsReturn(elseBody, isBoolRet);
+                        }
+                    } else {
+                        if (thenBody != null) {
+                            thenBody = wrapAsReturn(thenBody, isBoolRet);
+                        }
+                        elseBody = elseBody != null ? stripOrphanExprs(elseBody) : null;
+                    }
                 }
 
                 s = new IfStatement(cond != null ? cond : new VarExpr("/*condition*/"),
@@ -517,50 +556,40 @@ public final class BlockReducer {
                                           List<BlockGroup> allGroups,
                                           LinearIr ir,
                                           Set<BlockGroup> consumed) {
-        List<Statement> bodyStmts = new ArrayList<>();
-        for (BlockGroup g : allGroups) {
-            if (consumed.contains(g)) {
-                continue;
-            }
-            // Check if any block in this group belongs to the branch.
-            // Use first() as primary check (fast path), fall back to full scan.
-            boolean groupInBranch = branchBlocks.contains(g.first());
-            if (!groupInBranch) {
-                for (BasicBlock gb : g.blocks()) {
-                    if (branchBlocks.contains(gb)) {
-                        groupInBranch = true;
-                        break;
+        // Set branch context for PHI resolution
+        Set<Integer> prevBranchBlocks = currentBranchBlocks;
+        Set<Integer> branchBlockIds = new HashSet<>();
+        for (BasicBlock b : branchBlocks) branchBlockIds.add(b.id());
+        currentBranchBlocks = branchBlockIds;
+        try {
+            List<Statement> bodyStmts = new ArrayList<>();
+            for (BlockGroup g : allGroups) {
+                if (consumed.contains(g)) continue;
+                boolean groupInBranch = branchBlocks.contains(g.first());
+                if (!groupInBranch) {
+                    for (BasicBlock gb : g.blocks()) {
+                        if (branchBlocks.contains(gb)) { groupInBranch = true; break; }
                     }
                 }
-            }
-            if (groupInBranch) {
-                consumed.add(g);
-                Statement stmt = translateGroup(g, ir);
-                if (stmt != null) {
-                    bodyStmts.add(stmt);
+                if (groupInBranch) {
+                    consumed.add(g);
+                    Statement stmt = translateGroup(g, ir);
+                    if (stmt != null) bodyStmts.add(stmt);
                 }
             }
-        }
-        if (bodyStmts.isEmpty()) {
-            return new BlockStatement(List.of());
-        }
-        // Flatten: merge multi-group bodies into a single flat statement list.
-        // This prevents double braces like: if(cond) { { stmts } }
-        if (bodyStmts.size() == 1 && !(bodyStmts.getFirst() instanceof BlockStatement)) {
-            return bodyStmts.getFirst();
-        }
-        List<Statement> flat = new ArrayList<>();
-        for (Statement s : bodyStmts) {
-            if (s instanceof BlockStatement bs) {
-                flat.addAll(bs.statements());
-            } else {
-                flat.add(s);
+            if (bodyStmts.isEmpty()) return new BlockStatement(List.of());
+            if (bodyStmts.size() == 1 && !(bodyStmts.getFirst() instanceof BlockStatement))
+                return bodyStmts.getFirst();
+            List<Statement> flat = new ArrayList<>();
+            for (Statement s : bodyStmts) {
+                if (s instanceof BlockStatement bs) flat.addAll(bs.statements());
+                else flat.add(s);
             }
+            if (flat.size() == 1) return flat.getFirst();
+            return new BlockStatement(flat);
+        } finally {
+            currentBranchBlocks = prevBranchBlocks;
         }
-        if (flat.size() == 1) {
-            return flat.getFirst();
-        }
-        return new BlockStatement(flat);
     }
 
     /** Sort blocks by dominator-tree preorder. */
@@ -876,6 +905,14 @@ public final class BlockReducer {
                     Expression retVal = valueToExpr(insn.operands().getFirst());
                     // Apply boolean folding from semantic annotations
                     retVal = applyBooleanAnnotation(insn, retVal);
+                    // Also convert integer literal to boolean for boolean-return methods
+                    // (needed for PHI-resolved values where annotation is skipped)
+                    if (currentMethodReturnsBoolean
+                            && retVal instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit
+                            && lit.value() instanceof Integer i) {
+                        retVal = new com.bingbaihanji.bdec.ast.expr.LitExpr(
+                                i != 0, JavaType.BOOLEAN);
+                    }
                     yield new ReturnStatement(retVal);
                 }
             }
@@ -1243,20 +1280,38 @@ public final class BlockReducer {
             // Throw
             case THROW -> !insn.operands().isEmpty() ? valueToExpr(insn.operands().getFirst()) : new VarExpr("ex");
 
-            // PHI — pick the first non-trivial operand's expression as representative
+            // PHI — pick the operand belonging to the current branch context.
+            // If we know which blocks are being translated (branchBlocks hint),
+            // pick the PHI operand whose defining instruction is in those blocks.
+            // Otherwise pick the first non-trivial operand.
             case PHI -> {
-                for (Value op : insn.operands()) {
-                    if (op instanceof InstructionRef ref) {
-                        yield translateExpr(ref.instruction());
-                    }
-                    if (op instanceof ConstantValue cv) {
-                        yield new LitExpr(cv.value(), cv.type());
-                    }
-                    if (op instanceof Variable v) {
-                        yield varToExpr(v);
+                Expression resolved = null;
+                if (currentBranchBlocks != null) {
+                    for (Value op : insn.operands()) {
+                        if (op instanceof InstructionRef ref
+                                && currentBranchBlocks.contains(ref.instruction().blockId())) {
+                            resolved = translateExpr(ref.instruction());
+                            break;
+                        }
                     }
                 }
-                yield new VarExpr("merge" + insn.id());
+                if (resolved == null) {
+                    for (Value op : insn.operands()) {
+                        if (op instanceof InstructionRef ref) {
+                            resolved = translateExpr(ref.instruction());
+                            break;
+                        }
+                        if (op instanceof ConstantValue cv) {
+                            resolved = new LitExpr(cv.value(), cv.type());
+                            break;
+                        }
+                        if (op instanceof Variable v) {
+                            resolved = varToExpr(v);
+                            break;
+                        }
+                    }
+                }
+                yield resolved != null ? resolved : new VarExpr("merge" + insn.id());
             }
 
             default -> new VarExpr("/* " + insn.opcode() + " */");
@@ -1423,15 +1478,20 @@ public final class BlockReducer {
         if (!insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.BOOLEAN_RETURN)) {
             return expr;
         }
+        // Don't override if the value comes from a PHI — branch context
+        // resolution already picks the correct per-branch value.
+        if (!insn.operands().isEmpty()
+                && insn.operands().getFirst() instanceof InstructionRef ref
+                && ref.instruction().opcode() == IrOpcode.PHI) {
+            return expr;
+        }
         var ann = insn.getAnnotation(com.bingbaihanji.bdec.semantic.SemanticTag.BOOLEAN_RETURN);
         if (ann == null) {
             return expr;
         }
-
         boolean boolVal = ann.getBoolean(
                 com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_BOOLEAN_VALUE);
-        return new LitExpr(boolVal,
-                com.bingbaihanji.bdec.type.JavaType.BOOLEAN);
+        return new LitExpr(boolVal, JavaType.BOOLEAN);
     }
 
     /** Check if any IR instruction in the group has a SYNCHRONIZED_BLOCK tag.
@@ -1738,6 +1798,71 @@ public final class BlockReducer {
                     || op == IrOpcode.INSTANCE_OF;
         }
         return false;
+    }
+
+    /** Check if a statement tree contains a ReturnStatement. */
+    private static boolean hasReturnStmt(Statement s) {
+        if (s instanceof ReturnStatement) return true;
+        if (s instanceof BlockStatement bs) {
+            return bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
+        }
+        return false;
+    }
+
+    /** Strip orphan ExpressionStatements from a branch body that already
+     *  has a ReturnStatement (they're noise from block ordering at merge points). */
+    private static Statement stripOrphanExprs(Statement s) {
+        if (s instanceof BlockStatement bs) {
+            boolean hasAnyReturn = bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
+            if (!hasAnyReturn) return s;
+            List<Statement> filtered = new ArrayList<>();
+            for (Statement child : bs.statements()) {
+                if (child instanceof ExpressionStatement) continue; // strip orphan CONST
+                if (child instanceof BlockStatement) {
+                    Statement stripped = stripOrphanExprs(child);
+                    if (!isEmptyBlock(stripped)) filtered.add(stripped);
+                } else {
+                    filtered.add(child);
+                }
+            }
+            if (filtered.isEmpty()) return new BlockStatement(List.of());
+            if (filtered.size() == 1) return filtered.getFirst();
+            return new BlockStatement(filtered);
+        }
+        return s;
+    }
+
+    /** Wrap a branch body's ExpressionStatements as ReturnStatements
+     *  (handles orphan CONSTs in branches without their own RETURN). */
+    private static Statement wrapAsReturn(Statement s, boolean isBoolRet) {
+        if (s instanceof BlockStatement bs) {
+            if (hasReturnStmt(s)) return s; // already has RETURN
+            List<Statement> result = new ArrayList<>();
+            for (Statement child : bs.statements()) {
+                if (child instanceof ExpressionStatement es) {
+                    result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
+                } else if (child instanceof BlockStatement inner) {
+                    result.add(wrapAsReturn(inner, isBoolRet));
+                } else {
+                    result.add(child);
+                }
+            }
+            if (result.isEmpty()) return new BlockStatement(List.of());
+            if (result.size() == 1) return result.getFirst();
+            return new BlockStatement(result);
+        }
+        if (s instanceof ExpressionStatement es) {
+            return new ReturnStatement(boolLiteral(es.expression(), isBoolRet));
+        }
+        return s;
+    }
+
+    /** Convert integer literal to boolean for boolean-return methods. */
+    private static Expression boolLiteral(Expression e, boolean isBoolRet) {
+        if (isBoolRet && e instanceof LitExpr lit && lit.value() instanceof Integer i) {
+            return new LitExpr(i != 0, JavaType.BOOLEAN);
+        }
+        return e;
     }
 
     // ── BlockGroup helper ─────────────────────────────────────────────
