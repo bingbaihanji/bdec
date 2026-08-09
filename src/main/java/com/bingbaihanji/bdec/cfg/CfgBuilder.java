@@ -154,19 +154,26 @@ public final class CfgBuilder {
         // 5. Exception edges
         List<ExceptionRange> exceptionRanges = new ArrayList<>();
         if (method.exceptionHandlers() != null) {
+            int lastBytecodeOffset = offsetToInsn.keySet().stream()
+                    .mapToInt(Integer::intValue).max().orElse(0) + 1;
             for (ExceptionHandlerModel eh : method.exceptionHandlers()) {
                 BasicBlock handlerBlock = offsetToBlock.get(eh.handlerPc());
                 if (handlerBlock == null) {
                     continue;
                 }
                 for (BasicBlock b : blocks) {
-                    if (b.startOffset() >= eh.startPc() && b.startOffset() < eh.endPc()) {
+                    int blockEnd = getBlockEndOffset(b, blocks, lastBytecodeOffset);
+                    // Overlap check: include blocks whose instructions fall within
+                    // the try range, even if the block starts before the range.
+                    if (b.startOffset() < eh.endPc() && blockEnd > eh.startPc()) {
                         edges.add(ControlFlowEdge.exception(b, handlerBlock, eh.catchType()));
                     }
                 }
-                // Find first block in try range as tryBlock
                 BasicBlock tryBlock = blocks.stream()
-                        .filter(b -> b.startOffset() >= eh.startPc() && b.startOffset() < eh.endPc())
+                        .filter(b -> {
+                            int blockEnd = getBlockEndOffset(b, blocks, lastBytecodeOffset);
+                            return b.startOffset() < eh.endPc() && blockEnd > eh.startPc();
+                        })
                         .findFirst().orElse(null);
                 if (tryBlock != null) {
                     exceptionRanges.add(new ExceptionRange(tryBlock, handlerBlock,
@@ -181,5 +188,15 @@ public final class CfgBuilder {
         allBlocks.add(exit);
 
         return new ControlFlowGraph(method, entry, exit, allBlocks, edges, exceptionRanges);
+    }
+
+    /** Compute the end offset of a block (start offset of next block, or past-end). */
+    private static int getBlockEndOffset(BasicBlock b, List<BasicBlock> blocks, int lastOffset) {
+        for (BasicBlock next : blocks) {
+            if (next.startOffset() > b.startOffset()) {
+                return next.startOffset();
+            }
+        }
+        return lastOffset;
     }
 }

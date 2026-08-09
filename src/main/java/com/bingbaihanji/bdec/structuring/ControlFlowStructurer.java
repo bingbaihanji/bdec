@@ -147,14 +147,27 @@ public class ControlFlowStructurer {
             finalIfAnns.put(ifInfo.header(), ifInfo);
         }
 
+        // 5c. Re-analyze try-catch on the final folded graph (folding may have
+        // replaced blocks, invalidating the pre-fold tryCatchAnns keys).
+        List<TryCatchInfo> finalTryCatch = tryCatchAnalyzer.analyze(graph);
+        Map<BasicBlock, TryCatchInfo> finalTryCatchAnns = new HashMap<>();
+        for (TryCatchInfo tci : finalTryCatch) {
+            BasicBlock tryEntry = tci.tryBlocks().stream()
+                    .min(Comparator.comparingInt(BasicBlock::startOffset))
+                    .orElse(null);
+            if (tryEntry != null) {
+                finalTryCatchAnns.put(tryEntry, tci);
+            }
+        }
+
         // 6. Generate AST with structure annotations
         blockReducer = new BlockReducer(!ir.method().isStatic());
-        BlockStatement body = blockReducer.reduce(graph, ir, loopAnns, finalIfAnns, switchAnns, tryCatchAnns);
+        BlockStatement body = blockReducer.reduce(graph, ir, loopAnns, finalIfAnns, switchAnns, finalTryCatchAnns);
 
         // 7. Post-processing: merge adjacent try-finally blocks sharing the same handler
-        body = finallyRecognizer.merge(body, tryCatchAnns);
+        body = finallyRecognizer.merge(body, finalTryCatchAnns);
 
-        return new StructuredMethod(ir.method(), ir, body, loopAnns, ifAnns, switchAnns, tryCatchAnns);
+        return new StructuredMethod(ir.method(), ir, body, loopAnns, ifAnns, switchAnns, finalTryCatchAnns);
     }
 
     // ── Folding operations ────────────────────────────────────────
