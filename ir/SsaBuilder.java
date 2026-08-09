@@ -114,11 +114,17 @@ public final class SsaBuilder {
 
         // 5. Fill PHI operands from predecessor blocks
         for (IrInstruction insn : allInsns) {
-            if (insn.opcode() != IrOpcode.PHI) continue;
+            if (insn.opcode() != IrOpcode.PHI) {
+                continue;
+            }
             int slot = findPhiSlot(insn, originalVars, varDefBlocks);
-            if (slot < 0) continue;
+            if (slot < 0) {
+                continue;
+            }
             BasicBlock phiBlock = findBlock(cfg, insn.blockId());
-            if (phiBlock == null) continue;
+            if (phiBlock == null) {
+                continue;
+            }
 
             // For each predecessor, find the variable version that reaches this block
             List<Value> phiOperands = new ArrayList<>();
@@ -150,8 +156,8 @@ public final class SsaBuilder {
 
     /** Find the variable version for a slot that reaches the end of a predecessor block. */
     private Variable findReachingVar(BasicBlock block, int slot, List<Variable> vars,
-                                      List<IrInstruction> allInsns,
-                                      Map<BasicBlock, List<IrInstruction>> perBlock) {
+                                     List<IrInstruction> allInsns,
+                                     Map<BasicBlock, List<IrInstruction>> perBlock) {
         Variable latest = null;
         List<IrInstruction> blockInsns = perBlock.getOrDefault(block, List.of());
         // Walk instructions in reverse to find the last STORE for this slot
@@ -167,7 +173,7 @@ public final class SsaBuilder {
                 int phiSlot = findPhiSlot(insn, vars, Map.of());
                 if (phiSlot == slot && insn.resultValue() instanceof InstructionRef ref
                         && ref.instruction().operands().stream().anyMatch(
-                                op -> op instanceof Variable v2 && v2.slot() == slot)) {
+                        op -> op instanceof Variable v2 && v2.slot() == slot)) {
                     for (Value op : insn.operands()) {
                         if (op instanceof Variable v2 && v2.slot() == slot) {
                             return v2;

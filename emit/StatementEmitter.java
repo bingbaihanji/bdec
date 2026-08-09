@@ -3,8 +3,6 @@ package com.bingbaihanji.bdec.emit;
 import com.bingbaihanji.bdec.ast.AstVisitor;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
-import java.util.ArrayList;
-import java.util.List;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
@@ -16,6 +14,9 @@ import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
 import com.bingbaihanji.bdec.ast.stmt.SynchronizedStatement;
 import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
 import com.bingbaihanji.bdec.ast.stmt.TryStatement;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /** Emits AST statements to Java source text. Implements AstVisitor for dispatch. */
 public class StatementEmitter implements AstVisitor<Void, Void> {
@@ -382,7 +383,9 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
 
     /** For switch expression cases, flatten single-statement blocks. */
     private Statement simplifyCaseBody(List<Statement> body) {
-        if (body.size() == 1) return body.get(0);
+        if (body.size() == 1) {
+            return body.get(0);
+        }
         return new BlockStatement(body);
     }
 

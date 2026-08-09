@@ -10,7 +10,6 @@ import com.bingbaihanji.bdec.ast.rewrite.LambdaRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.MethodRefRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.PatternMatchRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.RecordRewriter;
-import com.bingbaihanji.bdec.ast.rewrite.RewriteRule;
 import com.bingbaihanji.bdec.ast.rewrite.SealedClassRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.StringConcatRewriter;
 import com.bingbaihanji.bdec.ast.rewrite.SwitchExprRewriter;

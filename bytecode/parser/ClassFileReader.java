@@ -23,7 +23,7 @@ public final class ClassFileReader {
 
     /** Parse the BootstrapMethods class attribute. */
     private List<BootstrapMethodEntry> parseBootstrapMethods(DataInputStream in,
-                                                              ConstantPoolEntry[] pool)
+                                                             ConstantPoolEntry[] pool)
             throws IOException {
         int count = in.readUnsignedShort();
         List<BootstrapMethodEntry> entries = new ArrayList<>(count);
@@ -41,7 +41,7 @@ public final class ClassFileReader {
 
     /** Parse the Record class attribute (Java 16+). */
     private List<RecordComponentEntry> parseRecordComponents(DataInputStream in,
-                                                              ConstantPoolEntry[] pool)
+                                                             ConstantPoolEntry[] pool)
             throws IOException {
         int count = in.readUnsignedShort();
         List<RecordComponentEntry> components = new ArrayList<>(count);
@@ -64,7 +64,7 @@ public final class ClassFileReader {
 
     /** Parse the PermittedSubclasses class attribute (Java 17+). */
     private List<String> parsePermittedSubclasses(DataInputStream in,
-                                                   ConstantPoolEntry[] pool)
+                                                  ConstantPoolEntry[] pool)
             throws IOException {
         int count = in.readUnsignedShort();
         List<String> classes = new ArrayList<>(count);
@@ -77,7 +77,7 @@ public final class ClassFileReader {
 
     /** Parse the InnerClasses attribute. */
     private List<InnerClassEntry> parseInnerClasses(DataInputStream in,
-                                                     ConstantPoolEntry[] pool)
+                                                    ConstantPoolEntry[] pool)
             throws IOException {
         int count = in.readUnsignedShort();
         List<InnerClassEntry> entries = new ArrayList<>(count);

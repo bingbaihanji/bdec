@@ -4,8 +4,15 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
+import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 
 import java.util.ArrayList;
@@ -28,7 +35,7 @@ import java.util.List;
 public class MethodRefRewriter implements RewriteRule {
 
     @Override
-    public String name() { return "method-ref"; }
+    public String name() {return "method-ref";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -95,7 +102,9 @@ public class MethodRefRewriter implements RewriteRule {
             if (name != null && newTarget == null && !newArgs.isEmpty()) {
                 // Possible method reference: invokedynamic with static args
                 Expression methodRef = tryConvertMethodRef(name, newArgs);
-                if (methodRef != null) return methodRef;
+                if (methodRef != null) {
+                    return methodRef;
+                }
             }
 
             return new InvocationExpr(newTarget, name, newArgs, inv.returnType());

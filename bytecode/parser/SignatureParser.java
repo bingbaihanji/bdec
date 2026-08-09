@@ -78,7 +78,9 @@ public final class SignatureParser {
      * @return a JavaType with type arguments populated, or null if parsing fails
      */
     public static JavaType parseGenericType(String sig) {
-        if (sig == null || sig.isEmpty()) return null;
+        if (sig == null || sig.isEmpty()) {
+            return null;
+        }
         try {
             var result = new java.util.concurrent.atomic.AtomicReference<JavaType>();
             parseTypeToJavaType(sig, 0, result);
@@ -90,19 +92,39 @@ public final class SignatureParser {
 
     /** Parse a type signature into a JavaType struct. Returns next position. */
     private static int parseTypeToJavaType(String sig, int i,
-                                            java.util.concurrent.atomic.AtomicReference<JavaType> out) {
-        if (i >= sig.length()) return i;
+                                           java.util.concurrent.atomic.AtomicReference<JavaType> out) {
+        if (i >= sig.length()) {
+            return i;
+        }
         char c = sig.charAt(i);
         switch (c) {
-            case 'B': out.set(JavaType.BYTE); return i + 1;
-            case 'C': out.set(JavaType.CHAR); return i + 1;
-            case 'D': out.set(JavaType.DOUBLE); return i + 1;
-            case 'F': out.set(JavaType.FLOAT); return i + 1;
-            case 'I': out.set(JavaType.INT); return i + 1;
-            case 'J': out.set(JavaType.LONG); return i + 1;
-            case 'S': out.set(JavaType.SHORT); return i + 1;
-            case 'Z': out.set(JavaType.BOOLEAN); return i + 1;
-            case 'V': out.set(JavaType.VOID); return i + 1;
+            case 'B':
+                out.set(JavaType.BYTE);
+                return i + 1;
+            case 'C':
+                out.set(JavaType.CHAR);
+                return i + 1;
+            case 'D':
+                out.set(JavaType.DOUBLE);
+                return i + 1;
+            case 'F':
+                out.set(JavaType.FLOAT);
+                return i + 1;
+            case 'I':
+                out.set(JavaType.INT);
+                return i + 1;
+            case 'J':
+                out.set(JavaType.LONG);
+                return i + 1;
+            case 'S':
+                out.set(JavaType.SHORT);
+                return i + 1;
+            case 'Z':
+                out.set(JavaType.BOOLEAN);
+                return i + 1;
+            case 'V':
+                out.set(JavaType.VOID);
+                return i + 1;
             case 'T': {
                 int semi = sig.indexOf(';', i);
                 String tvName = sig.substring(i + 1, semi);
@@ -138,9 +160,13 @@ public final class SignatureParser {
                         } else {
                             var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos, ref);
-                            if (ref.get() != null) typeArgs.add(ref.get());
+                            if (ref.get() != null) {
+                                typeArgs.add(ref.get());
+                            }
                         }
-                        if (argPos >= i + semi) break;
+                        if (argPos >= i + semi) {
+                            break;
+                        }
                     }
                     out.set(new JavaType(TypeKind.CLASS, className,
                             "L" + className + ";", typeArgs, 0));
@@ -158,7 +184,9 @@ public final class SignatureParser {
                 }
                 return next;
             }
-            default: out.set(JavaType.classType("java/lang/Object")); return i + 1;
+            default:
+                out.set(JavaType.classType("java/lang/Object"));
+                return i + 1;
         }
     }
 

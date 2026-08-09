@@ -6,7 +6,6 @@ import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
-import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
@@ -42,6 +41,7 @@ public class BoxingRewriter implements RewriteRule {
             "java/lang/Boolean", "java/lang/Character");
 
     private static final Map<String, String> UNBOX_METHODS = new HashMap<>();
+
     static {
         UNBOX_METHODS.put("intValue", "java/lang/Integer");
         UNBOX_METHODS.put("longValue", "java/lang/Long");
@@ -54,7 +54,7 @@ public class BoxingRewriter implements RewriteRule {
     }
 
     @Override
-    public String name() { return "boxing"; }
+    public String name() {return "boxing";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -122,13 +122,17 @@ public class BoxingRewriter implements RewriteRule {
 
     private boolean isUnboxCall(InvocationExpr inv) {
         String name = inv.methodName();
-        if (name == null || !UNBOX_METHODS.containsKey(name)) return false;
+        if (name == null || !UNBOX_METHODS.containsKey(name)) {
+            return false;
+        }
         // Check target is a VarExpr (likely the wrapper type)
         return inv.target() != null && inv.arguments().isEmpty();
     }
 
     private boolean isBoxCall(InvocationExpr inv) {
-        if (!"valueOf".equals(inv.methodName())) return false;
+        if (!"valueOf".equals(inv.methodName())) {
+            return false;
+        }
         // target should be null (static call) and exactly 1 arg
         return inv.target() == null && inv.arguments().size() == 1;
     }
