@@ -360,7 +360,7 @@ public final class BlockReducer {
             }
             // switch
             else if (switchInfo != null) {
-                s = buildSwitch(switchInfo, group, ir);
+                s = buildSwitch(switchInfo, group, ir, groups, consumed);
             }
             // try-catch: defer wrapping to post-processing pass (wrapTryCatchBlocks)
             // This ensures try ranges that contain if/else/loop structures
@@ -1439,13 +1439,30 @@ public final class BlockReducer {
     }
 
     /** Build a SwitchStatement from switch info and the grouped blocks. */
-    private SwitchStatement buildSwitch(SwitchInfo info, BlockGroup group, LinearIr ir) {
+    private SwitchStatement buildSwitch(SwitchInfo info, BlockGroup group, LinearIr ir,
+                                        List<BlockGroup> allGroups, Set<BlockGroup> consumed) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
         Expression discriminant = new VarExpr("switchKey");
         for (IrInstruction insn : allInsns) {
             if (insn.opcode() == IrOpcode.SWITCH && !insn.operands().isEmpty()) {
                 discriminant = valueToExpr(insn.operands().getFirst());
                 break;
+            }
+        }
+
+        // Collect all case target blocks so we can consume their groups
+        Set<BasicBlock> allCaseBlocks = new HashSet<>();
+        info.caseBodies().values().forEach(allCaseBlocks::addAll);
+        allCaseBlocks.addAll(info.defaultBody());
+
+        // Consume groups containing case target blocks
+        for (BlockGroup g : allGroups) {
+            if (consumed.contains(g)) continue;
+            for (BasicBlock gb : g.blocks()) {
+                if (allCaseBlocks.contains(gb)) {
+                    consumed.add(g);
+                    break;
+                }
             }
         }
 
