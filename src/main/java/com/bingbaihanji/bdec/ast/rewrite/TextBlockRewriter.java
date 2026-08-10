@@ -23,11 +23,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Detects multiline string literals and converts them to
- * Java 15+ text blocks (triple-quoted strings).
+ * 文本块重写器,检测多行字符串字面量并将其转换为 Java 15+ 的文本块(三引号字符串).
  *
- * <p>Pattern: String literals containing {@code \n} and at least
- * 2 lines are candidates for text block conversion.
+ * <p>匹配模式:包含 {@code \n} 且至少包含 2 行的字符串字面量将被标记为文本块候选.</p>
  *
  * <pre>
  *   String s = "line1\nline2\nline3";
@@ -52,6 +50,12 @@ public class TextBlockRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /**
+     * 重写类型声明,遍历所有方法和字段,将其中的多行字符串字面量标记为文本块.
+     *
+     * @param td 待重写的类型声明
+     * @return 重写后的类型声明
+     */
     private TypeDeclaration rewriteType(TypeDeclaration td) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
@@ -70,6 +74,12 @@ public class TextBlockRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
+    /**
+     * 递归重写语句,遍历其中的表达式并将多行字符串字面量标记为文本块.
+     *
+     * @param s 待重写的语句
+     * @return 重写后的语句
+     */
     private Statement rewriteStatement(Statement s) {
         if (s instanceof BlockStatement bs) {
             return new BlockStatement(bs.statements().stream()
@@ -93,13 +103,20 @@ public class TextBlockRewriter implements RewriteRule {
         return s;
     }
 
+    /**
+     * 递归重写表达式,对字符串字面量进行文本块转换检测.
+     * <p>实际的文本块格式化由代码生成器(emitter)负责,此处仅标记符合条件的字符串.</p>
+     *
+     * @param e 待重写的表达式
+     * @return 重写后的表达式
+     */
     private Expression rewriteExpr(Expression e) {
         if (e instanceof LitExpr lit) {
             Object val = lit.value();
             if (val instanceof String s && shouldConvert(s)) {
                 return new LitExpr(s, JavaType.classType("java/lang/String"));
-                // The emitter will handle multiline string formatting
-                // We just mark it — actual text block formatting is in emitter
+                // 代码生成器将负责多行字符串的格式化输出
+                // 此处仅标记 —— 实际的文本块格式化在代码生成器中完成
             }
             return e;
         }
@@ -124,18 +141,23 @@ public class TextBlockRewriter implements RewriteRule {
         return e;
     }
 
-    /** Check if a string literal should be converted to a text block.
-     *  Requires: contains newlines, at least 3 lines, not just whitespace. */
+    /**
+     * 判断字符串字面量是否应转换为文本块.
+     * <p>条件:包含换行符且行数不少于 3 行,且不能只是空白字符.</p>
+     *
+     * @param s 待检查的字符串
+     * @return 若符合文本块条件则返回 {@code true}
+     */
     private boolean shouldConvert(String s) {
         if (s == null || s.isEmpty()) {
             return false;
         }
-        // Count lines
+        // 统计行数
         long lines = s.lines().count();
         if (lines < 3) {
             return false;
         }
-        // Must contain actual newlines (not just \r\n at end)
+        // 必须包含实际的换行符(不能仅是行尾的 \r\n)
         return s.contains("\n") || s.contains("\r\n");
     }
 }

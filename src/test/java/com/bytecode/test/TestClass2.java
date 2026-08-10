@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
 
-// 主测试类 2 —— 内部类、泛型、模式匹配、文本块、未命名变量等
+// 主测试类 2 —— 内部类,泛型,模式匹配,文本块,未命名变量等
 public class TestClass2 {
 
     private int counter = 0;
@@ -100,13 +100,13 @@ public class TestClass2 {
         }
     }
 
-    // 注解使用（含参数）
+    // 注解使用(含参数)
     @AnnotationDemo(value = "class", count = 10)
     public void annotatedMethod(@AnnotationDemo("param") String param) {
         System.out.println(param);
     }
 
-    // 模式匹配 switch（含 when 守卫）
+    // 模式匹配 switch(含 when 守卫)
     public String patternSwitch(Object obj) {
         return switch (obj) {
             case Integer i when i > 0 -> "positive int";
@@ -126,7 +126,7 @@ public class TestClass2 {
                """;
     }
 
-    // 未命名变量（_）在 catch 和 lambda 中
+    // 未命名变量(_)在 catch 和 lambda 中
     public void unnamedDemo() {
         try {
             int x = 10 / 0;

@@ -18,10 +18,36 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 结构解析器.
+ *
+ * <p>负责解析类文件中字段表({@code field_info})和方法表({@code method_info})
+ * 的结构化数据.每个字段和方法都包含:
+ * <ul>
+ *   <li>访问标志</li>
+ *   <li>名称索引与描述符索引(指向常量池)</li>
+ *   <li>属性表(如 {@code Signature},{@code ConstantValue},{@code Code} 等)</li>
+ * </ul>
+ *
+ * <p>该类仅在同一包内可见(package-private),作为 {@link ClassFileReader} 的辅助组件.
+ */
 class StructureParser {
 
+    /** 指令解码器,用于解析 {@code Code} 属性中的字节码指令. */
     private final InstructionDecoder insnDecoder = new InstructionDecoder();
 
+    /**
+     * 解析字段表.
+     *
+     * <p>遍历类文件中所有字段,提取每个字段的访问标志,名称,描述符,
+     * 常量值(来自 {@code ConstantValue} 属性)和泛型签名.
+     *
+     * @param in    数据输入流,定位在字段表起始位置
+     * @param pool  已解析的常量池
+     * @param count 字段数量
+     * @return 字段模型列表
+     * @throws IOException 如果读取数据流时发生 I/O 错误
+     */
     List<FieldModel> parseFields(DataInputStream in, ConstantPoolEntry[] pool, int count)
             throws IOException {
         List<FieldModel> fields = new ArrayList<>();
@@ -63,6 +89,23 @@ class StructureParser {
         return fields;
     }
 
+    /**
+     * 解析方法表.
+     *
+     * <p>遍历类文件中所有方法,提取每个方法的访问标志,名称,描述符,
+     * 返回类型与参数类型,字节码指令,异常处理器表,签名,局部变量表等信息.
+     *
+     * <p>{@code Code} 属性中包含的子属性也会被解析:
+     * <ul>
+     *   <li>{@code LocalVariableTable} — 局部变量表,用于还原参数名和局部变量名</li>
+     * </ul>
+     *
+     * @param in    数据输入流,定位在方法表起始位置
+     * @param pool  已解析的常量池
+     * @param count 方法数量
+     * @return 方法模型列表
+     * @throws IOException 如果读取数据流时发生 I/O 错误
+     */
     List<MethodModel> parseMethods(DataInputStream in, ConstantPoolEntry[] pool, int count)
             throws IOException {
         List<MethodModel> methods = new ArrayList<>();
@@ -92,6 +135,7 @@ class StructureParser {
                     int sigIdx = in.readUnsignedShort();
                     signature = ConstantPoolParser.utf8(pool, sigIdx);
                 } else if ("Code".equals(attrName)) {
+                    // Code 属性核心结构
                     maxStack = in.readUnsignedShort();
                     maxLocals = in.readUnsignedShort();
                     int codeLength = in.readInt();
@@ -99,6 +143,7 @@ class StructureParser {
                     in.readFully(code);
                     instructions = insnDecoder.decodeAll(code, 0, codeLength);
 
+                    // 解析异常处理器表
                     int excCount = in.readUnsignedShort();
                     handlers = new ArrayList<>();
                     for (int e = 0; e < excCount; e++) {
@@ -106,12 +151,13 @@ class StructureParser {
                         int endPc = in.readUnsignedShort();
                         int handlerPc = in.readUnsignedShort();
                         int catchTypeIdx = in.readUnsignedShort();
+                        // catchType 为 0 时表示 finally 块(捕获任意异常)
                         String catchType = catchTypeIdx == 0 ? null
                                 : ConstantPoolParser.className(pool, catchTypeIdx);
                         handlers.add(new ExceptionHandlerModel(startPc, endPc, handlerPc, catchType));
                     }
 
-                    // Parse Code sub-attributes (LineNumberTable, LocalVariableTable, etc.)
+                    // 解析 Code 子属性(行号表,局部变量表等)
                     int codeAttrCount = in.readUnsignedShort();
                     for (int ca = 0; ca < codeAttrCount; ca++) {
                         int subAttrNameIdx = in.readUnsignedShort();
@@ -126,8 +172,8 @@ class StructureParser {
                                 int lvtDescIdx = in.readUnsignedShort();
                                 int index = in.readUnsignedShort();
                                 String varName = ConstantPoolParser.utf8(pool, lvtNameIdx);
-                                // Capture ALL LVT entries, not just start_pc==0.
-                                // putIfAbsent ensures earliest-scope name (params) wins.
+                                // 捕获所有 LVT 条目,而不仅仅是 start_pc==0 的条目.
+                                // putIfAbsent 确保最早作用域的变量名(即参数名)优先.
                                 if (varName != null && !varName.isEmpty()) {
                                     localVarNames.putIfAbsent(index, varName);
                                 }
@@ -136,8 +182,6 @@ class StructureParser {
                             in.skipBytes(len);
                         }
                     }
-                    // Add LVT data to method model (intermediate state)
-                    // We'll set it after the method is constructed
                 } else {
                     in.skipBytes(attrLen);
                 }

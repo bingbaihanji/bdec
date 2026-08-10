@@ -10,22 +10,38 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Emits AST expressions to Java source text. Implements AstVisitor for dispatch. */
+/**
+ * 表达式发射器,将 AST 表达式节点输出为 Java 源代码文本.
+ * 实现 AstVisitor 接口以支持访问者模式分发.
+ */
 public class ExpressionEmitter implements AstVisitor<Void, Void> {
 
+    /** 缩进写入器,用于格式化输出源代码 */
     private final IndentWriter w;
 
+    /** 已导入的包集合,用于类型名称简写判断 */
     private final Set<String> importedPackages;
 
+    /**
+     * 构造表达式发射器,无导入信息.
+     *
+     * @param w 缩进写入器
+     */
     public ExpressionEmitter(IndentWriter w) {
         this(w, List.of());
     }
 
+    /**
+     * 构造表达式发射器,根据导入列表初始化包名集合.
+     *
+     * @param w       缩进写入器
+     * @param imports 导入语句列表,如 "java.util.List"
+     */
     public ExpressionEmitter(IndentWriter w, List<String> imports) {
         this.w = w;
         this.importedPackages = new HashSet<>();
         for (String imp : imports) {
-            // Convert import like "java.util.List" to package "java.util"
+            // 将 "java.util.List" 形式的导入转换为包名 "java.util"
             int lastDot = imp.lastIndexOf('.');
             if (lastDot >= 0) {
                 importedPackages.add(imp.substring(0, lastDot));
@@ -33,6 +49,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 将二元运算符映射为其对应的 Java 符号字符串.
+     *
+     * @param op 二元运算符枚举
+     * @return 运算符符号字符串
+     */
     static String opSymbol(BinaryOperator op) {
         return switch (op) {
             case ADD -> "+";
@@ -58,8 +80,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         };
     }
 
-    // ── AstVisitor ─────────────────────────────────────────────────
-
+    /**
+     * 对字符串进行 Java 字面量转义(处理引号,反斜杠,换行等字符).
+     *
+     * @param s 原始字符串
+     * @return 转义后的字符串
+     */
     private static String escapeString(String s) {
         StringBuilder sb = new StringBuilder();
         for (char c : s.toCharArray()) {
@@ -75,6 +101,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         return sb.toString();
     }
 
+    /**
+     * 对单个字符进行 Java 字符字面量转义.
+     *
+     * @param c 原始字符
+     * @return 转义后的字符表示
+     */
     private static String escapeChar(char c) {
         return switch (c) {
             case '\'' -> "\\'";
@@ -86,9 +118,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         };
     }
 
-    // ── Emit dispatch ──────────────────────────────────────────────
-
-    /** Map BinaryOperator to its compound-assignment symbol prefix. */
+    /**
+     * 将二元运算符映射为其复合赋值符号前缀(如 + 映射为 += 的 + 部分).
+     *
+     * @param op 二元运算符枚举
+     * @return 复合赋值符号前缀字符串
+     */
     private static String compoundSym(BinaryOperator op) {
         return switch (op) {
             case ADD -> "+";
@@ -106,21 +141,26 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         };
     }
 
-    // ── Individual emitters ────────────────────────────────────────
-
-    /** Resolve a type name to its shortest valid form:
-     *  - java.lang.* types → simple name
-     *  - types matching an import → simple name
-     *  - otherwise → full qualified name. */
+    /**
+     * 解析类型名称为最短有效形式:
+     * <ul>
+     *   <li>java.lang.* 下的类型 → 简单类名</li>
+     *   <li>与已知导入匹配的类型 → 简单类名</li>
+     *   <li>其他情况 → 全限定名</li>
+     * </ul>
+     *
+     * @param type Java 类型对象
+     * @return 最短有效的类型名称字符串
+     */
     String typeName(JavaType type) {
         if (type.kind() == TypeKind.CLASS && type.internalName() != null) {
             String internal = type.internalName();
             String full = internal.replace('/', '.');
-            // java.lang always gets short name
+            // java.lang 包下的类型始终使用简单类名
             if (full.startsWith("java.lang.") && full.indexOf('.', 10) < 0) {
                 return full.substring(10);
             }
-            // Types with matching imports get short name
+            // 与导入包名匹配的类型使用简单类名
             int lastSlash = internal.lastIndexOf('/');
             if (lastSlash >= 0) {
                 String pkg = internal.substring(0, lastSlash).replace('/', '.');
@@ -130,13 +170,13 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             }
             return full;
         }
-        // For arrays, delegate to type's own displayName (handled recursively)
+        // 数组类型委托给类型自身的 displayName(递归处理)
         return type.displayName();
     }
 
     @Override
     public Void visitStatement(Statement stmt, Void context) {
-        return null; // statements handled by StatementEmitter
+        return null; // 语句由 StatementEmitter 处理
     }
 
     @Override
@@ -145,6 +185,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         return null;
     }
 
+    /**
+     * 根据表达式类型分发到具体的发射方法.
+     *
+     * @param expr 要发射的表达式节点
+     */
     public void emit(Expression expr) {
         switch (expr.kind()) {
             case VARIABLE -> emitVar((VarExpr) expr);
@@ -164,10 +209,20 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 发射变量引用表达式.
+     *
+     * @param v 变量表达式节点
+     */
     private void emitVar(VarExpr v) {
         w.write(v.name());
     }
 
+    /**
+     * 发射字面量表达式(null,字符串,字符,布尔,数值等).
+     *
+     * @param lit 字面量表达式节点
+     */
     private void emitLiteral(LitExpr lit) {
         Object v = lit.value();
         if (v == null) {
@@ -179,16 +234,20 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         } else if (v instanceof Boolean b) {
             w.write(b ? "true" : "false");
         } else if (v instanceof Long l) {
+            // long 类型需要后缀 L
             w.write(String.valueOf(l)).write("L");
         } else if (v instanceof Float f) {
+            // 处理特殊的浮点数值:NaN 和无穷大
             if (Float.isNaN(f)) {
                 w.write("Float.NaN");
             } else if (Float.isInfinite(f)) {
                 w.write(f > 0 ? "Float.POSITIVE_INFINITY" : "Float.NEGATIVE_INFINITY");
             } else {
+                // float 类型需要后缀 f
                 w.write(String.valueOf(f)).write("f");
             }
         } else if (v instanceof Double d) {
+            // 处理特殊的浮点数值:NaN 和无穷大
             if (Double.isNaN(d)) {
                 w.write("Double.NaN");
             } else if (Double.isInfinite(d)) {
@@ -201,6 +260,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 发射二元运算表达式,根据优先级决定是否添加括号.
+     *
+     * @param bin 二元运算表达式节点
+     */
     private void emitBinary(BinExpr bin) {
         BinaryOperator op = bin.operator();
         Expression left = bin.left(), right = bin.right();
@@ -209,6 +273,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         emitWithParens(right, bin.precedence());
     }
 
+    /**
+     * 发射一元运算表达式(取负,取反,自增,自减等).
+     *
+     * @param un 一元运算表达式节点
+     */
     private void emitUnary(UnExpr un) {
         UnaryOperator op = un.operator();
         String sym = switch (op) {
@@ -217,10 +286,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             case COMPLEMENT -> "~";
             case PRE_INC -> "++";
             case PRE_DEC -> "--";
+            // 后缀运算符在操作数之后输出
             case POST_INC, POST_DEC -> "";
         };
         w.write(sym);
         emit(un.operand());
+        // 输出后缀运算符
         if (op == UnaryOperator.POST_INC) {
             w.write("++");
         } else if (op == UnaryOperator.POST_DEC) {
@@ -228,9 +299,15 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 发射赋值表达式(普通赋值和复合赋值).
+     *
+     * @param a 赋值表达式节点
+     */
     private void emitAssign(AssignExpr a) {
         emit(a.target());
         if (a.compoundOp() != null) {
+            // 复合赋值如 +=,-=,*= 等
             w.space().write(compoundSym(a.compoundOp())).write("= ");
         } else {
             w.write(" = ");
@@ -238,6 +315,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         emit(a.value());
     }
 
+    /**
+     * 发射三元条件表达式(condition ? trueExpr : falseExpr).
+     *
+     * @param c 条件表达式节点
+     */
     private void emitConditional(CondExpr c) {
         emitWithParens(c.condition(), c.precedence());
         w.write(" ? ");
@@ -246,6 +328,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         emit(c.falseExpr());
     }
 
+    /**
+     * 发射方法调用表达式.
+     *
+     * @param inv 方法调用表达式节点
+     */
     private void emitInvocation(InvocationExpr inv) {
         if (inv.target() != null) {
             emit(inv.target());
@@ -262,8 +349,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         w.write(")");
     }
 
-    // ── Helpers ────────────────────────────────────────────────────
-
+    /**
+     * 发射字段访问表达式.
+     *
+     * @param fa 字段访问表达式节点
+     */
     private void emitFieldAccess(FieldAccessExpr fa) {
         if (fa.target() != null) {
             emit(fa.target());
@@ -272,6 +362,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         w.write(fa.fieldName());
     }
 
+    /**
+     * 发射 instanceof 类型检查表达式.
+     *
+     * @param io instanceof 表达式节点
+     */
     private void emitInstanceOf(InstanceOfExpr io) {
         if (io.operand() != null) {
             emitWithParens(io.operand(), io.precedence());
@@ -282,14 +377,20 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         w.write(typeName(io.targetType()));
     }
 
+    /**
+     * 发射 Lambda 表达式或方法引用.
+     *
+     * @param lambda Lambda 表达式节点
+     */
     private void emitLambda(LambdaExpr lambda) {
         if (lambda.isMethodRef()) {
+            // 方法引用(如 String::valueOf)
             w.write(lambda.methodRefOwner());
             w.write("::");
             w.write(lambda.methodRefName());
             return;
         }
-        // Lambda expression
+        // Lambda 表达式体
         w.write("(");
         List<LambdaExpr.Param> params = lambda.parameters();
         for (int i = 0; i < params.size(); i++) {
@@ -305,15 +406,21 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
         w.write(") -> ");
         if (lambda.isExpressionBody() && lambda.bodyExpr() != null) {
+            // 表达式体 lambda
             emit(lambda.bodyExpr());
         } else if (lambda.bodyBlock() != null) {
-            // Block lambda — delegate to statement emitter via a visitor pattern
+            // 块体 lambda — 委托给语句发射器通过访问者模式处理
             w.write("{ /* lambda block */ }");
         } else {
             w.write("{}");
         }
     }
 
+    /**
+     * 发射数组访问表达式.
+     *
+     * @param aa 数组访问表达式节点
+     */
     private void emitArrayAccess(ArrayAccessExpr aa) {
         if (aa.array() != null) {
             emitWithParens(aa.array(), aa.precedence());
@@ -327,14 +434,25 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         w.write("]");
     }
 
+    /**
+     * 发射类型转换表达式(强制转型).
+     *
+     * @param cast 类型转换表达式节点
+     */
     private void emitCast(CastExpr cast) {
         w.write("(").write(typeName(cast.targetType())).write(") ");
         emitWithParens(cast.operand(), cast.precedence());
     }
 
+    /**
+     * 发射 new 实例化表达式(创建对象或数组).
+     *
+     * @param n new 表达式节点
+     */
     private void emitNew(NewExpr n) {
         w.write("new ").write(typeName(n.instantiatedType()));
         if (!n.constructorArgs().isEmpty()) {
+            // 构造器参数调用
             w.write("(");
             List<Expression> args = n.constructorArgs();
             for (int i = 0; i < args.size(); i++) {
@@ -345,6 +463,7 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             }
             w.write(")");
         } else if (!n.dimensions().isEmpty()) {
+            // 多维数组创建
             w.write("[");
             for (int i = 0; i < n.dimensions().size(); i++) {
                 if (i > 0) {
@@ -358,6 +477,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 根据运算符优先级决定是否为子表达式添加括号后发射.
+     *
+     * @param expr             子表达式
+     * @param parentPrecedence 父表达式的优先级
+     */
     private void emitWithParens(Expression expr, int parentPrecedence) {
         if (expr.precedence() < parentPrecedence) {
             w.write("(");

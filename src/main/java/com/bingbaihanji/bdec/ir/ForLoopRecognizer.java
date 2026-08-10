@@ -15,19 +15,25 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Recognizes for-loop patterns in structured AST and converts
- * while-loops to for-loops when the pattern matches.
+ * for循环识别器.
+ * <p>
+ * 在结构化AST中识别for循环模式,并在模式匹配时将while循环转换为for循环.
+ * </p>
  *
- * Pattern detected:
+ * <h3>检测的模式</h3>
+ * <pre>{@code
  *   { init; while (cond) { body; incr; } }
  *   → for (init; cond; incr) { body; }
- *
- * Also detects for-each patterns (iterator-based iteration).
+ * }</pre>
+ * 同时还能检测基于迭代器的for-each模式.
  */
 public final class ForLoopRecognizer {
 
     /**
-     * Process a block and convert matching while-loops to for-loops.
+     * 处理一个块语句,将匹配的while循环转换为for循环.
+     *
+     * @param block 原始块语句
+     * @return 识别后的块语句
      */
     public BlockStatement recognize(BlockStatement block) {
         List<Statement> statements = new ArrayList<>(block.statements());
@@ -36,7 +42,7 @@ public final class ForLoopRecognizer {
         for (int i = 0; i < statements.size(); i++) {
             Statement s = statements.get(i);
 
-            // Pattern: variable declaration followed by while loop
+            // 模式匹配:变量声明后紧跟while循环
             if (i + 1 < statements.size()
                     && isInitStatement(s)
                     && statements.get(i + 1) instanceof LoopStatement loop
@@ -48,7 +54,7 @@ public final class ForLoopRecognizer {
                 Statement cleanBody = removeIncrement(body, incr);
 
                 if (init != null && cleanBody != null) {
-                    // Create for-loop: for(init; cond; incr) { cleanBody }
+                    // 创建for循环: for(init; cond; incr) { cleanBody }
                     LoopStatement forLoop = new LoopStatement(
                             LoopStatement.LoopKind.FOR,
                             init,
@@ -56,12 +62,12 @@ public final class ForLoopRecognizer {
                             incr,
                             cleanBody);
                     result.add(forLoop);
-                    i++; // skip the while loop
+                    i++; // 跳过已处理的while循环
                     continue;
                 }
             }
 
-            // Recursive processing for nested blocks
+            // 递归处理嵌套块
             if (s instanceof BlockStatement bs) {
                 s = recognize(bs);
             } else if (s instanceof IfStatement ifStmt) {
@@ -78,7 +84,9 @@ public final class ForLoopRecognizer {
         return new BlockStatement(result);
     }
 
-    /** Check if a statement is a loop initializer (variable assignment). */
+    /**
+     * 判断一条语句是否为循环初始化语句(变量赋值).
+     */
     private boolean isInitStatement(Statement s) {
         if (s instanceof ExpressionStatement es
                 && es.expression() instanceof AssignExpr assign) {
@@ -87,7 +95,9 @@ public final class ForLoopRecognizer {
         return false;
     }
 
-    /** Extract the initialization expression from a statement. */
+    /**
+     * 从语句中提取初始化表达式.
+     */
     private Expression extractInit(Statement s) {
         if (s instanceof ExpressionStatement es) {
             return es.expression();
@@ -95,7 +105,9 @@ public final class ForLoopRecognizer {
         return null;
     }
 
-    /** Try to extract an increment statement from the end of a loop body. */
+    /**
+     * 尝试从循环体末尾提取递增/递减表达式.
+     */
     private Expression extractIncrement(Statement body) {
         if (body instanceof BlockStatement block) {
             List<Statement> stmts = block.statements();
@@ -117,7 +129,9 @@ public final class ForLoopRecognizer {
         return null;
     }
 
-    /** Check if an expression is an increment operation (i++, ++i, i += n, i = i + n). */
+    /**
+     * 判断一个表达式是否为递增/递减操作(i++, ++i, i += n, i = i + n等).
+     */
     private boolean isIncrementExpr(Expression e) {
         if (e instanceof AssignExpr assign) {
             if (assign.target() instanceof VarExpr) {
@@ -132,7 +146,9 @@ public final class ForLoopRecognizer {
         return false;
     }
 
-    /** Remove the increment statement from the body, returning the cleaned body. */
+    /**
+     * 从循环体中移除递增语句,返回清理后的循环体.
+     */
     private Statement removeIncrement(Statement body, Expression incr) {
         if (incr == null) {
             return body;
@@ -149,12 +165,14 @@ public final class ForLoopRecognizer {
             return new BlockStatement(stmts);
         }
         if (body instanceof ExpressionStatement es && es.expression().equals(incr)) {
-            return new BlockStatement(List.of()); // empty body
+            return new BlockStatement(List.of()); // 空循环体
         }
         return body;
     }
 
-    /** Recursively process if-statement branches. */
+    /**
+     * 递归处理if语句的两个分支.
+     */
     private Statement recognizeIf(IfStatement ifStmt) {
         Statement thenBranch = ifStmt.thenBranch();
         if (thenBranch instanceof BlockStatement bs) {

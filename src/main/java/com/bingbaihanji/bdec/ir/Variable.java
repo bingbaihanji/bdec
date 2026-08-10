@@ -2,20 +2,43 @@ package com.bingbaihanji.bdec.ir;
 
 import com.bingbaihanji.bdec.type.JavaType;
 
+/**
+ * 变量.
+ * <p>
+ * 表示IR中的局部变量.每个变量由槽位(slot)和版本号(version)唯一标识.
+ * 槽位对应JVM局部变量表中的索引,版本号用于SSA形式的唯一命名.
+ * 变量记录其是否为方法参数以及原始索引,支持名称设置.
+ * </p>
+ */
 public final class Variable implements Value {
 
+    /** 局部变量槽位索引 */
     private final int slot;
 
+    /** SSA版本号,同槽位每次赋值递增 */
     private final int version;
 
+    /** 变量的Java类型 */
     private final JavaType type;
 
+    /** 是否为方法参数 */
     private final boolean isParameter;
 
+    /** 原始索引,用于生成默认名称 */
     private final int originalIndex;
 
+    /** 变量名称(可为null,则使用默认名称"varN") */
     private String name;
 
+    /**
+     * 构造一个变量.
+     *
+     * @param slot          局部变量槽位索引
+     * @param version       SSA版本号
+     * @param type          Java类型
+     * @param isParameter   是否为方法参数
+     * @param originalIndex 原始索引
+     */
     public Variable(int slot, int version, JavaType type, boolean isParameter, int originalIndex) {
         this.slot = slot;
         this.version = version;
@@ -24,19 +47,29 @@ public final class Variable implements Value {
         this.originalIndex = originalIndex;
     }
 
+    /** @return 局部变量槽位索引 */
     public int slot() {return slot;}
 
+    /** @return SSA版本号 */
     public int version() {return version;}
 
+    /**
+     * 获取变量名称.
+     *
+     * @return 变量名称,若未设置则返回默认名称"varN"
+     */
     public String name() {return name != null ? name : "var" + originalIndex;}
 
+    /** 设置变量名称 */
     public void setName(String name) {this.name = name;}
 
     @Override
     public JavaType type() {return type;}
 
+    /** @return 是否为方法参数 */
     public boolean isParameter() {return isParameter;}
 
+    /** @return 原始索引 */
     public int originalIndex() {return originalIndex;}
 
     @Override

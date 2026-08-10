@@ -19,18 +19,34 @@ import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Emits AST statements to Java source text. Implements AstVisitor for dispatch. */
+/**
+ * 语句发射器,将 AST 语句节点输出为 Java 源代码文本.
+ * 实现 AstVisitor 接口以支持访问者模式分发.
+ * 支持块语句,控制流语句(if/for/while/switch/try 等),
+ * 方法声明,字段声明,变量声明等所有 Java 语句类型的发射.
+ */
 public class StatementEmitter implements AstVisitor<Void, Void> {
 
+    /** 缩进写入器,用于格式化输出源代码 */
     private final IndentWriter w;
 
+    /** 表达式发射器,用于输出语句中的表达式部分 */
     private final ExpressionEmitter exprs;
 
+    /** 当前类型的简单类名,用于判断方法是否为构造器 */
     private final String className;
 
-    /** Whether the enclosing type is an interface (for emitting {@code default} methods). */
+    /** 当前封闭类型是否为接口(影响 default 方法的输出) */
     private final boolean isInterface;
 
+    /**
+     * 构造语句发射器.
+     *
+     * @param w           缩进写入器
+     * @param exprs       表达式发射器
+     * @param className   类名(用于识别构造器)
+     * @param isInterface 是否为接口类型
+     */
     public StatementEmitter(IndentWriter w, ExpressionEmitter exprs, String className, boolean isInterface) {
         this.w = w;
         this.exprs = exprs;
@@ -38,17 +54,26 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         this.isInterface = isInterface;
     }
 
-    /** Backward-compatible constructor — assumes non-interface. */
+    /**
+     * 兼容旧调用的构造器,默认非接口类型.
+     *
+     * @param w         缩进写入器
+     * @param exprs     表达式发射器
+     * @param className 类名
+     */
     public StatementEmitter(IndentWriter w, ExpressionEmitter exprs, String className) {
         this(w, exprs, className, false);
     }
 
-    /** Resolve a type name using imports (delegates to ExpressionEmitter). */
+    /**
+     * 委托给 ExpressionEmitter 解析类型名称为最短有效形式.
+     *
+     * @param t Java 类型
+     * @return 类型名称字符串
+     */
     private String typeName(com.bingbaihanji.bdec.type.JavaType t) {
         return exprs.typeName(t);
     }
-
-    // ── AstVisitor ─────────────────────────────────────────────────
 
     @Override
     public Void visitStatement(Statement stmt, Void context) {
@@ -62,8 +87,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         return null;
     }
 
-    // ── Emit dispatch ──────────────────────────────────────────────
-
+    /**
+     * 根据语句类型分发到具体的发射方法.
+     *
+     * @param stmt 要发射的语句节点
+     */
     public void emit(Statement stmt) {
         if (stmt == null) {
             System.err.println("WARNING: StatementEmitter.emit() called with null statement, skipping");
@@ -89,8 +117,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
-    // ── Individual emitters ────────────────────────────────────────
-
+    /**
+     * 发射代码块语句,包裹在花括号内并处理缩进.
+     *
+     * @param b 块语句节点
+     */
     private void emitBlock(BlockStatement b) {
         w.write("{").newLine();
         w.indent();
@@ -107,6 +138,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         w.write("}").newLine();
     }
 
+    /**
+     * 发射 if/if-else 条件语句.
+     *
+     * @param i if 语句节点
+     */
     private void emitIf(IfStatement i) {
         w.token("if").space().write("(");
         exprs.emit(i.condition());
@@ -118,6 +154,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 发射循环语句(for/while/do-while/for-each).
+     *
+     * @param l 循环语句节点
+     */
     private void emitLoop(LoopStatement l) {
         switch (l.loopKind()) {
             case DO_WHILE -> {
@@ -131,7 +172,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             }
             case FOR_EACH -> {
                 w.token("for").space().write("(");
-                // Emit variable and iterable: "Type var : iterable"
+                // 输出变量和可迭代对象:"Type var : iterable"
                 if (l.forEachVar() != null) {
                     exprs.emit(l.forEachVar());
                 } else if (l.initExpr() != null) {
@@ -148,17 +189,17 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             }
             case FOR -> {
                 w.token("for").space().write("(");
-                // Emit initializer
+                // 输出初始化表达式
                 if (l.initExpr() != null) {
                     exprs.emit(l.initExpr());
                 }
                 w.write("; ");
-                // Emit condition
+                // 输出条件表达式
                 if (l.condition() != null) {
                     exprs.emit(l.condition());
                 }
                 w.write("; ");
-                // Emit increment
+                // 输出递增表达式
                 if (l.incrExpr() != null) {
                     exprs.emit(l.incrExpr());
                 }
@@ -176,6 +217,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 发射 return 语句.
+     *
+     * @param r return 语句节点
+     */
     private void emitReturn(ReturnStatement r) {
         w.token("return");
         if (r.value() != null) {
@@ -185,21 +231,26 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         w.write(";").newLine();
     }
 
+    /**
+     * 发射方法声明,包括修饰符,泛型参数,返回值类型,参数列表和方法体.
+     * 同时处理构造函数中隐式 super() 调用的过滤.
+     *
+     * @param m 方法声明节点
+     */
     private void emitMethodDecl(MethodDeclaration m) {
-        // Method modifiers
+        // 输出方法修饰符
         emitMethodModifiers(m.accessFlags());
 
-        // Emit method-level type parameters: <T>
+        // 输出方法级别的泛型类型参数:<T>
         if (!m.typeParameters().isEmpty()) {
             w.write("<");
             w.write(String.join(", ", m.typeParameters()));
             w.write(">").space();
         }
 
-        // Return type and name
         String methodName = m.name();
         if (methodName == null || methodName.isEmpty()) {
-            // Static initializer — just emit "static { }"
+            // 静态初始化块 — 仅输出 "static { }"
             w.write("{").newLine();
             w.indent();
             if (m.body() != null) {
@@ -216,7 +267,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             return;
         }
 
-        // Detect if this is a constructor (method name == class name)
+        // 判断是否为构造函数(方法名与类名相同)
         boolean isConstructor = methodName.equals(className);
         if (isConstructor) {
             w.write(methodName).write("(");
@@ -224,7 +275,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             w.write(typeName(m.returnType())).space().write(methodName).write("(");
         }
 
-        // Parameters
+        // 输出参数列表
         for (int i = 0; i < m.parameterNames().length; i++) {
             if (i > 0) {
                 w.write(", ");
@@ -233,10 +284,9 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
         w.write(")").space();
 
-        // Body
+        // 输出方法体
         if (m.body() != null) {
-            // Suppress implicit super() in constructors: if the first
-            // statement is a no-arg super() call, skip emitting it.
+            // 过滤构造函数中的隐式 super():若第一个语句为无参 super() 调用则跳过
             Statement body = m.body();
             if (isConstructor && body instanceof BlockStatement bs
                     && !bs.statements().isEmpty()) {
@@ -253,7 +303,12 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
-    /** Check if a statement is an implicit no-arg super() constructor call. */
+    /**
+     * 检查语句是否为隐式的无参 super() 构造函数调用.
+     *
+     * @param s 待检查的语句
+     * @return 是隐式 super() 调用返回 true
+     */
     private boolean isImplicitSuperCall(Statement s) {
         if (s instanceof ExpressionStatement es
                 && es.expression() instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
@@ -262,11 +317,21 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         return false;
     }
 
+    /**
+     * 发射表达式语句(表达式后跟分号).
+     *
+     * @param e 表达式语句节点
+     */
     private void emitExprStmt(ExpressionStatement e) {
         exprs.emit(e.expression());
         w.write(";").newLine();
     }
 
+    /**
+     * 发射字段声明,包括修饰符,类型,字段名和初始化表达式.
+     *
+     * @param f 字段声明节点
+     */
     private void emitFieldDecl(FieldDeclaration f) {
         emitFieldModifiers(f.accessFlags());
         w.write(typeName(f.type())).space().write(f.name());
@@ -277,11 +342,16 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         w.write(";").newLine();
     }
 
+    /**
+     * 发射 try-catch-finally 语句.try 必须至少包含一个 catch 或 finally 块.
+     *
+     * @param stmt try 语句节点
+     */
     private void emitTry(Statement stmt) {
         if (stmt instanceof TryStatement tryStmt) {
             boolean hasCatch = !tryStmt.catchClauses().isEmpty();
             boolean hasFinally = tryStmt.finallyBody() != null;
-            // Guard: a try must have at least one catch or finally
+            // 安全检查:try 必须至少有一个 catch 或 finally
             if (!hasCatch && !hasFinally) {
                 w.write("/* empty try */ { }").newLine();
                 return;
@@ -302,6 +372,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 发射 synchronized 同步块语句.
+     *
+     * @param stmt synchronized 语句节点
+     */
     private void emitSynchronized(Statement stmt) {
         if (stmt instanceof SynchronizedStatement sync) {
             w.token("synchronized").space().write("(");
@@ -313,6 +388,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 发射局部变量声明语句.
+     *
+     * @param stmt 变量声明语句节点
+     */
     private void emitVariableDecl(Statement stmt) {
         if (stmt instanceof VariableDeclaration vd) {
             w.write(typeName(vd.type())).space().write(vd.name());
@@ -326,6 +406,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
+    /**
+     * 发射 throw 抛出异常语句.
+     *
+     * @param stmt throw 语句节点
+     */
     private void emitThrow(Statement stmt) {
         w.token("throw").space();
         if (stmt instanceof ThrowStatement ts && ts.expression() != null) {
@@ -338,6 +423,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         w.write(";").newLine();
     }
 
+    /**
+     * 发射 switch 语句,支持传统的冒号式 switch 和箭头式 switch 表达式.
+     *
+     * @param stmt switch 语句节点
+     */
     private void emitSwitch(Statement stmt) {
         if (stmt instanceof SwitchStatement sw) {
             w.token("switch").space().write("(");
@@ -407,7 +497,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             w.dedent();
             w.write("}").newLine();
         } else {
-            // Fallback: generic switch placeholder
+            // 降级处理:输出通用 switch 占位符
             w.token("switch").space().write("(");
             if (!stmt.children().isEmpty() && stmt.children().getFirst() instanceof Expression ex) {
                 exprs.emit(ex);
@@ -422,7 +512,12 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         }
     }
 
-    /** For switch expression cases, flatten single-statement blocks. */
+    /**
+     * 对于 switch 表达式,将单条语句的 case 体扁平化(去掉不必要的块包装).
+     *
+     * @param body case 体中的语句列表
+     * @return 简化后的单条语句或块语句
+     */
     private Statement simplifyCaseBody(List<Statement> body) {
         if (body.size() == 1) {
             return body.get(0);
@@ -430,59 +525,89 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         return new BlockStatement(body);
     }
 
-    // ── Modifier helpers ──────────────────────────────────────────
-
+    /**
+     * 根据访问标志输出方法修饰符关键字(public/private/protected/static/final 等).
+     * 使用 JVM 规范的 ACC_* 常量进行位判断.
+     *
+     * @param flags 访问标志位掩码
+     */
     private void emitMethodModifiers(int flags) {
+        // 0x0001 = ACC_PUBLIC
         if ((flags & 0x0001) != 0) {
             w.token("public").space();
         } else if ((flags & 0x0002) != 0) {
+            // 0x0002 = ACC_PRIVATE
             w.token("private").space();
         } else if ((flags & 0x0004) != 0) {
+            // 0x0004 = ACC_PROTECTED
             w.token("protected").space();
         }
-        // Interface non-abstract, non-static, non-private methods need "default" keyword
+        // 接口中的非 abstract,非 static,非 private 方法需要 default 关键字
         if (isInterface && (flags & 0x0400) == 0 && (flags & 0x0008) == 0 && (flags & 0x0002) == 0) {
             w.token("default").space();
         }
+        // 0x0008 = ACC_STATIC
         if ((flags & 0x0008) != 0) {
             w.token("static").space();
         }
+        // 0x0010 = ACC_FINAL
         if ((flags & 0x0010) != 0) {
             w.token("final").space();
         }
+        // 0x0020 = ACC_SYNCHRONIZED
         if ((flags & 0x0020) != 0) {
             w.token("synchronized").space();
         }
+        // 0x0100 = ACC_NATIVE
         if ((flags & 0x0100) != 0) {
             w.token("native").space();
         }
+        // 0x0400 = ACC_ABSTRACT
         if ((flags & 0x0400) != 0) {
             w.token("abstract").space();
         }
     }
 
+    /**
+     * 根据访问标志输出字段修饰符关键字(public/private/protected/static/final/volatile/transient).
+     * 使用 JVM 规范的 ACC_* 常量进行位判断.
+     *
+     * @param flags 访问标志位掩码
+     */
     private void emitFieldModifiers(int flags) {
+        // 0x0001 = ACC_PUBLIC
         if ((flags & 0x0001) != 0) {
             w.token("public").space();
         } else if ((flags & 0x0002) != 0) {
+            // 0x0002 = ACC_PRIVATE
             w.token("private").space();
         } else if ((flags & 0x0004) != 0) {
+            // 0x0004 = ACC_PROTECTED
             w.token("protected").space();
         }
+        // 0x0008 = ACC_STATIC
         if ((flags & 0x0008) != 0) {
             w.token("static").space();
         }
+        // 0x0010 = ACC_FINAL
         if ((flags & 0x0010) != 0) {
             w.token("final").space();
         }
+        // 0x0040 = ACC_VOLATILE
         if ((flags & 0x0040) != 0) {
             w.token("volatile").space();
         }
+        // 0x0080 = ACC_TRANSIENT
         if ((flags & 0x0080) != 0) {
             w.token("transient").space();
         }
     }
 
+    /**
+     * 发射分支体.如果是块语句则直接发射,否则自动包裹在花括号中.
+     *
+     * @param stmt 分支体语句
+     */
     private void emitBranched(Statement stmt) {
         if (stmt == null) {
             w.write("{}").newLine();

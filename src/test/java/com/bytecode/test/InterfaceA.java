@@ -1,6 +1,6 @@
 package com.bytecode.test;
 
-// 接口，含 default/static/private 方法
+// 接口,含 default/static/private 方法
 public interface InterfaceA {
 
     int CONSTANT = 100;

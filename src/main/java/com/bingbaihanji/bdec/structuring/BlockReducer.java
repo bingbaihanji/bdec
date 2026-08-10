@@ -38,16 +38,18 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Converts a structured CFG into AST statements by translating
- * {@link IrInstruction} objects into proper AST expression/statement nodes.
+ * 基本块归约器.
  *
- * Key design: Only side-effecting instructions (STORE/RETURN/THROW/INVOKE/etc.)
- * become statements. Intermediate instructions (LOAD/CONST/BINARY/CAST/etc.)
- * are resolved into expression trees by following {@link InstructionRef} chains.
+ * <p>将结构化的控制流图(CFG)转换为 AST 语句,将 {@link IrInstruction} 对象
+ * 翻译为正确的 AST 表达式/语句节点.
+ *
+ * <p>核心设计:只有产生副作用的指令(STORE,RETURN,THROW,INVOKE 等)才会
+ * 成为语句.中间值指令(LOAD,CONST,BINARY,CAST 等)通过追踪
+ * {@link InstructionRef} 链来解析为表达式树.
  */
 public final class BlockReducer {
 
-    /** Known SAM (Single Abstract Method) names for common functional interfaces. */
+    /** 常见函数式接口(单一抽象方法)的方法名集合 */
     private static final Set<String> SAM_METHOD_NAMES = Set.of(
             "run", "call", "get", "apply", "accept", "test",
             "compare", "compareTo", "getAsBoolean", "getAsInt",
@@ -56,33 +58,33 @@ public final class BlockReducer {
             "applyAsInt", "applyAsLong", "applyAsDouble",
             "andThen", "compose", "negate", "or", "and");
 
+    /** 当前方法是否为实例方法 */
     private final boolean isInstanceMethod;
 
-    // Stack of declared variable name sets — one per scope.
-    // We push/pop when entering/leaving branch bodies so that each
-    // branch gets its own variable declarations for temp variables.
+    /** 已声明变量名的作用域栈.进入/离开分支体时压入/弹出,
+     *  确保每个分支拥有独立的临时变量声明. */
     private final Deque<Set<String>> declaredVarNameStack = new ArrayDeque<>();
 
-    // Transient state for NEW+INIT merging (CondenseConstruction pattern)
+    /** NEW+INIT 合并的临时状态(CondenseConstruction 模式) */
     private Map<Integer, List<IrInstruction>> currentNewToInit = Map.of();
 
+    /** 已合并到 NEW 中,需要跳过的 INIT 指令 ID 集合 */
     private Set<Integer> currentInitToSkip = Set.of();
 
-    // Transient state for constant/value inlining (STORE→Variable→LOAD chains)
+    /** STORE→Variable→LOAD 链的临时内联状态 */
     private Map<Variable, Value> currentVarStoreSource = Map.of();
 
+    /** 已被内联,需要跳过的 STORE 指令 ID 集合 */
     private Set<Integer> currentStoresToSkip = Set.of();
 
-    // Branch context for PHI resolution: when translating a branch body,
-    // records which block IDs belong to the branch so PHI nodes can pick
-    // the correct operand.
+    /** 分支上下文中的基本块 ID 集合,用于 PHI 解析.
+     *  在翻译分支体时记录哪些块属于当前分支,以便 PHI 节点选择正确的操作数. */
     private Set<Integer> currentBranchBlocks = null;
 
-    // Cached from the method being decompiled
+    /** 当前方法是否返回 boolean 类型(缓存值) */
     private boolean currentMethodReturnsBoolean = false;
 
-    // Current LinearIr (set at start of reduce(), used during expression
-    // translation to check for field/local name conflicts).
+    /** 当前正在处理的 LinearIr(在 reduce() 开始时设置,用于字段/局部变量名冲突检测) */
     private LinearIr currentIr = null;
 
     public BlockReducer() {this(true);}
@@ -91,44 +93,37 @@ public final class BlockReducer {
         this.isInstanceMethod = isInstanceMethod;
     }
 
-    /** Check if an instruction produces a side effect that should become a statement. */
+    /** 判断指令是否产生副作用,从而应成为一条语句 */
     private static boolean isStatementRoot(IrInstruction insn) {
         return switch (insn.opcode()) {
             case STORE, RETURN, THROW, FIELD_STORE, ARRAY_STORE -> true;
             case INVOKE -> insn.resultType().kind() == TypeKind.VOID
-                    || insn.resultType().kind() == null; // void invocations
-            case INC -> true; // IINC is always a statement
+                    || insn.resultType().kind() == null; // void 类型调用
+            case INC -> true; // IINC 总以语句形式出现
             case MONITOR_ENTER, MONITOR_EXIT -> true;
             default -> false;
         };
     }
 
-    /** Check if an expression is "ignorable" — just a naked variable or temp ref. */
+    /** 判断表达式是否可忽略——仅裸变量或临时引用 */
     private static boolean isIgnorableExpr(Expression e) {
         if (e instanceof VarExpr v) {
             String name = v.name();
             return name.startsWith("var") || name.startsWith("tmp") || name.startsWith("?")
                     || "this".equals(name);
         }
-        // Also skip standalone literal expressions — strings, numbers,
-        // booleans are not valid statements by themselves.
+        // 跳过独立的字面量表达式——字符 串,数字,布尔值本身不是合法的独立语句
         if (e instanceof LitExpr) {
             return true;
         }
-        // NOTE: LambdaExpr is NOT marked ignorable here even though
-        // standalone lambdas are not valid statements. We handle
-        // orphan lambdas via other mechanisms (consumed set check).
-        // Marking LambdaExpr as ignorable prevents wrapAsReturn from
-        // wrapping lambda/method-ref returns in non-void methods.
-        // Standalone field access (e.g., System.out from GETSTATIC for
-        // method reference) is not a valid Java statement.
+        // 独立的字段访问(例如 GETSTATIC 用于方法引用时的 System.out)不是合法的 Java 语句
         if (e instanceof FieldAccessExpr) {
             return true;
         }
         return false;
     }
 
-    /** Check if an expression produces void (e.g., void method call). */
+    /** 判断表达式是否产生 void 类型(如 void 方法调用) */
     private static boolean isVoidExpr(Expression e) {
         if (e instanceof InvocationExpr inv
                 && inv.returnType() != null
@@ -138,9 +133,8 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Check if an expression is an assignment (or compound assignment).
-     *  Assignments cannot safely be promoted to return exprs — their type
-     *  may not match the method return type. */
+    /** 判断表达式是否为(复合)赋值表达式.
+     *  赋值表达式不能安全地提升为 return 表达式——其类型可能与方法返回类型不匹配. */
     private static boolean isAssignExpr(Expression e) {
         return e instanceof com.bingbaihanji.bdec.ast.expr.AssignExpr
                 || e instanceof com.bingbaihanji.bdec.ast.expr.UnExpr
@@ -150,7 +144,7 @@ public final class BlockReducer {
                 == com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC);
     }
 
-    /** Check if a statement block is empty or contains only empty blocks. */
+    /** 判断语句块是否为空或仅包含空块 */
     private static boolean isEmptyBlock(Statement s) {
         if (s instanceof BlockStatement bs) {
             return bs.statements().isEmpty()
@@ -159,8 +153,9 @@ public final class BlockReducer {
         return false;
     }
 
-    // ── Block grouping ────────────────────────────────────────────────
+    // ── 块分组工具方法 ────────────────────────────────────────────────
 
+    /** 判断表达式是否为指定值的布尔字面量 */
     private static boolean isBooleanLit(Expression e, boolean expected) {
         if (e instanceof LitExpr lit) {
             Object v = lit.value();
@@ -169,7 +164,7 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Detect increment/decrement: x = x + 1 → x++, x = x - 1 → x--. */
+    /** 检测自增/自减模式:x = x + 1 → x++, x = x - 1 → x-- */
     private static UnaryOperator detectIncrement(BinExpr bin) {
         boolean isOne = bin.right() instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
                 && lr.value() instanceof Integer i && i == 1;
@@ -185,7 +180,7 @@ public final class BlockReducer {
         return null;
     }
 
-    /** Check if a statement matches any in a list by comparing expression structure. */
+    /** 检查某条语句是否与候选列表中的任一语句在表达式结构上匹配 */
     private static boolean matchesAny(Statement s, List<Statement> candidates) {
         if (s instanceof ExpressionStatement es) {
             for (Statement c : candidates) {
@@ -206,7 +201,7 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Structural comparison of two Expression trees. */
+    /** 两个表达式树的结构化比较 */
     private static boolean expressionsEquivalent(Expression a, Expression b) {
         if (a == b) {
             return true;
@@ -250,7 +245,7 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Recursively collect all statements, flattening nested BlockStatements. */
+    /** 递归收集所有语句,展开嵌套的 BlockStatement */
     private static List<Statement> collectStatements(Statement s) {
         List<Statement> result = new ArrayList<>();
         if (s instanceof BlockStatement bs) {
@@ -263,7 +258,7 @@ public final class BlockReducer {
         return result;
     }
 
-    /** Check if a value is simple enough to inline (constant or basic expression). */
+    /** 判断值是否简单到可以内联(常量或基本表达式) */
     private static boolean isSimpleValue(Value v) {
         if (v instanceof ConstantValue) {
             return true;
@@ -277,7 +272,7 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Check if a statement tree contains a ReturnStatement. */
+    /** 检查语句树中是否包含 ReturnStatement */
     private static boolean hasReturnStmt(Statement s) {
         if (s instanceof ReturnStatement) {
             return true;
@@ -285,7 +280,7 @@ public final class BlockReducer {
         if (s instanceof BlockStatement bs) {
             return bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
         }
-        // Recurse into compound statements that may contain returns
+        // 递归检查可能包含 return 的复合语句
         if (s instanceof IfStatement i) {
             return hasReturnStmt(i.thenBranch())
                     || (i.elseBranch() != null && hasReturnStmt(i.elseBranch()));
@@ -304,8 +299,8 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Strip orphan ExpressionStatements from a branch body that already
-     *  has a ReturnStatement (they're noise from block ordering at merge points). */
+    /** 从已包含 ReturnStatement 的分支体中剥离孤立的 ExpressionStatement.
+     *  这些语句通常是合并点处的块排序噪声,无实际意义. */
     private static Statement stripOrphanExprs(Statement s) {
         if (s instanceof BlockStatement bs) {
             boolean hasAnyReturn = bs.statements().stream().anyMatch(BlockReducer::hasReturnStmt);
@@ -314,11 +309,11 @@ public final class BlockReducer {
             }
             List<Statement> filtered = new ArrayList<>();
             for (Statement child : bs.statements()) {
-                // Only strip ExpressionStatements that are noise (var refs, temp refs),
-                // NOT real side-effecting expressions like field assignments.
+                // 仅剥离无意义的 ExpressionStatement(变量引用,临时变量引用),
+                // 不剥离具有真正副作用的表达式(如字段赋值)
                 if (child instanceof ExpressionStatement es
                         && isIgnorableExpr(es.expression())) {
-                    continue; // strip orphan CONST/temp
+                    continue; // 剥离孤立的 CONST/temp
                 }
                 if (child instanceof BlockStatement) {
                     Statement stripped = stripOrphanExprs(child);
@@ -340,21 +335,21 @@ public final class BlockReducer {
         return s;
     }
 
-    /** Wrap a branch body's ExpressionStatements as ReturnStatements
-     *  (handles orphan CONSTs in branches without their own RETURN).
-     *  Skips void expressions (e.g., orphan lock.unlock() calls) to avoid
-     *  "void cannot be converted to int" compile errors. */
+    /** 将分支体中的 ExpressionStatement 包装为 ReturnStatement
+     * (处理没有自身 RETURN 的分支中的孤立的 CONST).
+     *  跳过 void 表达式(例如孤立的 lock.unlock() 调用)以避免
+     *  "void cannot be converted to int" 编译错误. */
     private static Statement wrapAsReturn(Statement s, boolean isBoolRet) {
         if (s instanceof BlockStatement bs) {
             if (hasReturnStmt(s)) {
-                return s; // already has RETURN
+                return s; // 已有 RETURN
             }
             List<Statement> result = new ArrayList<>();
             boolean addedReturn = false;
             for (Statement child : bs.statements()) {
                 if (child instanceof ExpressionStatement es) {
                     if (isVoidExpr(es.expression()) || isAssignExpr(es.expression())) {
-                        result.add(child); // keep void/assign expr as-is
+                        result.add(child); // 保留 void/赋值表达式原样
                     } else {
                         result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
                         addedReturn = true;
@@ -372,7 +367,7 @@ public final class BlockReducer {
                     }
                 }
             }
-            // If no return was added, append a synthetic one so the method compiles
+            // 如果未添加任何 return,追加一个合成 return 以确保方法可编译
             if (!addedReturn) {
                 result.add(new ReturnStatement(isBoolRet
                         ? new com.bingbaihanji.bdec.ast.expr.LitExpr(false, JavaType.BOOLEAN)
@@ -388,7 +383,7 @@ public final class BlockReducer {
         }
         if (s instanceof ExpressionStatement es) {
             if (isVoidExpr(es.expression()) || isAssignExpr(es.expression())) {
-                // For assign exprs, add a synthetic null return after to satisfy the compiler
+                // 对赋值表达式,追加一个合成 null return 以满足编译器
                 return new BlockStatement(List.of(
                         s,
                         new ReturnStatement(isBoolRet
@@ -400,7 +395,7 @@ public final class BlockReducer {
         return s;
     }
 
-    /** Convert integer literal to boolean for boolean-return methods. */
+    /** 对 boolean 返回方法,将整数字面量转为布尔值 */
     private static Expression boolLiteral(Expression e, boolean isBoolRet) {
         if (isBoolRet && e instanceof LitExpr lit && lit.value() instanceof Integer i) {
             return new LitExpr(i != 0, JavaType.BOOLEAN);
@@ -408,12 +403,12 @@ public final class BlockReducer {
         return e;
     }
 
-    /** Check if a method name is a known SAM (functional interface) method name. */
+    /** 检查方法名是否为已知的 SAM(单一抽象方法)名称 */
     private static boolean isSamMethodName(String name) {
         return name != null && SAM_METHOD_NAMES.contains(name);
     }
 
-    /** Check if the type looks like a functional interface (java.util.function.* or similar). */
+    /** 检查类型是否类似函数式接口(java.util.function.* 或类似) */
     private static boolean isFunctionalInterfaceLike(JavaType type) {
         if (type == null) {
             return false;
@@ -422,16 +417,16 @@ public final class BlockReducer {
         if (desc == null) {
             return false;
         }
-        // Functional interfaces in java.util.function
+        // java.util.function 包下的函数式接口
         return desc.contains("java/util/function/")
                 || desc.contains("java/util/Comparator")
                 || desc.contains("java/lang/Runnable")
                 || desc.contains("java/util/concurrent/Callable");
     }
 
-    // ── Group → Statement translation ──────────────────────────────
+    // ── Group → Statement 翻译 ──────────────────────────────
 
-    /** Extract a short display name from a functional interface type. */
+    /** 从函数式接口类型中提取简短显示名称 */
     private static String functionalInterfaceShortName(JavaType type) {
         if (type == null) {
             return null;
@@ -440,7 +435,7 @@ public final class BlockReducer {
         if (desc == null) {
             return null;
         }
-        // Extract the class name from "Ljava/util/function/Function;"
+        // 从 "Ljava/util/function/Function;" 提取 "Function"
         if (desc.startsWith("L") && desc.endsWith(";")) {
             String internal = desc.substring(1, desc.length() - 1);
             int slash = internal.lastIndexOf('/');
@@ -449,7 +444,7 @@ public final class BlockReducer {
         return desc;
     }
 
-    /** Simplify a fully-qualified internal class name to a short name.
+    /** 将完全限定内部类名简化为短名称.
      *  "java/lang/String" → "String" */
     private static String simplifyClassName(String internalName) {
         if (internalName == null) {
@@ -466,7 +461,7 @@ public final class BlockReducer {
         return internalName;
     }
 
-    /** Check if a type represents java.lang.Class. */
+    /** 检查类型是否为 java.lang.Class 类型 */
     private static boolean isClassType(com.bingbaihanji.bdec.type.JavaType type) {
         return type != null && type.kind() == TypeKind.CLASS
                 && "java/lang/Class".equals(type.internalName());
@@ -474,26 +469,26 @@ public final class BlockReducer {
 
     // ── IR → Statement ─────────────────────────────────────────────
 
-    /** Check if a Value represents a boolean value (variable, method return, etc.).
-     *  This enables proper `if(flag)` vs `if(!flag)` emission instead of
-     *  `if(flag != 0)` which produces type-mismatch errors for boolean expressions. */
+    /** 判断 Value 是否表示布尔值(变量,方法返回值等).
+     *  用于生成正确的 {@code if(flag)} / {@code if(!flag)} 语句,
+     *  而不是 {@code if(flag != 0)}——后者对布尔表达式会产生类型不匹配错误. */
     private static boolean isBooleanValue(Value v) {
         if (v instanceof Variable var) {
             return var.type().kind() == TypeKind.BOOLEAN;
         }
         if (v instanceof InstructionRef ref) {
             IrInstruction def = ref.instruction();
-            // Check if the defining instruction produces a boolean result
+            // 检查定义指令是否产生布尔类型结果
             if (def.resultType() != null
                     && def.resultType().kind() == TypeKind.BOOLEAN) {
                 return true;
             }
-            // INVOKE with boolean return type
+            // 返回布尔值的 INVOKE 指令
             if (def.opcode() == IrOpcode.INVOKE && def.resultType() != null
                     && def.resultType().kind() == TypeKind.BOOLEAN) {
                 return true;
             }
-            // CONDITION or COMPARE produces boolean
+            // CONDITION 或 COMPARE 产生布尔值
             if (def.opcode() == IrOpcode.CONDITION
                     || def.opcode() == IrOpcode.COMPARE) {
                 return true;
@@ -505,12 +500,12 @@ public final class BlockReducer {
     // ── IR → Expression ────────────────────────────────────────────
 
     /**
-     * Post-processing: wrap statement groups in try-catch based on CFG exception ranges.
-     * Runs AFTER if/else/loop structuring so nested control structures are preserved.
+     * 后处理:根据 CFG 异常范围将语句组包装为 try-catch 结构.
+     * 在 if/else/loop 结构化之后运行,以确保嵌套控制结构得以保留.
      *
-     * <p>The key insight: we track which original blocks belong to each try range,
-     * reassemble the final statements back into their groups, find which groups
-     * have all their blocks inside a try range, and wrap only those.
+     * <p>核心思路:追踪哪些原始基本块属于每个 try 范围,
+     * 将最终语句重新组装回对应的组中,找出所有基本块均位于 try 范围内的组,
+     * 并仅包装这些组.
      */
     private BlockStatement wrapTryCatchBlocks(BlockStatement root,
                                               List<BlockGroup> groups,
@@ -522,12 +517,11 @@ public final class BlockReducer {
 
         List<Statement> stmts = new ArrayList<>(root.statements());
 
-        // For each try-catch annotation, find the contiguous range of groups
-        // whose blocks are all within the try range
+        // 对每个 try-catch 注解,找出所有基本块均在 try 范围内的连续组
         for (var entry : tryCatchAnns.entrySet()) {
             TryCatchInfo tci = entry.getValue();
 
-            // Find groups that contain ONLY try-range blocks
+            // 找出仅包含 try 范围块的组
             int firstTryGroup = -1;
             int lastTryGroup = -1;
             for (int i = 0; i < groups.size(); i++) {
@@ -552,20 +546,19 @@ public final class BlockReducer {
                 continue;
             }
 
-            // For finally patterns (catch-all handler), extend the try body
-            // to include the normal-exit block that follows the try range.
-            // The normal-exit block (at endPc) contains:
-            //   [finally body copy] [return value]
-            // We want: try { return value; } finally { ... }
-            // The duplicated finally code in the normal exit is stripped.
+            // 对于 finally 模式(catch-all 处理器),将 try 体扩展到
+            // 包含 try 范围之后的正常退出块.
+            // 正常退出块(位于 endPc 处)包含:
+            //   [finally 体副本] [返回值]
+            // 我们希望生成:try { return value; } finally { ... }
+            // 正常退出路径中重复的 finally 代码将被剥离.
             boolean isFinally = tci.catchType() == null
                     || "java/lang/Throwable".equals(tci.catchType());
 
-            // Collect the normal-exit groups (after the try range, before the handler)
+            // 收集正常退出组(位于 try 范围之后,处理器之前)
             int normalExitEnd = lastTryGroup;
             if (isFinally) {
-                // Find groups that contain blocks NOT in tryBlocks and NOT the handler,
-                // but that appear between lastTryGroup and the handler group.
+                // 找出包含不属于 tryBlocks 且不是处理器,但在 lastTryGroup 和处理器组之间的块
                 for (int i = lastTryGroup + 1; i < groups.size(); i++) {
                     BlockGroup g = groups.get(i);
                     boolean hasHandler = false;
@@ -579,13 +572,13 @@ public final class BlockReducer {
                         }
                     }
                     if (hasHandler || hasTry) {
-                        break; // stop at handler or next try range
+                        break; // 遇到处理器或下一个 try 范围即停止
                     }
-                    normalExitEnd = i; // include this group
+                    normalExitEnd = i; // 包含此组
                 }
             }
 
-            // Build try body: groups from firstTryGroup to normalExitEnd
+            // 构建 try 体:从 firstTryGroup 到 normalExitEnd 的组
             List<Statement> tryBodyStmts = new ArrayList<>();
             for (int i = firstTryGroup; i <= normalExitEnd && i < stmts.size(); i++) {
                 tryBodyStmts.add(stmts.get(i));
@@ -596,27 +589,27 @@ public final class BlockReducer {
                         ? tryBodyStmts.get(0)
                         : new BlockStatement(tryBodyStmts);
 
-                // Skip try-catch wrapping for synchronized blocks — the
-                // exception handler is a JVM artifact (monitorexit retry),
-                // not actual Java source catch/finally.
+                // 跳过 synchronized 块的 try-catch 包装——
+                // 异常处理器是 JVM 伪影(monitorexit 重试),
+                // 而非真正的 Java 源码 catch/finally.
                 if (containsSynchronizedStatement(tryBody)) {
                     continue;
                 }
 
-                // Detect synchronized block pattern: try body contains
-                // MONITOR_ENTER, handler does MONITOR_EXIT + THROW.
-                // Emit SynchronizedStatement directly instead of try-finally.
+                // 检测 synchronized 块模式:try 体包含 MONITOR_ENTER,
+                // 处理器执行 MONITOR_EXIT + THROW.
+                // 直接生成 SynchronizedStatement 而非 try-finally.
                 if (isSynchronizedHandler(tci, ir)) {
                     String monObj = extractMonitorObject(tci, ir);
                     SynchronizedStatement syncStmt = new SynchronizedStatement(
                             new VarExpr(monObj), tryBody);
-                    // Strip the pre-synchronized preamble (DUP/ASTORE) from the body
+                    // 从方法体中剥离 synchronized 前导代码(DUP/ASTORE)
                     syncStmt = stripSyncPreamble(syncStmt);
                     stmts.set(firstTryGroup, syncStmt);
                 } else {
                     stmts.set(firstTryGroup, buildTryCatch(tci, tryBody, ir));
                 }
-                // Remove absorbed groups
+                // 移除已被吸收的组
                 for (int i = normalExitEnd; i > firstTryGroup; i--) {
                     if (i < stmts.size()) {
                         stmts.remove(i);
@@ -628,38 +621,49 @@ public final class BlockReducer {
         return new BlockStatement(stmts);
     }
 
+    /**
+     * 将控制流图归约为 AST 语句块.
+     *
+     * @param graph       控制流图
+     * @param ir          线性 IR
+     * @param loopAnns    循环注解映射
+     * @param ifAnns      if 注解映射
+     * @param switchAnns  switch 注解映射
+     * @param tryCatchAnns try-catch 注解映射
+     * @return 归约后的 BlockStatement
+     */
     public BlockStatement reduce(ControlFlowGraph graph, LinearIr ir,
                                  Map<BasicBlock, LoopInfo> loopAnns,
                                  Map<BasicBlock, IfInfo> ifAnns,
                                  Map<BasicBlock, SwitchInfo> switchAnns,
                                  Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
-        // Order blocks by dominator-tree preorder (not start offset).
-        // This ensures constructor bodies appear in control-flow order.
+        // 按支配树先序遍历排序基本块(而非起始偏移量排序),
+        // 确保构造函数体按控制流顺序出现.
         List<BasicBlock> sorted = dominatorTreeOrder(graph);
         if (sorted.isEmpty()) {
             return new BlockStatement(List.of());
         }
 
-        // Cache method return type info
+        // 缓存方法返回类型信息
         currentMethodReturnsBoolean = ir.method().returnType() != null
                 && ir.method().returnType().kind() == TypeKind.BOOLEAN;
         this.currentIr = ir;
         this.declaredVarNameStack.clear();
-        this.declaredVarNameStack.push(new HashSet<>()); // top-level scope
+        this.declaredVarNameStack.push(new HashSet<>()); // 顶层作用域
 
-        // Compute post-dominator tree once for fallback if-header detection.
-        // This gives correct merge points when BranchAnalyzer annotations are missing.
+        // 预先计算后支配树,用于在 BranchAnalyzer 注解缺失时
+        // 作为 if-header 检测的回退方案,以提供正确的合并点.
         PostDominatorTree postDom = PostDominatorTree.compute(graph);
 
         List<BlockGroup> groups = groupAdjacentBlocks(sorted, graph);
         Set<BlockGroup> consumed = new HashSet<>();
-        // Collect handler blocks so we can skip their groups (they'll be
-        // absorbed into try-finally by wrapTryCatchBlocks).
+        // 收集处理器块,以便跳过它们对应的组(这些组将被
+        // wrapTryCatchBlocks 吸收到 try-finally 中).
         Set<BasicBlock> handlerBlocks = new HashSet<>();
         for (TryCatchInfo tci : tryCatchAnns.values()) {
             BasicBlock hb = tci.handlerBlock();
             handlerBlocks.add(hb);
-            // Follow fallthrough chain to collect all handler fragments
+            // 沿 fallthrough 链追踪以收集所有处理器片段
             Set<BasicBlock> visited = new HashSet<>();
             Deque<BasicBlock> queue = new ArrayDeque<>();
             queue.add(hb);
@@ -679,11 +683,10 @@ public final class BlockReducer {
         }
         List<Statement> statements = new ArrayList<>();
 
-        // ── Global variable inlining pre-pass ─────────────────────────
-        // Scan ALL groups to find STORE→Variable→LOAD chains where the
-        // variable is used exactly once. This works across group boundaries
-        // (critical for try-finally where STORE is in the try body group
-        // and LOAD+RETURN is in the normal-exit group).
+        // ── 全局变量内联预遍历 ─────────────────────────
+        // 扫描所有组以找出恰好被使用一次的变量的 STORE→Variable→LOAD 链.
+        // 该操作跨组边界工作(对 try-finally 模式至关重要:STORE 位于 try 体组,
+        // 而 LOAD+RETURN 位于正常退出组).
         buildGlobalVarInlineMap(groups, ir);
 
         for (int gi = 0; gi < groups.size(); gi++) {
@@ -693,51 +696,46 @@ public final class BlockReducer {
             }
             consumed.add(group);
 
-            // Find matching annotation — check all blocks in the group,
-            // not just group.first(), since CFG folding may have merged
-            // the annotation header with preceding blocks.
+            // 查找匹配的注解——检查组内所有块而非仅 group.first(),
+            // 因为 CFG 折叠可能已将注解头与前面的块合并.
             IfInfo ifInfo = findIfAnnotation(group, ifAnns);
             LoopInfo loopInfo = findLoopAnnotation(group, loopAnns);
             TryCatchInfo tryCatchInfo = findTryAnnotation(group, tryCatchAnns);
             SwitchInfo switchInfo = findSwitchAnnotation(group, switchAnns);
 
-            // Fallback: if no IfInfo annotation found, try to detect if-header
-            // directly from CFG structure (condition block with 2 successors).
-            // Uses post-dominator tree for correct merge point computation.
+            // 回退方案:若无 IfInfo 注解,则尝试直接从 CFG 结构检测 if-header
+            //(具有 2 个后继的条件块).使用后支配树计算正确的合并点.
             if (ifInfo == null) {
                 ifInfo = detectIfHeader(group, graph, ir, postDom);
             }
 
             Statement s;
 
-            // if-else: build proper IfStatement with both then and else bodies
+            // if-else:构建包含 then 和 else 体的完整 IfStatement
             if (ifInfo != null) {
                 Expression cond = simplifyCondition(extractCondition(group, ir));
 
-                // Translate non-condition statements from the header group.
-                // When the group containing the if-header also has code that runs
-                // BEFORE the condition (e.g., variable assignments that feed into
-                // the condition), those must appear before the IfStatement.
-                // Example: calculateThresholdCapacity's bit manipulation before
-                // the final ternary condition.
+                // 翻译头部组中的非条件语句.
+                // 当包含 if-header 的组中也包含在条件之前执行的代码时
+                //(例如在最终三元条件之前的位操作),这些代码必须出现在 IfStatement 之前.
                 List<Statement> preIfStmts = translateHeaderNonCondition(group, ir);
 
-                // Translate then-body: find the group(s) containing then-blocks
+                // 翻译 then 体:找出包含 then 块的组
                 Statement thenBody = translateBranchBody(ifInfo.thenBlocks(), groups, ir, consumed, graph, postDom);
 
-                // Translate else-body: find the group(s) containing else-blocks
+                // 翻译 else 体:找出包含 else 块的组
                 Statement elseBody = null;
                 if (!ifInfo.elseBlocks().isEmpty()) {
                     elseBody = translateBranchBody(ifInfo.elseBlocks(), groups, ir, consumed, graph, postDom);
                 }
 
-                // Eliminate empty else blocks — don't emit "else { }"
+                // 消除空 else 块——不输出 "else { }"
                 if (elseBody != null && isEmptyBlock(elseBody)) {
                     elseBody = null;
                 }
 
-                // Post-process branch bodies for if-else patterns where both
-                // branches compute values that merge at a common RETURN block.
+                // 对 if-else 模式的分支体进行后处理:两个分支都在共同的
+                // RETURN 块处合并计算值.
                 boolean thenHasReturn = hasReturnStmt(thenBody);
                 boolean elseHasReturn = elseBody != null && hasReturnStmt(elseBody);
                 boolean isBoolRet = ir.method().returnType() != null
@@ -761,18 +759,17 @@ public final class BlockReducer {
                         thenBody != null ? thenBody : new BlockStatement(List.of()),
                         elseBody);
 
-                // Prepend pre-if statements before the IfStatement (if any)
+                // 如有前导语句,将其前置到 IfStatement 之前
                 if (!preIfStmts.isEmpty()) {
                     List<Statement> combined = new ArrayList<>(preIfStmts);
                     combined.add(s);
                     s = new BlockStatement(combined);
                 }
             }
-            // loop: wrap group in LoopStatement (only if we have a valid body)
+            // 循环:将组包装为 LoopStatement(仅在存在有效循环体时)
             else if (loopInfo != null) {
-                // Handler-only "loops" (from self-referencing exception edges):
-                // translate without wrapping so stripDuplicatedFinally can
-                // absorb them into the finally block later.
+                // 仅处理器的"循环"(来自自引用异常边):
+                // 翻译时不包装,以便 stripDuplicatedFinally 可以后续将其吸收到 finally 块中.
                 boolean isHandlerLoop = group.blocks().stream()
                         .allMatch(b -> handlerBlocks.contains(b));
                 s = translateGroup(group, ir);
@@ -786,27 +783,26 @@ public final class BlockReducer {
             else if (switchInfo != null) {
                 s = buildSwitch(switchInfo, group, ir, groups, consumed);
             }
-            // synchronized: takes priority over try-catch. Synchronized blocks
-            // have exception handlers (monitorexit + athrow) that are JVM
-            // implementation details — they must be hidden from the output.
+            // synchronized:优先级高于 try-catch.
+            // synchronized 块的异常处理器(monitorexit + athrow)是 JVM 实现细节——
+            // 必须在输出中隐藏.
             else if (groupHasSynchronizedAnnotation(group, ir)) {
                 s = translateGroup(group, ir);
                 if (s != null) {
                     s = wrapSynchronized(s, group, ir);
                 }
             }
-            // try-catch: defer wrapping to post-processing pass (wrapTryCatchBlocks)
-            // This ensures try ranges that contain if/else/loop structures
-            // are properly wrapped AFTER inner structures are built.
+            // try-catch:延迟到后处理阶段(wrapTryCatchBlocks)进行包装.
+            // 这确保了包含 if/else/loop 结构的 try 范围在内部结构构建完成后才被正确包装.
             else if (tryCatchInfo != null) {
                 s = translateGroup(group, ir);
             }
-            // Handler-only groups (pure exception handlers) are absorbed into
-            // try-finally by wrapTryCatchBlocks — skip them to avoid dead code.
+            // 仅处理器的组(纯异常处理器)将被 wrapTryCatchBlocks 吸收到
+            // try-finally 中——跳过它们以避免死代码.
             else if (group.blocks().size() == 1 && handlerBlocks.contains(group.first())) {
-                continue; // skip handler block — absorbed by try-finally
+                continue; // 跳过处理器块——由 try-finally 吸收
             }
-            // plain sequence
+            // 普通顺序块
             else {
                 s = translateGroup(group, ir);
             }
@@ -815,9 +811,9 @@ public final class BlockReducer {
                 statements.add(s);
             }
         }
-        // Post-pass: convert orphan ExpressionStatement to ReturnStatement.
-        // When a non-void expression is an orphan (not consumed), wrap as return.
-        // Skip void expressions (e.g., orphan lock.unlock() calls).
+        // 后处理:将孤立的 ExpressionStatement 转换为 ReturnStatement.
+        // 当非 void 表达式成为孤立(未被消费)时,将其包装为 return.
+        // 跳过 void 表达式(例如孤立的 lock.unlock() 调用).
         if (!statements.isEmpty() && ir.method().returnType() != null
                 && ir.method().returnType().kind() != TypeKind.VOID) {
             for (int i = statements.size() - 1; i >= 0; i--) {
@@ -850,15 +846,15 @@ public final class BlockReducer {
             }
         }
 
-        // Post-process: wrap statement groups in try-catch based on annotations.
-        // Filter out any null statements that may have leaked from rewriters
-        // or edge cases in structurer. Null entries cause downstream NPEs.
+        // 后处理:根据注解将语句组包装为 try-catch 结构.
+        // 过滤掉可能从重写器或结构化边角情况泄露的 null 语句,
+        // null 条目会导致下游 NPE.
         statements = statements.stream()
                 .filter(s -> s != null)
                 .toList();
 
-        // Avoid double-wrapping: if there's only one statement and it's already
-        // a BlockStatement, use it directly as the root instead of nesting.
+        // 避免双重包装:如果仅有一条语句且已是 BlockStatement,
+        // 则直接使用它作为根而不是再次嵌套.
         BlockStatement root;
         if (statements.size() == 1 && statements.getFirst() instanceof BlockStatement bs) {
             root = bs;
@@ -866,13 +862,13 @@ public final class BlockReducer {
             root = new BlockStatement(statements);
         }
         root = wrapTryCatchBlocks(root, groups, tryCatchAnns, ir);
-        // Post-process: strip synchronized preamble variables (DUP/ASTORE
-        // artifacts that set up monitor objects before SynchronizedStatements)
+        // 后处理:剥离 synchronized 前导变量(DUP/ASTORE 伪影,
+        // 这些是 SynchronizedStatement 之前设置监视器对象的代码)
         root = stripSyncPreambles(root);
         return root;
     }
 
-    /** Find if any block in the group has an IfInfo annotation. */
+    /** 在组中查找任意块是否具有 IfInfo 注解 */
     private IfInfo findIfAnnotation(BlockGroup group, Map<BasicBlock, IfInfo> ifAnns) {
         for (BasicBlock b : group.blocks()) {
             if (ifAnns.containsKey(b)) {
@@ -910,27 +906,26 @@ public final class BlockReducer {
     }
 
     /**
-     * Detect if-header directly from CFG structure, bypassing BranchAnalyzer.
-     * Checks: the group's last block has a CONDITION instruction and exactly
-     * 2 outgoing TRUE_BRANCH/FALSE_BRANCH edges.
+     * 直接根据 CFG 结构检测 if-header,绕过 BranchAnalyzer.
+     * 检查条件:组的最后一个块具有 CONDITION 指令,且恰好有 2 条
+     * TRUE_BRANCH/FALSE_BRANCH 出边.
      *
-     * Uses the post-dominator tree to find the correct merge point (follow)
-     * instead of hardcoding Exit. This is critical for correct if-else
-     * detection: without the correct follow, both branch block sets would
-     * include all code after the if, causing the first branch to consume
-     * all groups and leaving nothing for the second branch.
+     * <p>使用后支配树来找到正确的合并点(follow),而非硬编码 Exit.
+     * 这对于正确的 if-else 检测至关重要:没有正确的 follow,
+     * 两个分支块集合都会包含 if 之后的所有代码,导致第一个分支消费
+     * 所有组而为第二个分支留下空集.
      */
     private IfInfo detectIfHeader(BlockGroup group, ControlFlowGraph graph, LinearIr ir,
                                   PostDominatorTree postDom) {
         for (BasicBlock b : group.blocks()) {
-            // Check if any instruction in this block is a CONDITION
+            // 检查此块中是否有任何 CONDITION 指令
             boolean hasCondition = ir.instructionsOf(b).stream()
                     .anyMatch(i -> i.opcode() == IrOpcode.CONDITION);
             if (!hasCondition) {
                 continue;
             }
 
-            // Find TRUE_BRANCH and FALSE_BRANCH edges
+            // 查找 TRUE_BRANCH 和 FALSE_BRANCH 边
             BasicBlock trueTarget = null, falseTarget = null;
             for (var edge : graph.outgoingOf(b)) {
                 if (edge.kind() == EdgeKind.TRUE_BRANCH) {
@@ -942,7 +937,7 @@ public final class BlockReducer {
             if (trueTarget == null && falseTarget == null) {
                 continue;
             }
-            // Fill missing with remaining successors
+            // 用剩余后继填补缺失的目标
             List<BasicBlock> succs = graph.successorsOf(b);
             if (trueTarget == null && succs.size() >= 1) {
                 for (BasicBlock s : succs) {
@@ -964,29 +959,27 @@ public final class BlockReducer {
                 continue;
             }
 
-            // Compute the merge point using post-dominator tree.
-            // This is the first block that must be traversed on all paths
-            // from the condition block to Exit. For if-return-else-return,
-            // this is Exit itself. For if-else with merge, this is the join point.
+            // 使用后支配树计算合并点:从条件块出发所有路径都必须经过的首个块.
+            // 对于 if-return-else-return,这是 Exit 本身.
+            // 对于带合并的 if-else,这是汇聚点.
             BasicBlock follow = postDom.immediatePostDominator(b);
             if (follow == null) {
                 follow = graph.exitBlock();
             }
 
-            // If one successor IS the follow, this is if-then (no else).
-            // If neither successor is the follow, both branches eventually
-            // reach follow → if-else.
+            // 若某一后继即为 follow,则是 if-then(无 else)
+            // 若两个后继均不是 follow,则两个分支最终都到达 follow → if-else
             Set<BasicBlock> thenBlocks, elseBlocks;
             if (trueTarget == follow) {
-                // true branch goes to follow → false branch is the "then" body
+                // true 分支直达 follow → false 分支是 "then" 体
                 thenBlocks = collectReachableBlocks(falseTarget, follow, graph);
                 elseBlocks = Set.of();
             } else if (falseTarget == follow) {
-                // false branch goes to follow → true branch is the "then" body
+                // false 分支直达 follow → true 分支是 "then" 体
                 thenBlocks = collectReachableBlocks(trueTarget, follow, graph);
                 elseBlocks = Set.of();
             } else {
-                // Both branches reach follow → if-else
+                // 两个分支都到达 follow → if-else
                 thenBlocks = collectReachableBlocks(trueTarget, follow, graph);
                 elseBlocks = collectReachableBlocks(falseTarget, follow, graph);
             }
@@ -995,10 +988,9 @@ public final class BlockReducer {
         return null;
     }
 
-    /** Collect all blocks reachable from start up to (but not including) stop.
-     *  Only follows non-exception edges (FALL_THROUGH, TRUE_BRANCH, FALSE_BRANCH,
-     *  BACK_EDGE). Exception edges to handlers must NOT be followed, otherwise
-     *  handler blocks get included in if/else branch bodies. */
+    /** 收集从 start 出发可达,但不包含 stop 的所有块.
+     *  仅沿非异常边(FALL_THROUGH,TRUE_BRANCH,FALSE_BRANCH,BACK_EDGE)遍历.
+     *  绝不能沿异常边遍历,否则处理器块会被错误地包含在 if/else 分支体中. */
     private Set<BasicBlock> collectReachableBlocks(BasicBlock start, BasicBlock stop,
                                                    ControlFlowGraph graph) {
         Set<BasicBlock> result = new LinkedHashSet<>();
@@ -1011,7 +1003,7 @@ public final class BlockReducer {
             }
             for (var edge : graph.outgoingOf(curr)) {
                 if (edge.kind() == EdgeKind.EXCEPTION) {
-                    continue; // skip exception edges — handler blocks are not part of the branch
+                    continue; // 跳过异常边——处理器块不属于分支
                 }
                 BasicBlock succ = edge.target();
                 if (succ != stop) {
@@ -1022,20 +1014,19 @@ public final class BlockReducer {
         return result;
     }
 
-    /** Translate a single group within a branch body, recursively detecting
-     *  nested if-else structures. Uses detectIfHeader on the group to check
-     *  whether it's a nested condition header. */
+    /** 翻译分支体内的单个组,递归检测嵌套的 if-else 结构.
+     *  对该组使用 detectIfHeader 判断其是否为嵌套条件头. */
     private Statement translateBranchGroup(BlockGroup group, LinearIr ir,
                                            List<BlockGroup> allGroups,
                                            Set<BlockGroup> consumed,
                                            ControlFlowGraph graph,
                                            PostDominatorTree postDom) {
-        // Try to detect if this group is a nested if-header
+        // 尝试检测此组是否为嵌套 if-header
         IfInfo nestedIf = detectIfHeader(group, graph, ir, postDom);
         if (nestedIf != null) {
             Expression cond = simplifyCondition(extractCondition(group, ir));
 
-            // Translate pre-condition statements from the header
+            // 翻译头部中的前导条件语句
             List<Statement> preIfStmts = translateHeaderNonCondition(group, ir);
 
             Statement thenBody = translateBranchBody(nestedIf.thenBlocks(), allGroups,
@@ -1049,7 +1040,7 @@ public final class BlockReducer {
                 elseBody = null;
             }
 
-            // Post-process branch bodies
+            // 后处理分支体
             boolean thenHasReturn = hasReturnStmt(thenBody);
             boolean elseHasReturn = elseBody != null && hasReturnStmt(elseBody);
             boolean isBoolRet = ir.method().returnType() != null
@@ -1081,19 +1072,18 @@ public final class BlockReducer {
             return ifStmt;
         }
 
-        // Not a nested if-header — translate normally
+        // 非嵌套 if-header——按普通方式翻译
         return translateGroup(group, ir);
     }
 
     /**
-     * Translate the blocks belonging to one branch (then or else) of an if-statement.
-     * Consumes the matching groups so they aren't emitted again.
+     * 翻译 if 语句的某一分支(then 或 else)所对应的块.
+     * 消费匹配的组以避免重复输出.
      *
-     * Checks if any block in a group belongs to the branch (not just the first),
-     * so groups formed after CFG folding that start with non-branch blocks
-     * are still correctly matched.
+     * <p>检查组中任意块是否属于分支(而非仅检查第一个块),
+     * 使得 CFG 折叠后以非分支块开头的组仍能被正确匹配.
      *
-     * Recursively detects nested if-else/loop patterns within the branch body.
+     * <p>递归检测分支体内的嵌套 if-else/loop 模式.
      */
     private Statement translateBranchBody(Set<BasicBlock> branchBlocks,
                                           List<BlockGroup> allGroups,
@@ -1101,14 +1091,14 @@ public final class BlockReducer {
                                           Set<BlockGroup> consumed,
                                           ControlFlowGraph graph,
                                           PostDominatorTree postDom) {
-        // Set branch context for PHI resolution
+        // 设置分支上下文用于 PHI 解析
         Set<Integer> prevBranchBlocks = currentBranchBlocks;
         Set<Integer> branchBlockIds = new HashSet<>();
         for (BasicBlock b : branchBlocks) {
             branchBlockIds.add(b.id());
         }
         currentBranchBlocks = branchBlockIds;
-        // Push a new variable declaration scope for this branch body
+        // 为此分支体压入新的变量声明作用域
         declaredVarNameStack.push(new HashSet<>());
         try {
             List<Statement> bodyStmts = new ArrayList<>();
@@ -1127,7 +1117,7 @@ public final class BlockReducer {
                 }
                 if (groupInBranch) {
                     consumed.add(g);
-                    // Recursively detect nested if-else within the branch
+                    // 递归检测分支内的嵌套 if-else
                     Statement stmt = translateBranchGroup(g, ir, allGroups, consumed, graph, postDom);
                     if (stmt != null) {
                         bodyStmts.add(stmt);
@@ -1148,10 +1138,9 @@ public final class BlockReducer {
                     flat.add(s);
                 }
             }
-            // Post-pass: fix duplicate variable declarations across groups.
-            // When multiple BlockGroups in the same branch each declare the same
-            // variable (e.g., default init then real init), convert the first
-            // occurrence to a plain assignment.
+            // 后处理:修复跨组的重复变量声明.
+            // 当同一分支中的多个 BlockGroup 各自声明了相同的变量时
+            //(例如默认初始化后跟真正的初始化),将第一次出现转为普通赋值.
             Set<String> seenBranchDecls = new HashSet<>();
             for (int i = 0; i < flat.size(); i++) {
                 if (flat.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
@@ -1163,7 +1152,7 @@ public final class BlockReducer {
                     }
                 }
             }
-            // Post-pass: strip unreachable statements after RETURN/THROW
+            // 后处理:剥离 RETURN/THROW 之后的不可达语句
             for (int i = 0; i < flat.size(); i++) {
                 Statement s = flat.get(i);
                 if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement
@@ -1182,12 +1171,12 @@ public final class BlockReducer {
             return new BlockStatement(flat);
         } finally {
             currentBranchBlocks = prevBranchBlocks;
-            declaredVarNameStack.pop(); // pop branch scope
+            declaredVarNameStack.pop(); // 弹出分支作用域
         }
     }
 
-    /** Check if a variable name has been declared in the current scope
-     *  (or any parent scope), and mark it as declared. */
+    /** 检查变量名是否已在当前作用域(或任何父作用域)中声明,
+     *  并标记为已声明. */
     private boolean tryDeclareVar(String name) {
         Set<String> currentScope = declaredVarNameStack.peek();
         if (currentScope == null) {
@@ -1196,7 +1185,7 @@ public final class BlockReducer {
         return currentScope.add(name);
     }
 
-    /** Sort blocks by dominator-tree preorder. */
+    /** 按支配树先序遍历排序基本块 */
     private List<BasicBlock> dominatorTreeOrder(ControlFlowGraph graph) {
         DominatorTree dom = graph.dominatorTree();
         List<BasicBlock> result = new ArrayList<>();
@@ -1212,7 +1201,7 @@ public final class BlockReducer {
                     && !b.instructions().isEmpty()) {
                 result.add(b);
             }
-            // Push children in reverse order so first child is processed first
+            // 逆序压入子节点,确保第一个子节点最先被处理
             List<BasicBlock> children = new ArrayList<>(dom.children(b));
             for (int i = children.size() - 1; i >= 0; i--) {
                 stack.push(children.get(i));
@@ -1222,21 +1211,16 @@ public final class BlockReducer {
     }
 
     /**
-     * Translate a single IR instruction to an AST expression.
-     * For intermediate values (LOAD, BINARY, etc.) this produces the
-     * appropriate expression node that will be inlined into the parent statement.
+     * 翻译 if-header 组中非条件的,有副作用的语句.
+     * 这些指令在条件检查之前执行,应在输出中出现在 IfStatement 之前.
      */
-
-    /** Translate the non-condition, side-effecting statements from an if-header
-     *  group. These are instructions that execute BEFORE the condition check
-     *  and should appear before the IfStatement in the output. */
     private List<Statement> translateHeaderNonCondition(BlockGroup group, LinearIr ir) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
         if (allInsns.isEmpty()) {
             return List.of();
         }
 
-        // Build consumed set (same logic as translateGroup)
+        // 构建已消费集合(与 translateGroup 逻辑相同)
         Set<Integer> consumed = new HashSet<>();
         Map<Variable, Integer> loadVarToId = new HashMap<>();
         for (IrInstruction insn : allInsns) {
@@ -1255,7 +1239,7 @@ public final class BlockReducer {
             }
         }
 
-        // Also build varStoreSource (local to this group) for inlining
+        // 同时构建本组的 varStoreSource 用于内联
         Map<Variable, Value> varStoreSource = new HashMap<>(currentVarStoreSource);
         Set<Integer> storesToSkip = new HashSet<>(currentStoresToSkip);
         for (IrInstruction insn : allInsns) {
@@ -1287,7 +1271,7 @@ public final class BlockReducer {
             }
         }
 
-        // Swap in local maps
+        // 替换为本地映射
         Map<Variable, Value> prevVarStore = currentVarStoreSource;
         Set<Integer> prevStoreSkip = currentStoresToSkip;
         currentVarStoreSource = Collections.unmodifiableMap(varStoreSource);
@@ -1295,7 +1279,7 @@ public final class BlockReducer {
         try {
             List<Statement> stmts = new ArrayList<>();
             for (IrInstruction insn : allInsns) {
-                // Skip CONDITION — it's extracted separately by extractCondition()
+                // 跳过 CONDITION——它由 extractCondition() 单独提取
                 if (insn.opcode() == IrOpcode.CONDITION) {
                     continue;
                 }
@@ -1324,7 +1308,7 @@ public final class BlockReducer {
         }
     }
 
-    /** Extract a condition expression from CONDITION IR instructions in the group. */
+    /** 从组的 CONDITION IR 指令中提取条件表达式 */
     private Expression extractCondition(BlockGroup group, LinearIr ir) {
         List<IrInstruction> all = group.allIrInstructions(ir);
         for (IrInstruction insn : all) {
@@ -1335,22 +1319,21 @@ public final class BlockReducer {
         return null;
     }
 
-    /** Simplify common boolean redundancy patterns:
+    /** 简化常见的布尔冗余模式:
      *  {@code x == true} → {@code x}, {@code x != false} → {@code x},
      *  {@code x == false} → {@code !x}, {@code x != true} → {@code !x},
-     *  {@code x == 0} where x is boolean → {@code !x},
-     *  {@code x != 0} where x is boolean → {@code x}. */
+     *  若 x 为布尔值: {@code x == 0} → {@code !x}, {@code x != 0} → {@code x} */
     private Expression simplifyCondition(Expression cond) {
         if (cond == null) {
             return null;
         }
         if (cond instanceof BinExpr bin) {
-            // Simplify left side: x == true → x, x != false → x
+            // 简化左侧:x == true → x, x != false → x
             Expression left = simplifyCondition(bin.left());
             Expression right = simplifyCondition(bin.right());
             BinaryOperator op = bin.operator();
 
-            // Check for boolean literal comparisons
+            // 检查布尔字面量比较
             boolean rightIsTrue = isBooleanLit(right, true);
             boolean rightIsFalse = isBooleanLit(right, false);
             boolean leftIsTrue = isBooleanLit(left, true);
@@ -1373,7 +1356,7 @@ public final class BlockReducer {
                 return new UnExpr(UnaryOperator.NOT, right);
             }
 
-            // Rebuild with simplified children
+            // 用简化后的子表达式重建
             if (left != bin.left() || right != bin.right()) {
                 return new BinExpr(op, left, right);
             }
@@ -1381,6 +1364,12 @@ public final class BlockReducer {
         return cond;
     }
 
+    /**
+     * 将相邻基本块聚合为组.
+     * 相邻条件:前驱仅有一条 fallthrough 出边指向后继,
+     * 且两者具有相同的异常覆盖范围——因为 try 前代码(如 lock.lock())
+     * 与 try 体合并后将无法正确包装.
+     */
     private List<BlockGroup> groupAdjacentBlocks(List<BasicBlock> blocks, ControlFlowGraph graph) {
         List<BlockGroup> groups = new ArrayList<>();
         BlockGroup current = null;
@@ -1401,12 +1390,10 @@ public final class BlockReducer {
     }
 
     /**
-     * Check if two blocks should be treated as adjacent (same group).
-     * Adjacent blocks have a single fallthrough edge from prev to next,
-     * AND share the same exception coverage — blocks with different
-     * exception handlers should NOT be grouped together, otherwise
-     * pre-try code (like lock.lock()) gets merged with the try body
-     * and can't be properly wrapped.
+     * 检查两个基本块是否应为相邻关系(同一组).
+     * 相邻块之间具有从前驱到后继的单条 fallthrough 边,
+     * 且具有相同的异常覆盖范围——不同异常处理器的块不应被合并,
+     * 否则 try 前代码(如 lock.lock())会与 try 体合并而无法正确包装.
      */
     private boolean isAdjacent(BasicBlock prev, BasicBlock next, ControlFlowGraph graph) {
         List<BasicBlock> succs = graph.successorsOf(prev);
@@ -1416,8 +1403,8 @@ public final class BlockReducer {
         if (!graph.outgoingOf(prev).stream().allMatch(e -> e.kind() == EdgeKind.FALL_THROUGH)) {
             return false;
         }
-        // Respect try boundaries: if blocks have different exception coverage
-        // (one has exception edges and the other doesn't), don't merge them.
+        // 尊重 try 边界:如果两个块具有不同的异常覆盖范围
+        //(一个有异常边而另一个没有),则不合并它们.
         boolean prevHasException = graph.outgoingOf(prev).stream()
                 .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
         boolean nextHasException = graph.outgoingOf(next).stream()
@@ -1429,11 +1416,10 @@ public final class BlockReducer {
     }
 
     /**
-     * Translate a block group to a statement tree.
+     * 将块组翻译为语句树.
      *
-     * Only side-effecting instructions (statements) are emitted.
-     * Intermediate values (LOAD, BINARY, etc.) are skipped — they contribute
-     * to expression trees via recursive {@link #valueToExpr} resolution.
+     * <p>仅输出有副作用的指令(语句).中间值指令(LOAD,BINARY 等)被跳过——
+     * 它们通过递归的 {@link #valueToExpr} 解析参与表达式树的构建.
      */
     private Statement translateGroup(BlockGroup group, LinearIr ir) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
@@ -1441,11 +1427,11 @@ public final class BlockReducer {
             return null;
         }
 
-        // Build index: which instruction IDs have their results consumed.
-        // Track via InstructionRef (standard chain) AND via Variable (for LOAD
-        // instructions whose result Variable flows through the stack directly).
+        // 构建索引:记录哪些指令 ID 的结果被消费.
+        // 通过 InstructionRef(标准链)和 Variable(LOAD 指令的结果变量
+        // 直接流经栈的情况)进行追踪.
         Set<Integer> consumed = new HashSet<>();
-        // Map each LOAD instruction's loaded Variable → LOAD id for back-tracking
+        // 将每个 LOAD 指令加载的变量映射到 LOAD ID 以备回溯
         Map<Variable, Integer> loadVarToId = new HashMap<>();
         for (IrInstruction insn : allInsns) {
             if (insn.opcode() == IrOpcode.LOAD && !insn.operands().isEmpty()
@@ -1458,14 +1444,14 @@ public final class BlockReducer {
                 if (op instanceof InstructionRef ref) {
                     consumed.add(ref.instruction().id());
                 } else if (op instanceof Variable v && loadVarToId.containsKey(v)) {
-                    // The Variable from a LOAD is used directly → mark LOAD consumed
+                    // LOAD 产生的变量被直接使用 → 标记 LOAD 为已消费
                     consumed.add(loadVarToId.get(v));
                 }
             }
         }
 
-        // Augment the global var→value inline map with per-group discoveries.
-        // Start from the global map (built in reduce()) and add per-group entries.
+        // 用逐组发现的结果扩充全局 var→value 内联映射.
+        // 从全局映射开始(在 reduce() 中构建),并添加逐组条目.
         Map<Variable, Value> varStoreSource = new HashMap<>(currentVarStoreSource);
         Set<Integer> storableToSkip = new HashSet<>(currentStoresToSkip);
         for (IrInstruction insn : allInsns) {
@@ -1473,7 +1459,7 @@ public final class BlockReducer {
                     && insn.operands().get(0) instanceof Variable v
                     && !varStoreSource.containsKey(v)) {
                 Value source = insn.operands().get(1);
-                // Count how many times this STORE's result variable is loaded in this group
+                // 统计此组的 STORE 结果变量被加载的次数
                 int loadCount = 0;
                 for (IrInstruction other : allInsns) {
                     if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
@@ -1483,7 +1469,7 @@ public final class BlockReducer {
                     }
                 }
                 if (loadCount == 1 && isSimpleValue(source)) {
-                    // Check if the single LOAD is consumed
+                    // 检查唯一的 LOAD 是否被消费
                     for (IrInstruction other : allInsns) {
                         if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
                                 && other.operands().getFirst() instanceof Variable lv
@@ -1501,7 +1487,7 @@ public final class BlockReducer {
         currentVarStoreSource = Collections.unmodifiableMap(varStoreSource);
         currentStoresToSkip = Set.copyOf(storableToSkip);
 
-        // Pre-pass: merge NEW + INVOKE <init> pairs (CondenseConstruction pattern)
+        // 预遍历:合并 NEW + INVOKE <init> 对(CondenseConstruction 模式)
         currentNewToInit = new java.util.HashMap<>();
         currentInitToSkip = new java.util.HashSet<>();
         for (IrInstruction insn : allInsns) {
@@ -1522,17 +1508,17 @@ public final class BlockReducer {
             }
         }
 
-        // Check for synchronized block annotation on any instruction
+        // 检查任意指令是否有 synchronized 块注解
         boolean isSynchronized = allInsns.stream().anyMatch(
                 i -> i.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.SYNCHRONIZED_BLOCK)
                         && i.opcode() == IrOpcode.MONITOR_ENTER);
 
-        // Only emit root instructions as statements
+        // 仅将根指令生成为语句
         List<Statement> stmts = new ArrayList<>();
         for (IrInstruction insn : allInsns) {
-            // Skip conditions — they are extracted by IfStatement/LoopStatement wrappers
-            // via extractCondition() in reduce(). If the condition block has no matching
-            // annotation, emit a comment placeholder so control flow isn't silently lost.
+            // 跳过条件——它们由 reduce() 中的 IfStatement/LoopStatement 包装器
+            // 通过 extractCondition() 提取.如果条件块没有匹配的注解,
+            // 则生成注释占位符以免控制流被静默丢失.
             if (insn.opcode() == IrOpcode.CONDITION) {
                 if (insn.operands().size() >= 2) {
                     Expression left = valueToExpr(insn.operands().get(0));
@@ -1546,31 +1532,31 @@ public final class BlockReducer {
                 continue;
             }
 
-            // Skip synthetic $assertionsDisabled field stores — these are
-            // JVM assertion artifacts that don't exist in source code.
+            // 跳过合成的 $assertionsDisabled 字段存储——这些是 JVM 断言伪影,
+            // 在源码中并不存在.
             if (insn.opcode() == IrOpcode.FIELD_STORE
                     && "$assertionsDisabled".equals(insn.nameHint())) {
                 continue;
             }
 
-            // Skip INIT calls already merged into NEW
+            // 跳过已合并到 NEW 中的 INIT 调用
             if (currentInitToSkip.contains(insn.id())) {
                 continue;
             }
 
-            // Skip STORE instructions that have been inlined
+            // 跳过已被内联的 STORE 指令
             if (currentStoresToSkip.contains(insn.id())) {
                 continue;
             }
 
-            // Only emit statements for side-effecting instructions
+            // 仅输出有副作用的指令作为语句
             if (isStatementRoot(insn)) {
                 Statement s = translateStmt(insn);
                 if (s != null) {
                     stmts.add(s);
                 }
             } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
-                // Standalone expression (result not consumed by anything) — still emit
+                // 独立表达式(结果未被任何指令消费)——仍输出
                 Expression e = translateExpr(insn);
                 if (e != null && !isIgnorableExpr(e)) {
                     stmts.add(new ExpressionStatement(e));
@@ -1582,23 +1568,22 @@ public final class BlockReducer {
             return new BlockStatement(List.of());
         }
 
-        // Post-pass: fix duplicate variable declarations in the same block.
-        // When scoping fails, the same variable may get multiple "Type name = ..."
-        // declarations. Convert duplicates to plain assignments.
+        // 后处理:修复同一块中的重复变量声明.
+        // 当作用域定位失败时,同一变量可能获得多个 "Type name = ..." 声明.
+        // 将重复声明转换为普通赋值.
         Set<String> seenDecls = new HashSet<>();
         for (int i = 0; i < stmts.size(); i++) {
             if (stmts.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
                 if (!seenDecls.add(vd.name()) && vd.initializer() != null) {
-                    // Duplicate → convert to plain assignment
+                    // 重复声明 → 转为普通赋值
                     stmts.set(i, new ExpressionStatement(
                             new AssignExpr(new VarExpr(vd.name()), vd.initializer())));
                 }
             }
         }
 
-        // Post-pass: strip unreachable statements after RETURN/THROW/BREAK/CONTINUE.
-        // When CFG structuring fails, unconditional control transfer instructions
-        // are followed by dead code that causes compile errors.
+        // 后处理:剥离 RETURN/THROW/BREAK/CONTINUE 之后的不可达语句.
+        // 当 CFG 结构化失败时,无条件控制转移指令后面会跟着死代码,导致编译错误.
         for (int i = 0; i < stmts.size(); i++) {
             Statement s = stmts.get(i);
             if (s instanceof ReturnStatement || s instanceof ThrowStatement
@@ -1611,9 +1596,9 @@ public final class BlockReducer {
             }
         }
 
-        // Post-pass: suppress bare "return;" after this()/super() constructor
-        // delegation. In bytecode, constructors always end with RETURN, but
-        // Java source doesn't need "return;" after a this()/super() call.
+        // 后处理:抑制 this()/super() 构造函数委托调用之后的多余 "return;".
+        // 在字节码中构造函数总是以 RETURN 结尾,但 Java 源码中不需要
+        // 在 this()/super() 调用之后出现 "return;".
         if (!stmts.isEmpty()) {
             Statement last = stmts.get(stmts.size() - 1);
             if (last instanceof ReturnStatement r && r.value() == null) {
@@ -1633,25 +1618,35 @@ public final class BlockReducer {
         return new BlockStatement(stmts);
     }
 
+    /**
+     * 将单条 IR 指令翻译为 AST 语句.
+     *
+     * <ul>
+     *   <li>MONITOR_ENTER/EXIT 由 SynchronizedRecognizer → SynchronizedStatement 处理</li>
+     *   <li>RETURN:对 <clinit> 抑制 "return;"(JVM 伪影)</li>
+     *   <li>THROW:必要时引入临时变量声明</li>
+     *   <li>STORE:首个定义版本 emit "Type name = value;",后续转为赋值</li>
+     * </ul>
+     */
     private Statement translateStmt(IrInstruction insn) {
         return switch (insn.opcode()) {
-            // MONITOR_ENTER/EXIT are handled by SynchronizedRecognizer → SynchronizedStatement.
-            // If they appear here unprocessed, skip them rather than emitting invalid syntax.
+            // MONITOR_ENTER/EXIT 由 SynchronizedRecognizer → SynchronizedStatement 处理.
+            // 如果在此处出现未处理的实例,跳过它们而非生成非法语法.
             case MONITOR_ENTER, MONITOR_EXIT -> null;
             case RETURN -> {
                 if (insn.operands().isEmpty()) {
-                    // Static initializers (<clinit>) should not emit "return;"
-                    // — it's a JVM artifact, not valid Java source.
+                    // 静态初始化器(<clinit>)不应输出 "return;" ——
+                    // 它只是 JVM 伪影,不是合法的 Java 源码.
                     if (currentIr != null && "<clinit>".equals(currentIr.method().name())) {
                         yield null;
                     }
                     yield new ReturnStatement(null);
                 } else {
                     Expression retVal = valueToExpr(insn.operands().getFirst());
-                    // Apply boolean folding from semantic annotations
+                    // 应用语义注解中的布尔折叠
                     retVal = applyBooleanAnnotation(insn, retVal);
-                    // Also convert integer literal to boolean for boolean-return methods
-                    // (needed for PHI-resolved values where annotation is skipped)
+                    // 对 boolean 返回方法,将整数字面量转为布尔值
+                    //(PHI 解析后的值可能跳过了注解)
                     if (currentMethodReturnsBoolean
                             && retVal instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit
                             && lit.value() instanceof Integer i) {
@@ -1674,24 +1669,23 @@ public final class BlockReducer {
                 yield new ThrowStatement(thrown);
             }
             case STORE -> {
-                // Emit "Type name = value;" for the first store to each
-                // logical variable. Use both slot+version: version 1 at any
-                // slot is always a first local definition (version 0 = param).
-                // ALSO use per-scope tracking so branch bodies each get their
-                // own declarations for temp variables at the same slot.
+                // 对每个逻辑变量的首次存储产生 "Type name = value;".
+                // 同时使用 slot+version:任意 slot 上的 version 1 总是首个局部变量定义
+                //(version 0 = 参数).同时使用按作用域的追踪,
+                // 使相同 slot 上不同分支体的临时变量各自获得独立的声明.
                 Value target = insn.operands().getFirst();
                 if (target instanceof Variable v && !v.isParameter()
                         && v.slot() != 0) {
                     String rawName = v.name();
                     String declName = rawName.startsWith("var")
                             ? rawName : rawName;
-                    // Version 1 = first local at this slot → always declare.
-                    // Version 2+ = reassignment → declare only if new scope.
-                    // Always call tryDeclareVar to track the name in scope.
+                    // version 1 = 此 slot 的首个局部变量 → 始终声明.
+                    // version 2+ = 重新赋值 → 仅在新作用域中声明.
+                    // 始终调用 tryDeclareVar 以在作用域中追踪该变量名.
                     boolean isFirstDef = v.version() == 1
                             || tryDeclareVar(declName);
                     if (v.version() == 1) {
-                        tryDeclareVar(declName); // track in scope
+                        tryDeclareVar(declName); // 在作用域中追踪
                     }
                     if (isFirstDef) {
                         Value source = insn.operands().size() > 1
@@ -1716,65 +1710,66 @@ public final class BlockReducer {
         };
     }
 
-    /** Translate an invokedynamic INVOKE into a LambdaExpr.
-     *  Detects lambda expressions (lambda$method$N pattern) and method references.
-     *  For string concat (makeConcatWithConstants), delegates to normal INVOKE handling.
+    /**
+     * 将 invokedynamic INVOKE 翻译为 LambdaExpr.
      *
-     *  <p>Detection priority:
-     *  <ol>
-     *    <li>Bootstrap method resolution: check the implementation method handle.
-     *        If it points to a synthetic {@code lambda$xxx$N} method → expression/block lambda.
-     *        If it points to a real method → method reference ({@code Class::method}).
-     *        If it points to {@code <init>} → constructor reference ({@code Class::new}).</li>
-     *    <li>Name-based patterns: "::" in the name or "new " prefix.</li>
-     *    <li>SAM name heuristic: if indy name is a functional interface method name
-     *        and no resolved info is available, guess method reference.</li>
-     *  </ol>
+     * <p>检测 lambda 表达式(lambda$method$N 模式)和方法引用.
+     * 对于字符串拼接(makeConcatWithConstants),委托到普通的 INVOKE 处理.
+     *
+     * <p>检测优先级:
+     * <ol>
+     *   <li>引导方法解析:检查实现方法句柄.
+     *       如果指向合成的 {@code lambda$xxx$N} 方法 → 表达式/块 lambda.
+     *       如果指向真实方法 → 方法引用({@code Class::method}).
+     *       如果指向 {@code <init>} → 构造方法引用({@code Class::new}).</li>
+     *   <li>基于名称的模式:名称中的 "::" 或 "new " 前缀.</li>
+     *   <li>SAM 名称启发式:如果 indy 名称是函数式接口方法名且无已解析信息,猜测方法引用.</li>
+     * </ol>
      */
     private Expression translateIndyInvoke(IrInstruction insn) {
         String mName = insn.nameHint() != null ? insn.nameHint() : "lambda";
         JavaType funcType = insn.resultType();
         List<Value> operands = insn.operands();
 
-        // String concat: let StringConcatRewriter handle it later
+        // 字符串拼接:交由 StringConcatRewriter 后续处理
         if (mName.contains("Concat") || mName.contains("concat")) {
             return translateIndyAsRegularInvoke(insn);
         }
 
-        // Read resolved bootstrap info from semantic annotations
+        // 从语义注解中读取已解析的引导方法信息
         String implName = getIndyAnnotation(insn, "implName");
         String implOwner = getIndyAnnotation(insn, "implOwner");
 
-        // Build parameter list from operands (captured vars + factory args → lambda params)
+        // 从操作数构建参数列表(捕获变量 + 工厂参数 → lambda 参数)
         List<LambdaExpr.Param> params = buildIndyParams(operands);
 
-        // Detect method reference pattern (name contains "::" or starts with "new")
+        // 检测方法引用模式(名称包含 "::" 或以 "new" 开头)
         if (mName.contains("::")) {
             String[] parts = mName.split("::", 2);
             return LambdaExpr.methodRef(parts[0], parts.length > 1 ? parts[1] : "new",
                     funcType);
         }
 
-        // Method reference via "new" prefix
+        // 通过 "new" 前缀的方法引用
         if (mName.startsWith("new ")) {
             String cls = mName.substring(4);
             return LambdaExpr.methodRef(cls, "new", funcType);
         }
 
-        // Resolved bootstrap info: distinguish lambda from method reference
+        // 已解析的引导方法信息:区分 lambda 和方法引用
         if (implName != null && !implName.isEmpty() && implOwner != null) {
             if (implName.startsWith("lambda$")) {
-                // Lambda: implementation is a synthetic lambda$xxx$N method
+                // Lambda:实现是合成的 lambda$xxx$N 方法
                 String bodyHint = "/* " + implName + " */";
                 return LambdaExpr.placeholder(params, bodyHint, funcType);
             }
             if ("<init>".equals(implName)) {
-                // Constructor reference: ClassName::new
+                // 构造方法引用:ClassName::new
                 return LambdaExpr.methodRef(simplifyClassName(implOwner), "new", funcType);
             }
-            // Method reference: determine owner representation
+            // 方法引用:确定 owner 的表示方式
             String owner = simplifyClassName(implOwner);
-            // For instance method refs with captured receiver, use variable name
+            // 对于带捕获接收者的实例方法引用,使用变量名
             if (!operands.isEmpty() && operands.getFirst() instanceof Variable v
                     && v.name() != null && !"this".equals(v.name())) {
                 owner = v.name();
@@ -1782,8 +1777,7 @@ public final class BlockReducer {
             return LambdaExpr.methodRef(owner, implName, funcType);
         }
 
-        // Fallback heuristic: if name is a SAM method name (not lambda$),
-        // and the return type looks like a functional interface, guess method ref
+        // 回退启发式:如果名称是 SAM 方法名(非 lambda$),且返回类型类似函数式接口,猜测方法引用
         if (isSamMethodName(mName) && isFunctionalInterfaceLike(funcType)) {
             String owner = functionalInterfaceShortName(funcType);
             if (owner != null && !owner.isEmpty()) {
@@ -1791,12 +1785,12 @@ public final class BlockReducer {
             }
         }
 
-        // Lambda placeholder fallback
+        // Lambda 占位符回退
         String bodyHint = "/* " + mName + " */";
         return LambdaExpr.placeholder(params, bodyHint, funcType);
     }
 
-    /** Build parameter list from INDY operands. */
+    /** 从 INDY 操作数构建参数列表 */
     private List<LambdaExpr.Param> buildIndyParams(List<Value> operands) {
         List<LambdaExpr.Param> params = new ArrayList<>();
         for (int i = 0; i < operands.size(); i++) {
@@ -1814,7 +1808,7 @@ public final class BlockReducer {
         return params;
     }
 
-    /** Get a string value from the INDY annotation properties. */
+    /** 从 INDY 注解属性中获取字符串值 */
     private String getIndyAnnotation(IrInstruction insn, String key) {
         for (com.bingbaihanji.bdec.semantic.SemanticAnnotation ann : insn.annotations()) {
             if (ann.is(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
@@ -1827,7 +1821,7 @@ public final class BlockReducer {
         return null;
     }
 
-    /** Fallback: treat INDY as a regular method invocation. */
+    /** 回退方案:将 INDY 当作普通方法调用来处理 */
     private Expression translateIndyAsRegularInvoke(IrInstruction insn) {
         String mName = insn.nameHint() != null ? insn.nameHint() : "method";
         List<Expression> args = new ArrayList<>();
@@ -1837,13 +1831,21 @@ public final class BlockReducer {
         return new InvocationExpr(null, mName, args, insn.resultType());
     }
 
+    /**
+     * 将单条 IR 指令翻译为 AST 表达式.
+     *
+     * <p>涵盖所有 IR 操作码类型的表达式翻译:CONST,LOAD,STORE(→赋值),
+     * FIELD_LOAD,FIELD_STORE(→字段赋值),BINARY,COMPARE,CONDITION,
+     * UNARY,INVOKE(含 INDY 的 lambda 翻译),CAST,NEW,NEW_ARRAY,
+     * INSTANCE_OF,ARRAY_LOAD,ARRAY_STORE,ARRAY_LENGTH,INC,THROW,PHI 等.
+     */
     private Expression translateExpr(IrInstruction insn) {
         return switch (insn.opcode()) {
 
-            // Constants
+            // 常量
             case CONST -> constToExpr(insn);
 
-            // Variable load
+            // 变量加载
             case LOAD -> {
                 if (!insn.operands().isEmpty() && insn.operands().getFirst() instanceof Variable v) {
                     yield varToExpr(v);
@@ -1851,7 +1853,7 @@ public final class BlockReducer {
                 yield new VarExpr("var");
             }
 
-            // Variable store → assignment
+            // 变量存储 → 赋值
             case STORE -> {
                 Value target = insn.operands().getFirst();
                 Value source = insn.operands().size() > 1 ? insn.operands().get(1) : null;
@@ -1862,12 +1864,12 @@ public final class BlockReducer {
                     lhs = valueToExpr(target);
                 }
                 Expression rhs = source != null ? valueToExpr(source) : new VarExpr("varUnresolved");
-                // Compound assignment detection: x = x OP y → x OP= y
-                // When detected, use only the right operand (strip the duplicated left)
+                // 复合赋值检测:x = x OP y → x OP= y
+                // 检测到时仅使用右操作数(剥离重复的左操作数)
                 BinaryOperator compoundOp = detectCompoundOp(lhs, rhs);
                 Expression assignRhs = rhs;
                 if (compoundOp != null && rhs instanceof BinExpr bin) {
-                    assignRhs = bin.right(); // strip the duplicated left operand
+                    assignRhs = bin.right(); // 剥离重复的左操作数
                 }
                 // x += 1 → x++  /  x -= 1 → x--
                 if (compoundOp != null && assignRhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
@@ -1880,7 +1882,7 @@ public final class BlockReducer {
                                 com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC, lhs);
                     }
                 }
-                // Increment/decrement detection: x = x + 1 → x++, x = x - 1 → x--
+                // 自增/自减检测:x = x + 1 → x++, x = x - 1 → x--
                 if (compoundOp == null && rhs instanceof BinExpr bin
                         && expressionsMatch(lhs, bin.left())) {
                     UnaryOperator incOp = detectIncrement(bin);
@@ -1891,13 +1893,13 @@ public final class BlockReducer {
                 yield new AssignExpr(lhs, assignRhs, compoundOp);
             }
 
-            // Field load — on implicit 'this', use just the field name unless
-            // a local variable with the same name creates ambiguity.
-            // For static fields tagged with DECLARING_CLASS, emit ClassName.fieldName.
+            // 字段加载——在隐式 'this' 上仅使用字段名,
+            // 除非存在同名的局部变量造成歧义.
+            // 对于带有 DECLARING_CLASS 标记的静态字段,输出 ClassName.fieldName.
             case FIELD_LOAD -> {
                 Expression obj = insn.operands().isEmpty() ? null : valueToExpr(insn.operands().getFirst());
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
-                // Check for static field with declaring class annotation
+                // 检查是否有声明类注解的静态字段
                 if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS)) {
                     var dcAnn = insn.getAnnotation(
                             com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS);
@@ -1911,8 +1913,8 @@ public final class BlockReducer {
                         }
                     }
                 }
-                // In instance methods, field load on 'this' → just the field name
-                // UNLESS a local variable shadows the field name (e.g., "lock = this.lock")
+                // 在实例方法中,对 'this' 的字段加载 → 仅使用字段名,
+                // 除非局部变量与该字段名冲突(如 "lock = this.lock")
                 if (isInstanceMethod && obj instanceof VarExpr v && "this".equals(v.name())) {
                     if (!localVarShadowsField(fName)) {
                         yield new VarExpr(fName);
@@ -1921,14 +1923,14 @@ public final class BlockReducer {
                 yield new FieldAccessExpr(obj, fName);
             }
 
-            // Field store → assignment to field
+            // 字段存储 → 字段赋值
             case FIELD_STORE -> {
                 Value obj = !insn.operands().isEmpty() ? insn.operands().getFirst() : null;
                 Value val = insn.operands().size() > 1 ? insn.operands().get(1) : null;
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
-                // Always use this.fieldName for instance field stores, so the output
-                // clearly distinguishes field assignment from local variable assignment.
-                // This prevents "capacity = x" when "this.capacity = x" was intended.
+                // 始终使用 this.fieldName 进行实例字段存储,
+                // 使输出能够清晰区分字段赋值和局部变量赋值.
+                // 防止将 "this.capacity = x" 错误输出为 "capacity = x".
                 Expression lhs;
                 if (isInstanceMethod && obj instanceof Variable v && v.slot() == 0) {
                     lhs = new FieldAccessExpr(new VarExpr("this"), fName);
@@ -1938,7 +1940,7 @@ public final class BlockReducer {
                     lhs = new FieldAccessExpr(null, fName);
                 }
                 Expression rhs = val != null ? valueToExpr(val) : new VarExpr("varUnresolved");
-                // Apply compound assignment and increment detection for field stores too
+                // 字段存储同样应用复合赋值和自增/自减检测
                 BinaryOperator compoundOp = detectCompoundOp(lhs, rhs);
                 Expression assignRhs = rhs;
                 if (compoundOp != null && rhs instanceof BinExpr bin) {
@@ -1965,7 +1967,7 @@ public final class BlockReducer {
                 yield new AssignExpr(lhs, assignRhs, compoundOp);
             }
 
-            // Binary arithmetic — use original bytecode opcode to infer operator
+            // 二元运算——使用原始字节码操作码推断运算符
             case BINARY -> {
                 if (insn.operands().size() >= 2) {
                     Expression left = valueToExpr(insn.operands().get(0));
@@ -1976,7 +1978,7 @@ public final class BlockReducer {
                 yield new VarExpr("/* binary */");
             }
 
-            // Comparisons
+            // 比较运算
             case COMPARE -> {
                 if (insn.operands().size() >= 2) {
                     Expression left = valueToExpr(insn.operands().get(0));
@@ -1986,16 +1988,16 @@ public final class BlockReducer {
                 yield new VarExpr("/* compare */");
             }
 
-            // Condition — use original bytecode opcode to infer comparison operator.
+            // 条件——使用原始字节码操作码推断比较运算符
             case CONDITION -> {
                 if (insn.operands().size() >= 2) {
                     Value leftOp = insn.operands().get(0);
                     Value rightOp = insn.operands().get(1);
 
-                    // Detect boolean variable compared to 0:
+                    // 检测布尔变量与 0 的比较:
                     //   boolean == 0 → !boolean,  boolean != 0 → boolean
-                    // This handles if(flag) vs if(!flag) from bytecode IFEQ/IFNE.
-                    // Also handles boolean-returning method calls (desiredAssertionStatus, etc.)
+                    // 此处理用于将 IFEQ/IFNE 字节码转为 if(flag) / if(!flag).
+                    // 同时处理返回布尔的函数调用(desiredAssertionStatus 等).
                     boolean leftIsBool = isBooleanValue(leftOp);
                     boolean rightIsBool = isBooleanValue(rightOp);
                     boolean rightIsZero = rightOp instanceof ConstantValue cv
@@ -2024,7 +2026,7 @@ public final class BlockReducer {
                         }
                     }
 
-                    // Detect COMPARE+CONDITION pattern
+                    // 检测 COMPARE+CONDITION 模式
                     Value cmpVal = null;
                     if (rightOp instanceof InstructionRef ref
                             && ref.instruction().opcode() == IrOpcode.COMPARE) {
@@ -2047,7 +2049,7 @@ public final class BlockReducer {
                         }
                     }
 
-                    // Regular condition (no COMPARE merge)
+                    // 常规条件(无 COMPARE 合并)
                     Expression left = valueToExpr(leftOp);
                     Expression right = valueToExpr(rightOp);
                     yield new BinExpr(cmpOp != null ? cmpOp : BinaryOperator.EQ, left, right);
@@ -2055,7 +2057,7 @@ public final class BlockReducer {
                 yield new VarExpr("/* condition */");
             }
 
-            // Unary
+            // 一元运算
             case UNARY -> {
                 if (!insn.operands().isEmpty()) {
                     UnaryOperator uop = inferUnaryOp(insn.originalOpcode());
@@ -2064,9 +2066,9 @@ public final class BlockReducer {
                 yield new VarExpr("/* unary */");
             }
 
-            // Method invocation — first operand is receiver (for non-static calls)
+            // 方法调用——第一个操作数是接收者(非静态调用时)
             case INVOKE -> {
-                // Invokedynamic (lambda / method ref): generate LambdaExpr instead.
+                // Invokedynamic(lambda / 方法引用):改为生成 LambdaExpr
                 if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
                     yield translateIndyInvoke(insn);
                 }
@@ -2079,11 +2081,11 @@ public final class BlockReducer {
 
                 String mName = insn.nameHint() != null ? insn.nameHint() : "method";
 
-                // First operand is the receiver (if present — IrBuilder stores it as target)
+                // 第一个操作数是接收者(IrBuilder 将其存储为目标)
                 int argStart = 0;
                 Expression target = null;
                 if (isConstructor) {
-                    // Constructor: first operand is 'this' (ALOAD_0) — skip it, use semantic name
+                    // 构造函数:第一个操作数是 'this' (ALOAD_0)——跳过,使用语义名称
                     argStart = 1;
                     target = null;
                     if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.SUPER_CONSTRUCTOR)) {
@@ -2091,8 +2093,8 @@ public final class BlockReducer {
                     } else if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.THIS_CONSTRUCTOR)) {
                         mName = "this";
                     } else {
-                        // Object creation: NEW + INVOKESPECIAL <init> pattern
-                        // Replace "<init>" with the target class's simple name
+                        // 对象创建:NEW + INVOKESPECIAL <init> 模式
+                        // 将 "<init>" 替换为目标类的简单名称
                         var ann = insn.getAnnotation(
                                 com.bingbaihanji.bdec.semantic.SemanticTag.CONSTRUCTOR_DELEGATION);
                         if (ann != null) {
@@ -2107,7 +2109,7 @@ public final class BlockReducer {
                         }
                     }
                 } else if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS)) {
-                    // Static call with declaring class annotation → use class as target
+                    // 带声明类注解的静态调用 → 使用类名作为目标
                     var dcAnn = insn.getAnnotation(
                             com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS);
                     if (dcAnn != null) {
@@ -2119,14 +2121,14 @@ public final class BlockReducer {
                                     ? dc.substring(lastSlash + 1) : dc);
                         }
                     }
-                    argStart = 0; // all operands are args (no receiver)
+                    argStart = 0; // 所有操作数均为参数(无接收者)
                 } else if (!insn.operands().isEmpty()) {
-                    // Regular invoke: first operand is receiver → becomes target expression
+                    // 普通调用:第一个操作数是接收者 → 转为 target 表达式
                     Value firstOp = insn.operands().getFirst();
                     target = valueToExpr(firstOp);
                     argStart = 1;
                 } else {
-                    // Static call without annotation — no target
+                    // 无注解的静态调用——无目标
                     argStart = 0;
                 }
 
@@ -2136,14 +2138,14 @@ public final class BlockReducer {
                 yield new InvocationExpr(target, mName, args, insn.resultType());
             }
 
-            // Type cast
+            // 类型转换
             case CAST -> {
                 Expression operand = !insn.operands().isEmpty()
                         ? valueToExpr(insn.operands().getFirst()) : new VarExpr("varUnresolved");
                 yield new CastExpr(insn.resultType(), operand);
             }
 
-            // Object creation — with merged constructor args if folded
+            // 对象创建——若已折叠则携带合并后的构造函数参数
             case NEW -> {
                 if (currentNewToInit.containsKey(insn.id())) {
                     List<IrInstruction> inits = currentNewToInit.get(insn.id());
@@ -2151,7 +2153,7 @@ public final class BlockReducer {
                     for (IrInstruction init : inits) {
                         for (int i = 0; i < init.operands().size(); i++) {
                             Value op = init.operands().get(i);
-                            // Skip self-reference (receiver = this NEW instruction)
+                            // 跳过自引用(接收者 = 此 NEW 指令)
                             if (op instanceof InstructionRef ref
                                     && ref.instruction().id() == insn.id()) {
                                 continue;
@@ -2159,14 +2161,14 @@ public final class BlockReducer {
                             ctorArgs.add(valueToExpr(op));
                         }
                     }
-                    // NewExpr constructor is (type, dimensions, constructorArgs)
+                    // NewExpr 构造函数为 (type, dimensions, constructorArgs)
                     yield new NewExpr(insn.resultType(), List.of(), ctorArgs);
                 }
-                // NewExpr constructor is (type, dimensions, constructorArgs)
+                // NewExpr 构造函数为 (type, dimensions, constructorArgs)
                 yield new NewExpr(insn.resultType(), List.of(), List.of());
             }
             case NEW_ARRAY -> {
-                // Extract array size from operands (the stack value popped by NEWARRAY/ANEWARRAY)
+                // 从操作数中提取数组大小(由 NEWARRAY/ANEWARRAY 弹出栈的值)
                 List<Expression> dims = new ArrayList<>();
                 for (Value op : insn.operands()) {
                     dims.add(valueToExpr(op));
@@ -2177,7 +2179,7 @@ public final class BlockReducer {
                 yield new NewExpr(insn.resultType(), dims, List.of());
             }
 
-            // instanceof: nameHint carries the target class internal name
+            // instanceof:nameHint 携带目标类内部名
             case INSTANCE_OF -> {
                 Expression obj = !insn.operands().isEmpty()
                         ? valueToExpr(insn.operands().getFirst()) : new VarExpr("obj");
@@ -2187,7 +2189,7 @@ public final class BlockReducer {
                 yield new InstanceOfExpr(obj, checkedType);
             }
 
-            // Array element load: a[i]
+            // 数组元素加载:a[i]
             case ARRAY_LOAD -> {
                 Expression arr = insn.operands().size() > 0
                         ? valueToExpr(insn.operands().get(0)) : new VarExpr("arr");
@@ -2195,7 +2197,7 @@ public final class BlockReducer {
                         ? valueToExpr(insn.operands().get(1)) : new VarExpr("i");
                 yield new ArrayAccessExpr(arr, idx);
             }
-            // Array element store: a[i] = v
+            // 数组元素存储:a[i] = v
             case ARRAY_STORE -> {
                 Expression arr = insn.operands().size() > 0
                         ? valueToExpr(insn.operands().get(0)) : new VarExpr("arr");
@@ -2206,20 +2208,20 @@ public final class BlockReducer {
                 yield new AssignExpr(new ArrayAccessExpr(arr, idx), val);
             }
 
-            // Array length
+            // 数组长度
             case ARRAY_LENGTH -> {
                 Expression arr = !insn.operands().isEmpty()
                         ? valueToExpr(insn.operands().getFirst()) : new VarExpr("arr");
                 yield new FieldAccessExpr(arr, "length");
             }
 
-            // Increment (IINC) — operands: [readVar, writeVar, ConstantValue(incr)]
+            // 自增指令(IINC)——操作数: [readVar, writeVar, ConstantValue(incr)]
             case INC -> {
                 if (insn.operands().size() >= 3 && insn.operands().getFirst() instanceof Variable v) {
-                    Value incr = insn.operands().get(2); // index 2 is the increment value
+                    Value incr = insn.operands().get(2); // 索引 2 是增量值
                     VarExpr var = varToExpr(v);
                     Expression rhs = valueToExpr(incr);
-                    // x += c → can become x++ if c == 1
+                    // x += c → 若 c == 1 则转为 x++
                     if (rhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
                             && lr.value() instanceof Integer i && i == 1) {
                         yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
@@ -2230,13 +2232,13 @@ public final class BlockReducer {
                 yield new VarExpr("/* inc */");
             }
 
-            // Throw
+            // 抛出异常
             case THROW -> !insn.operands().isEmpty() ? valueToExpr(insn.operands().getFirst()) : new VarExpr("ex");
 
-            // PHI — pick the operand belonging to the current branch context.
-            // If we know which blocks are being translated (branchBlocks hint),
-            // pick the PHI operand whose defining instruction is in those blocks.
-            // Otherwise pick the first non-trivial operand.
+            // PHI——选取属于当前分支上下文的操作数.
+            // 如果已知当前正在翻译哪些块(branchBlocks 提示),
+            // 选取定义指令位于这些块中的 PHI 操作数.
+            // 否则选取第一个非平凡操作数.
             case PHI -> {
                 Expression resolved = null;
                 if (currentBranchBlocks != null) {
@@ -2271,14 +2273,13 @@ public final class BlockReducer {
         };
     }
 
-    /** Convert a Value (Variable / ConstantValue / InstructionRef) to an Expression.
-     *  For InstructionRef, recursively translates the referenced instruction
-     *  to build proper expression trees. */
+    /** 将 Value(Variable / ConstantValue / InstructionRef)转为 Expression.
+     *  对于 InstructionRef,递归翻译引用的指令以构建正确的表达式树. */
     private Expression valueToExpr(Value v) {
         return switch (v) {
             case Variable var -> {
-                // Check if this variable's value was inlined from a STORE.
-                // This handles: x = 42; ... use(x) → 42
+                // 检查此变量的值是否已从 STORE 内联.
+                // 处理:x = 42; ... use(x) → 42
                 Value storeSource = currentVarStoreSource.get(var);
                 if (storeSource != null) {
                     yield valueToExpr(storeSource);
@@ -2293,7 +2294,7 @@ public final class BlockReducer {
                 yield new LitExpr(val, cv.type());
             }
             case InstructionRef ref -> {
-                // Recursively translate the referenced instruction to build expression tree
+                // 递归翻译引用的指令以构建表达式树
                 IrInstruction def = ref.instruction();
                 Expression expr = translateExpr(def);
                 yield expr != null ? expr : new VarExpr("tmp" + def.id());
@@ -2302,22 +2303,22 @@ public final class BlockReducer {
         };
     }
 
-    /** Detect compound assignment pattern: {@code x = x OP y} → {@code x OP= y}.
-     *  Returns the operator if the pattern matches, null for plain assignment. */
+    /** 检测复合赋值模式:{@code x = x OP y} → {@code x OP= y}.
+     *  若模式匹配则返回运算符,否则返回 null(普通赋值). */
     private BinaryOperator detectCompoundOp(Expression lhs, Expression rhs) {
         if (!(rhs instanceof BinExpr bin)) {
             return null;
         }
-        // Match: lhs matches the left operand of the binary expression
+        // 匹配:lhs 与二元表达式的左操作数匹配
         if (expressionsMatch(lhs, bin.left())) {
             return bin.operator();
         }
         return null;
     }
 
-    /** Check if two expressions are structurally equivalent (same variable/field).
-     *  Handles the equivalence: {@code VarExpr("size") ≈ FieldAccessExpr(this, "size")}
-     *  which arises because {@code FIELD_LOAD on this} emits bare field names. */
+    /** 检查两个表达式在结构上是否等价(相同的变量/字段).
+     *  处理等价关系:{@code VarExpr("size") ≈ FieldAccessExpr(this, "size")},
+     *  这是由于 {@code FIELD_LOAD on this} 发出了裸字段名. */
     private boolean expressionsMatch(Expression a, Expression b) {
         if (a instanceof VarExpr va && b instanceof VarExpr vb) {
             return va.name().equals(vb.name());
@@ -2328,7 +2329,7 @@ public final class BlockReducer {
                     || (fa.target() != null && fb.target() != null
                     && expressionsMatch(fa.target(), fb.target())));
         }
-        // Cross-type: VarExpr("size") matches FieldAccessExpr(this, "size")
+        // 跨类型:VarExpr("size") 匹配 FieldAccessExpr(this, "size")
         if (a instanceof VarExpr va && b instanceof FieldAccessExpr fb) {
             return fb.target() instanceof VarExpr t && "this".equals(t.name())
                     && va.name().equals(fb.fieldName());
@@ -2340,32 +2341,31 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Convert a Variable to the appropriate VarExpr.
-     *  Uses the variable's name (from LocalVariableTable if available,
-     *  falling back to "var" + originalIndex). Versioned variables
-     *  that represent slot-0 temps are distinguished from {@code this}. */
+    /** 将 Variable 转为相应的 VarExpr.
+     *  使用变量名(优先从 LocalVariableTable 获取,回退到 "var" + originalIndex).
+     *  代表 slot-0 临时值的版本化变量与 {@code this} 进行区分. */
     private VarExpr varToExpr(Variable var) {
         String name = var.name();
-        // In instance methods, slot 0 version 0 is 'this'
+        // 在实例方法中,slot 0 version 0 是 'this'
         if (isInstanceMethod && var.slot() == 0 && var.version() == 0) {
             return new VarExpr("this");
         }
-        // For LVT-named variables, always use the name
+        // 对于 LVT 命名的变量,始终使用该名称
         if (name != null && !name.startsWith("var")) {
             return new VarExpr(name);
         }
-        // Fallback: distinguish versions for same-slot variables
+        // 回退:区分相同 slot 下的不同版本
         if (var.version() > 0) {
             return new VarExpr("var" + var.slot());
         }
         return new VarExpr(name != null ? name : "var" + var.slot());
     }
 
-    /** Convert CONST IR to a LitExpr. */
+    /** 将 CONST IR 转为 LitExpr */
     private Expression constToExpr(IrInstruction insn) {
         if (!insn.operands().isEmpty() && insn.operands().getFirst() instanceof ConstantValue cv) {
             Object v = cv.value();
-            // Class literal constant (from LDC): emit as ClassName.class
+            // 类字面量常量(来自 LDC):输出为 ClassName.class
             if (v instanceof String s && isClassType(cv.type())) {
                 String simpleName = simplifyClassName(s);
                 return new FieldAccessExpr(new VarExpr(simpleName), "class");
@@ -2373,7 +2373,7 @@ public final class BlockReducer {
             if (v instanceof String s) {
                 return new LitExpr(s, JavaType.classType("java/lang/String"));
             }
-            // Check for boolean annotation from TypeAwareConstantFolder
+            // 检查来自 TypeAwareConstantFolder 的布尔注解
             if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.BOOLEAN_RETURN)) {
                 var ann = insn.getAnnotation(com.bingbaihanji.bdec.semantic.SemanticTag.BOOLEAN_RETURN);
                 if (ann != null) {
@@ -2382,15 +2382,14 @@ public final class BlockReducer {
                             JavaType.BOOLEAN);
                 }
             }
-            // Preserve the type from ConstantValue for proper emission.
-            // Pass v directly — null is handled by emitLiteral() as the keyword "null".
+            // 保留 ConstantValue 的类型以实现正确的输出.
+            // 直接传递 v——null 由 emitLiteral() 处理为关键字 "null".
             return new LitExpr(v, cv.type());
         }
         return new VarExpr("/* const */");
     }
 
-    /** Check if a local variable has the same name as the given field,
-     *  which would create ambiguity when the "this." prefix is stripped. */
+    /** 检查是否有局部变量与给定字段名相同,这将在剥离 "this." 前缀时造成歧义 */
     private boolean localVarShadowsField(String fieldName) {
         if (currentIr == null || fieldName == null) {
             return false;
@@ -2404,7 +2403,7 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Map bytecode opcode to UnaryOperator for UNARY IR instructions. */
+    /** 将字节码操作码映射为 UNARY IR 指令的一元运算符 */
     private UnaryOperator inferUnaryOp(int bc) {
         return switch (bc) {
             case 0x74, 0x75, 0x76, 0x77 -> UnaryOperator.NEG; // INEG, LNEG, FNEG, DNEG
@@ -2412,7 +2411,7 @@ public final class BlockReducer {
         };
     }
 
-    /** Build a SwitchStatement from switch info and the grouped blocks. */
+    /** 根据 switch 信息和分组块构建 SwitchStatement */
     private SwitchStatement buildSwitch(SwitchInfo info, BlockGroup group, LinearIr ir,
                                         List<BlockGroup> allGroups, Set<BlockGroup> consumed) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
@@ -2424,12 +2423,12 @@ public final class BlockReducer {
             }
         }
 
-        // Collect all case target blocks so we can consume their groups
+        // 收集所有 case 目标块,以便消费它们对应的组
         Set<BasicBlock> allCaseBlocks = new HashSet<>();
         info.caseBodies().values().forEach(allCaseBlocks::addAll);
         allCaseBlocks.addAll(info.defaultBody());
 
-        // Consume groups containing case target blocks
+        // 消费包含 case 目标块的组
         for (BlockGroup g : allGroups) {
             if (consumed.contains(g)) {
                 continue;
@@ -2464,15 +2463,14 @@ public final class BlockReducer {
     }
 
     /**
-     * If the instruction has a BOOLEAN_RETURN annotation and the expression
-     * is a numeric LitExpr, replace it with a boolean LitExpr.
+     * 如果指令具有 BOOLEAN_RETURN 注解且表达式为数值 LitExpr,
+     * 则将其替换为布尔 LitExpr.
      */
     private Expression applyBooleanAnnotation(IrInstruction insn, Expression expr) {
         if (!insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.BOOLEAN_RETURN)) {
             return expr;
         }
-        // Don't override if the value comes from a PHI — branch context
-        // resolution already picks the correct per-branch value.
+        // 如果值来自 PHI,不覆盖——分支上下文解析已经选择了正确的逐分支值
         if (!insn.operands().isEmpty()
                 && insn.operands().getFirst() instanceof InstructionRef ref
                 && ref.instruction().opcode() == IrOpcode.PHI) {
@@ -2487,21 +2485,21 @@ public final class BlockReducer {
         return new LitExpr(boolVal, JavaType.BOOLEAN);
     }
 
-    /** Check if any IR instruction in the group has a SYNCHRONIZED_BLOCK tag.
-     *  This is more reliable than matching emitted placeholder text. */
+    /** 检查组内任意 IR 指令是否具有 SYNCHRONIZED_BLOCK 标记.
+     *  该方法比匹配输出占位符文本更可靠. */
     private boolean groupHasSynchronizedAnnotation(BlockGroup group, LinearIr ir) {
         return group.allIrInstructions(ir).stream().anyMatch(
                 i -> i.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.SYNCHRONIZED_BLOCK)
                         && i.opcode() == IrOpcode.MONITOR_ENTER);
     }
 
-    /** Check if a statement tree contains synchronized block annotations.
-     *  Fallback detection via IR-level tag checking. */
+    /** 检查语句树是否包含 synchronized 块注解.
+     *  通过 IR 级别标记检测的回退方案. */
     private boolean isSynchronizedBlock(Statement stmt) {
-        return false; // detection now uses IR-level tags in groupHasSynchronizedAnnotation
+        return false; // 检测现在使用 groupHasSynchronizedAnnotation 中的 IR 级别标记
     }
 
-    /** Check if a statement tree contains a SynchronizedStatement (recursively). */
+    /** 递归检查语句树中是否包含 SynchronizedStatement */
     private boolean containsSynchronizedStatement(Statement s) {
         if (s instanceof SynchronizedStatement) {
             return true;
@@ -2515,12 +2513,12 @@ public final class BlockReducer {
         return false;
     }
 
-    /** Check if a TryCatchInfo represents a synchronized block:
-     *  the method contains MONITOR_ENTER, handler contains MONITOR_EXIT + THROW.
-     *  MONITOR_ENTER is typically at the bytecode offset just before the try range,
-     *  so we search the full method IR rather than only the try blocks. */
+    /** 检查 TryCatchInfo 是否表示 synchronized 块:
+     *  方法包含 MONITOR_ENTER,处理器包含 MONITOR_EXIT + THROW.
+     *  MONITOR_ENTER 通常位于 try 范围之前的字节码偏移处,
+     *  因此需要搜索整个方法 IR 而非仅限 try 块. */
     private boolean isSynchronizedHandler(TryCatchInfo info, LinearIr ir) {
-        // Check entire method for MONITOR_ENTER (it's usually at tryStartPc - 1)
+        // 在整个方法中搜索 MONITOR_ENTER(通常位于 tryStartPc - 1 处)
         boolean hasMonitorEnter = false;
         for (BasicBlock b : ir.controlFlowGraph().blocks()) {
             if (b == ir.controlFlowGraph().entryBlock()
@@ -2540,7 +2538,7 @@ public final class BlockReducer {
         if (!hasMonitorEnter) {
             return false;
         }
-        // Check handler for MONITOR_EXIT + THROW
+        // 检查处理器中是否有 MONITOR_EXIT + THROW
         List<IrInstruction> handlerInsns = collectHandlerInstructions(info, ir);
         boolean hasMonitorExit = false;
         boolean hasThrow = false;
@@ -2555,13 +2553,13 @@ public final class BlockReducer {
         return hasMonitorExit && hasThrow;
     }
 
-    /** Extract the monitor object name from a synchronized try-catch. */
+    /** 从 synchronized try-catch 中提取监视器对象名称 */
     private String extractMonitorObject(TryCatchInfo info, LinearIr ir) {
         for (BasicBlock b : info.tryBlocks()) {
             for (IrInstruction insn : ir.instructionsOf(b)) {
                 if (insn.opcode() == IrOpcode.MONITOR_ENTER && !insn.operands().isEmpty()) {
                     Value obj = insn.operands().getFirst();
-                    // Trace through InstructionRef chain to find underlying variable
+                    // 沿 InstructionRef 链追踪以找到底层变量
                     while (obj instanceof InstructionRef ref) {
                         IrInstruction def = ref.instruction();
                         if (!def.operands().isEmpty()
@@ -2573,7 +2571,7 @@ public final class BlockReducer {
                         }
                         if (!def.operands().isEmpty()
                                 && def.operands().getFirst() instanceof InstructionRef r) {
-                            obj = r; // continue tracing
+                            obj = r; // 继续追踪
                         } else {
                             break;
                         }
@@ -2590,29 +2588,29 @@ public final class BlockReducer {
         return "this";
     }
 
-    /** Strip the synchronized preamble (DUP/ASTORE) from the body
-     *  to produce clean {@code synchronized(expr) { body }} output.
-     *  Also filters out handler artifacts (while(true){throw...}) that
-     *  leak from the monitorexit exception handler. */
+    /** 从方法体中剥离 synchronized 前导代码(DUP/ASTORE),
+     *  生成干净的 {@code synchronized(expr) { body }} 输出.
+     *  同时过滤掉从 monitorexit 异常处理器中泄露的处理器伪影
+     *  (如 while(true){throw...}). */
     private SynchronizedStatement stripSyncPreamble(SynchronizedStatement syncStmt) {
         Statement body = syncStmt.body();
         String monObj = ((VarExpr) syncStmt.monitorObject()).name();
         if (body instanceof BlockStatement bs) {
             List<Statement> filtered = new ArrayList<>();
             for (Statement s : bs.statements()) {
-                // Strip "Type varN = this" preamble (the DUP+ASTRORE pattern)
+                // 剥离 "Type varN = this" 前导代码(DUP+ASTRORE 模式)
                 if (s instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
                         && (vd.name().equals(monObj) || isTypicalSyncTemp(vd))) {
                     continue;
                 }
-                // Strip ExpressionStatements that are just varN (unconsumed loads)
+                // 剥离仅为 varN 的 ExpressionStatement(未消费的加载)
                 if (s instanceof com.bingbaihanji.bdec.ast.stmt.ExpressionStatement es
                         && es.expression() instanceof VarExpr v
                         && v.name().equals(monObj)) {
                     continue;
                 }
-                // Strip handler artifacts: while(true){Throwable varN; throw varN;}
-                // These are the monitorexit exception handler leaking into the body.
+                // 剥离处理器伪影:while(true){Throwable varN; throw varN;}
+                // 这些是 monitorexit 异常处理器泄露到方法体中的
                 if (s instanceof LoopStatement loop
                         && loop.loopKind() == LoopStatement.LoopKind.WHILE
                         && loop.condition() instanceof VarExpr vc
@@ -2628,15 +2626,15 @@ public final class BlockReducer {
                             }
                         }
                         if (isHandlerArtifact) {
-                            continue; // skip this handler artifact
+                            continue; // 跳过此处理器伪影
                         }
                     }
                 }
-                // Also strip bare ThrowStatement inside synchronized (handler leak)
+                // 同时剥离 synchronized 内部的裸 ThrowStatement(处理器泄露)
                 if (s instanceof com.bingbaihanji.bdec.ast.stmt.ThrowStatement) {
                     continue;
                 }
-                // Strip "return;" after unreachable code (synchronized body cleanup)
+                // 剥离不可达代码之后的 "return;"(synchronized 体清理)
                 if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement r
                         && r.value() == null) {
                     continue;
@@ -2654,27 +2652,26 @@ public final class BlockReducer {
         return syncStmt;
     }
 
-    /** Check if a variable declaration looks like a synchronized temp copy. */
+    /** 检查变量声明是否类似于 synchronized 临时副本 */
     private boolean isTypicalSyncTemp(com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
         String name = vd.name();
         return (name.startsWith("var") && name.length() <= 5)
                 || (vd.initializer() instanceof VarExpr v && "this".equals(v.name()));
     }
 
-    /** Strip variable declarations that set up monitor objects before
-     *  SynchronizedStatements. These are DUP/ASTORE artifacts from the
-     *  bytecode pattern: aload_0, dup, astore_1, monitorenter. */
+    /** 剥离 SynchronizedStatement 之前设置监视器对象的变量声明.
+     *  这些是字节码模式 aload_0, dup, astore_1, monitorenter 的 DUP/ASTORE 伪影. */
     private BlockStatement stripSyncPreambles(BlockStatement root) {
         List<Statement> stmts = new ArrayList<>(root.statements());
         for (int i = 0; i < stmts.size() - 1; i++) {
             if (stmts.get(i + 1) instanceof SynchronizedStatement syncStmt) {
-                // Strip VariableDeclaration that's a sync temp copy
+                // 剥离作为 synchronized 临时副本的 VariableDeclaration
                 if (stmts.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
                         && isTypicalSyncTemp(vd)) {
                     stmts.remove(i);
-                    i--; // re-check the new element at this index
+                    i--; // 重新检查此索引处的新元素
                 }
-                // Strip ExpressionStatement "varN" (unconsumed load)
+                // 剥离 ExpressionStatement "varN"(未消费的加载)
                 if (i >= 0 && stmts.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.ExpressionStatement es
                         && es.expression() instanceof VarExpr v
                         && v.name().startsWith("var")) {
@@ -2690,10 +2687,10 @@ public final class BlockReducer {
         return new BlockStatement(stmts);
     }
 
-    /** Wrap a statement tree as a synchronized block. */
+    /** 将语句树包装为 synchronized 块 */
     private SynchronizedStatement wrapSynchronized(Statement body,
                                                    BlockGroup group, LinearIr ir) {
-        // Find the monitor object from MONITOR_ENTER annotation
+        // 从 MONITOR_ENTER 注解中找到监视器对象
         String monitorObj = "obj";
         for (IrInstruction insn : group.allIrInstructions(ir)) {
             if (insn.opcode() == IrOpcode.MONITOR_ENTER
@@ -2709,7 +2706,7 @@ public final class BlockReducer {
             }
         }
 
-        // Filter out monitor enter/exit instructions from body
+        // 从方法体中过滤掉 monitor enter/exit 指令
         if (body instanceof BlockStatement bs) {
             List<Statement> filtered = new ArrayList<>();
             for (Statement s : bs.statements()) {
@@ -2729,12 +2726,13 @@ public final class BlockReducer {
                 new com.bingbaihanji.bdec.ast.expr.VarExpr(monitorObj), body);
     }
 
-    /** Build a TryStatement from try-catch info.
-     *  Detects finally blocks: when the handler is catch-all (null or Throwable)
-     *  and ends with THROW (the re-throw pattern), extract the handler body
-     *  minus the throw as a finally block. */
-    /** Build a BlockGroup covering all handler blocks by following the
-     *  fallthrough chain from the initial handler block. */
+    /**
+     * 根据 try-catch 信息构建 TryStatement.
+     *
+     * <p>检测 finally 块:当处理器为 catch-all(null 或 Throwable)
+     * 且以 THROW 结尾(重新抛出模式)时,提取处理器体中除去 throw 之外的部分作为 finally 块.
+     */
+    /** 构建一个覆盖所有处理器块的 BlockGroup,沿 fallthrough 链从初始处理器块开始追踪 */
     private BlockGroup buildHandlerBlockGroup(TryCatchInfo info, LinearIr ir) {
         BlockGroup group = new BlockGroup(info.handlerBlock());
         ControlFlowGraph cfg = ir.controlFlowGraph();
@@ -2742,14 +2740,14 @@ public final class BlockReducer {
         Set<BasicBlock> visited = new HashSet<>();
         visited.add(current);
         while (true) {
-            // Follow the single non-exception successor
+            // 沿单一非异常后继追踪
             BasicBlock next = null;
             for (var edge : cfg.outgoingOf(current)) {
                 if (edge.kind() != EdgeKind.EXCEPTION) {
                     if (next == null) {
                         next = edge.target();
                     } else {
-                        next = null; // multiple successors → stop
+                        next = null; // 多个后继 → 停止
                         break;
                     }
                 }
@@ -2763,8 +2761,8 @@ public final class BlockReducer {
         return group;
     }
 
-    /** Collect all IR instructions from the handler, following fallthrough chain
-     *  when the CFG splits the handler block due to self-referencing exception edges. */
+    /** 收集处理器的所有 IR 指令,沿 fallthrough 链追踪.
+     *  当 CFG 因自引用异常边而将处理器块分割时使用此方法. */
     private List<IrInstruction> collectHandlerInstructions(TryCatchInfo info, LinearIr ir) {
         List<IrInstruction> result = new ArrayList<>();
         ControlFlowGraph cfg = ir.controlFlowGraph();
@@ -2772,16 +2770,16 @@ public final class BlockReducer {
         Set<BasicBlock> visited = new HashSet<>();
         while (current != null && visited.add(current)) {
             result.addAll(ir.instructionsOf(current));
-            // Follow the single fallthrough successor (if any)
+            // 沿单一 fallthrough 后继(如有)继续追踪
             List<BasicBlock> succs = cfg.successorsOf(current);
-            // Filter to non-exception edges only
+            // 仅过滤非异常边
             BasicBlock next = null;
             for (var edge : cfg.outgoingOf(current)) {
                 if (edge.kind() != EdgeKind.EXCEPTION) {
                     if (next == null) {
                         next = edge.target();
                     } else {
-                        next = null; // multiple non-exception successors → stop
+                        next = null; // 多条非异常后继 → 停止
                         break;
                     }
                 }
@@ -2794,12 +2792,12 @@ public final class BlockReducer {
         return result;
     }
 
-    /** Translate handler instructions (minus the final THROW) into a Statement body.
-     *  Directly translates the collected handler instructions without depending
-     *  on BlockGroup/block grouping, which can miss split handler fragments. */
+    /** 将处理器指令(去除最后的 THROW)翻译为 Statement 体.
+     *  直接翻译收集到的处理器指令,而不依赖 BlockGroup/块分组,
+     *  后者可能遗漏分割的处理器片段. */
     private Statement translateHandlerWithoutThrow(TryCatchInfo info, LinearIr ir,
                                                    List<IrInstruction> handlerInsns) {
-        // Skip the final THROW instruction for finally body
+        // 跳过 finally 体的最后一条 THROW 指令
         List<IrInstruction> bodyInsns = handlerInsns;
         if (!bodyInsns.isEmpty() && bodyInsns.getLast().opcode() == IrOpcode.THROW) {
             bodyInsns = bodyInsns.subList(0, bodyInsns.size() - 1);
@@ -2808,7 +2806,7 @@ public final class BlockReducer {
             return new BlockStatement(List.of());
         }
 
-        // Build consumed set for these instructions
+        // 为这些指令构建已消费集合
         Set<Integer> consumed = new HashSet<>();
         Map<Variable, Integer> loadVarToId = new HashMap<>();
         for (IrInstruction insn : bodyInsns) {
@@ -2827,7 +2825,7 @@ public final class BlockReducer {
             }
         }
 
-        // Translate each instruction that is a statement root or unconsumed
+        // 翻译每条作为语句根或未被消费的指令
         List<Statement> stmts = new ArrayList<>();
         for (IrInstruction insn : bodyInsns) {
             if (insn.opcode() == IrOpcode.CONDITION) {
@@ -2861,21 +2859,21 @@ public final class BlockReducer {
         boolean isCatchAll = info.catchType() == null
                 || "java/lang/Throwable".equals(info.catchType());
 
-        // Collect all handler instructions by following the fallthrough chain.
-        // The CFG may split the handler block (due to self-referencing exception
-        // edges in finally handlers), so the THROW might be in a successor block.
+        // 沿 fallthrough 链收集所有处理器指令.
+        // CFG 可能因 finally 处理器中的自引用异常边而将处理器块分割,
+        // 因此 THROW 可能位于后继块中.
         List<IrInstruction> handlerInsns = collectHandlerInstructions(info, ir);
 
-        // Check if this is a finally pattern: catch-all + ends with THROW
+        // 检查是否为 finally 模式:catch-all + 以 THROW 结尾
         boolean isFinally = isCatchAll && !handlerInsns.isEmpty()
                 && handlerInsns.getLast().opcode() == IrOpcode.THROW;
 
         if (isFinally) {
-            // Extract finally body: all handler instructions minus the final THROW.
-            // Build a synthetic BlockGroup spanning all handler blocks for translation.
+            // 提取 finally 体:所有处理器指令去除最后的 THROW.
+            // 构建一个跨越所有处理器块的合成 BlockGroup 用于翻译.
             Statement finallyBody = translateHandlerWithoutThrow(info, ir, handlerInsns);
 
-            // Filter out the THROW from the emitted statements.
+            // 从输出语句中过滤掉 THROW
             if (finallyBody instanceof BlockStatement bs) {
                 List<Statement> stmts = new ArrayList<>();
                 for (Statement s : bs.statements()) {
@@ -2892,24 +2890,24 @@ public final class BlockReducer {
                 finallyBody = new BlockStatement(stmts);
             }
 
-            // Strip duplicated finally-body statements from the try body.
-            // Bytecode duplicates finally code: once in the normal exit path
-            // (which gets grouped into the try body) and once in the handler.
-            // We want the finally code ONLY in the finally block.
+            // 从 try 体中剥离重复的 finally 体语句.
+            // 字节码会重复 finally 代码:一次在正常退出路径中
+            //(被分组到 try 体中),一次在处理器中.
+            // 我们希望 finally 代码仅出现在 finally 块中.
             tryBody = stripDuplicatedFinally(tryBody, finallyBody);
 
             return new TryStatement(tryBody, List.of(), finallyBody);
         }
 
-        // Regular catch clause
+        // 常规 catch 子句
         List<TryStatement.CatchClause> catchClauses = new ArrayList<>();
         String excType = info.catchType();
         if (excType != null && excType.contains("/")) {
             excType = excType.substring(excType.lastIndexOf('/') + 1);
         }
-        // Translate handler instructions as the catch body.
-        // translateGroup can return null if the handler block has no IR instructions
-        // (e.g., empty catch clause), so guard with empty BlockStatement.
+        // 将处理器指令翻译为 catch 体.
+        // 如果处理器块不含 IR 指令(如空的 catch 子句),translateGroup 可能返回 null,
+        // 此时用空 BlockStatement 兜底.
         BlockGroup handlerGroup = new BlockGroup(info.handlerBlock());
         Statement handlerBody = translateGroup(handlerGroup, ir);
         if (handlerBody == null) {
@@ -2923,10 +2921,10 @@ public final class BlockReducer {
     }
 
     /**
-     * Strip statements from the try body that also appear in the finally body.
-     * Uses structural comparison on the Expression objects rather than toString().
-     * Recursively processes nested compound statements (IfStatement, LoopStatement, etc.)
-     * so that duplicated finally code inside if-else branches is also stripped.
+     * 从 try 体中剥离同样出现在 finally 体中的语句.
+     * 基于 Expression 对象的结构化比较而非 toString().
+     * 递归处理嵌套的复合语句(IfStatement,LoopStatement 等),
+     * 使 if-else 分支内的重复 finally 代码也被剥离.
      */
     private Statement stripDuplicatedFinally(Statement tryBody, Statement finallyBody) {
         List<Statement> finallyStmts = collectStatements(finallyBody);
@@ -2936,17 +2934,17 @@ public final class BlockReducer {
         return stripMatchingFinally(tryBody, finallyStmts);
     }
 
-    /** Recursively strip statements that match patterns (finally-body statements)
-     *  from compound statements, not just top-level. */
+    /** 递归地从复合语句中剥离与模式(finally 体语句)匹配的语句,
+     *  而非仅处理顶层. */
     private Statement stripMatchingFinally(Statement s, List<Statement> patterns) {
         if (s == null) {
             return null;
         }
-        // If this statement itself matches a pattern, remove it entirely
+        // 如果此语句自身与某模式匹配,则完全移除
         if (matchesAny(s, patterns)) {
             return null;
         }
-        // Recursively process BlockStatement
+        // 递归处理 BlockStatement
         if (s instanceof BlockStatement bs) {
             List<Statement> filtered = new ArrayList<>();
             for (Statement child : bs.statements()) {
@@ -2963,7 +2961,7 @@ public final class BlockReducer {
             }
             return new BlockStatement(filtered);
         }
-        // Recursively process IfStatement branches
+        // 递归处理 IfStatement 的分支
         if (s instanceof com.bingbaihanji.bdec.ast.stmt.IfStatement i) {
             Statement thenStripped = stripMatchingFinally(i.thenBranch(), patterns);
             Statement elseStripped = i.elseBranch() != null
@@ -2972,14 +2970,14 @@ public final class BlockReducer {
                     thenStripped != null ? thenStripped : new BlockStatement(List.of()),
                     elseStripped);
         }
-        // Recursively process LoopStatement body
+        // 递归处理 LoopStatement 的方法体
         if (s instanceof com.bingbaihanji.bdec.ast.stmt.LoopStatement l) {
             Statement bodyStripped = stripMatchingFinally(l.body(), patterns);
             return new com.bingbaihanji.bdec.ast.stmt.LoopStatement(
                     l.loopKind(), l.condition(),
                     bodyStripped != null ? bodyStripped : new BlockStatement(List.of()));
         }
-        // Recursively process TryStatement body and finally
+        // 递归处理 TryStatement 的 try 体和 finally 体
         if (s instanceof com.bingbaihanji.bdec.ast.stmt.TryStatement t) {
             Statement tryStripped = stripMatchingFinally(t.tryBody(), patterns);
             List<com.bingbaihanji.bdec.ast.stmt.TryStatement.CatchClause> cc = new ArrayList<>();
@@ -2998,14 +2996,14 @@ public final class BlockReducer {
         return s;
     }
 
-    /** Translate a single block group to a list of statements. */
+    /** 将单个基本块组翻译为语句列表 */
     private List<Statement> translateBlockGroup(BlockGroup group, LinearIr ir) {
         Statement s = translateGroup(group, ir);
         if (s instanceof BlockStatement bs) {
             return bs.statements();
         }
-        // Single statement (ReturnStatement, etc.) — translateGroup
-        // unwraps BlockStatement when there's only one statement.
+        // 单条语句(ReturnStatement 等)——translateGroup
+        // 在仅有一条语句时会解开 BlockStatement 包装.
         if (s != null) {
             return List.of(s);
         }
@@ -3013,23 +3011,22 @@ public final class BlockReducer {
     }
 
     /**
-     * Build a global (cross-group) map from Variable → stored Value for
-     * single-use variables. This allows inlining constants across group
-     * boundaries, e.g., STORE in the try-body group and LOAD in the normal-exit
-     * group (common in try-finally patterns).
+     * 为单次使用的变量构建全局(跨组)的 Variable → 存储值的内联映射.
+     * 这使得常量可以跨组边界内联,例如 STORE 位于 try 体组中而
+     * LOAD+RETURN 位于正常退出组中(常见于 try-finally 模式).
      */
     private void buildGlobalVarInlineMap(List<BlockGroup> groups, LinearIr ir) {
         Map<Variable, Value> varStoreSource = new HashMap<>();
         Set<Integer> storesToSkip = new HashSet<>();
 
-        // Collect all instructions across all groups
+        // 跨所有组收集全部指令
         List<IrInstruction> allInsns = new ArrayList<>();
         for (BlockGroup g : groups) {
             allInsns.addAll(g.allIrInstructions(ir));
         }
 
-        // First pass: count how many times each Variable is referenced
-        // (both via LOAD and directly in other instruction operands like RETURN).
+        // 第一遍:统计每个 Variable 被引用的次数
+        //(同时通过 LOAD 和其他指令操作数如 RETURN 进行统计).
         Map<Variable, Integer> varUseCount = new HashMap<>();
         Map<Variable, Integer> loadIdForVar = new HashMap<>();
         for (IrInstruction insn : allInsns) {
@@ -3038,7 +3035,7 @@ public final class BlockReducer {
                 varUseCount.merge(v, 1, Integer::sum);
                 loadIdForVar.put(v, insn.id());
             }
-            // Also count direct Variable references (e.g., RETURN operand)
+            // 同时统计直接的 Variable 引用(例如 RETURN 操作数)
             for (Value op : insn.operands()) {
                 if (op instanceof Variable v && insn.opcode() != IrOpcode.STORE
                         && insn.opcode() != IrOpcode.LOAD) {
@@ -3047,7 +3044,7 @@ public final class BlockReducer {
             }
         }
 
-        // Build consumed set (InstructionRef usage + direct Variable usage)
+        // 构建已消费集合(InstructionRef 使用 + 直接 Variable 使用)
         Set<Integer> consumedInsnIds = new HashSet<>();
         for (IrInstruction insn : allInsns) {
             for (Value op : insn.operands()) {
@@ -3057,23 +3054,21 @@ public final class BlockReducer {
             }
         }
 
-        // Second pass: track stores with single-use variables
+        // 第二遍:追踪单次使用变量的存储
         for (IrInstruction insn : allInsns) {
             if (insn.opcode() == IrOpcode.STORE && insn.operands().size() >= 2
                     && insn.operands().get(0) instanceof Variable v) {
                 Value source = insn.operands().get(1);
                 int useCount = varUseCount.getOrDefault(v, 0);
                 if (useCount == 1 && isSimpleValue(source)) {
-                    // Check if the LOAD (if any) is consumed, OR if the variable
-                    // is used directly (e.g., RETURN operand).
+                    // 检查 LOAD 是否被消费,或变量是否被直接使用(如 RETURN 操作数)
                     Integer loadId = loadIdForVar.get(v);
                     boolean canInline;
                     if (loadId != null) {
-                        // Variable is loaded via LOAD — check LOAD is consumed
+                        // 变量通过 LOAD 加载——检查 LOAD 是否被消费
                         canInline = consumedInsnIds.contains(loadId);
                     } else {
-                        // Variable is used directly — always safe to inline
-                        // (the variable itself is the use site)
+                        // 变量被直接使用——始终安全内联(变量自身即为使用点)
                         canInline = true;
                     }
                     if (canInline) {
@@ -3088,10 +3083,15 @@ public final class BlockReducer {
         currentStoresToSkip = Set.copyOf(storesToSkip);
     }
 
-    // ── BlockGroup helper ─────────────────────────────────────────────
+    // ── BlockGroup 内部辅助类 ─────────────────────────────────────────────
 
+    /**
+     * 块组,将相邻的连续基本块聚合成一个逻辑组.
+     * 用于将多个紧密相关的基本块一起处理为一条复合语句.
+     */
     private static class BlockGroup {
 
+        /** 组内的基本块列表 */
         private final List<BasicBlock> blocks = new ArrayList<>();
 
         BlockGroup(BasicBlock first) {blocks.add(first);}
@@ -3104,6 +3104,7 @@ public final class BlockReducer {
 
         List<BasicBlock> blocks() {return blocks;}
 
+        /** 收集组内所有基本块的全部 IR 指令 */
         List<IrInstruction> allIrInstructions(LinearIr ir) {
             List<IrInstruction> result = new ArrayList<>();
             for (BasicBlock b : blocks) {

@@ -15,42 +15,45 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Recognizes synchronized blocks from {@code monitorenter/monitorexit}
- * IR instructions and their associated exception handlers.
+ * synchronized 块识别器.
  *
- * Inspired by Vineflower's {@code DomHelper.buildSynchronized()} which
- * detects the pattern after structuring, and CFR's
- * {@code SynchronizedBlocks} which does a DFS from monitorenter.
+ * <p>从 {@code monitorenter/monitorexit} IR 指令及其关联的异常处理器中
+ * 识别出 Java 语言的 synchronized 块结构.
  *
- * JVM pattern for {@code synchronized(obj) { ... }}:
+ * <p>JVM 中 {@code synchronized(obj) { ... }} 的字节码模式为:
  * <pre>
- *   load obj
- *   dup           (optional — stores a copy for monitorexit)
- *   store tmp
- *   monitorenter  (pops obj)
+ *   load obj        → 加载监视器对象
+ *   dup             (可选——为 monitorexit 保存一份副本)
+ *   store tmp       → 存储到临时变量
+ *   monitorenter    (弹出 obj)
  *   try {
- *     ... body ...
+ *     ... 方法体 ...
  *     load tmp
- *     monitorexit
+ *     monitorexit   → 正常退出路径
  *   } catch (Throwable t) {
  *     load tmp
- *     monitorexit
+ *     monitorexit   → 异常退出路径
  *     athrow
  *   }
  * </pre>
+ *
+ * <p>设计参考了 Vineflower 的 {@code DomHelper.buildSynchronized()}(在结构化后检测模式)
+ * 和 CFR 的 {@code SynchronizedBlocks}(从 monitorenter 进行 DFS).
  */
 public final class SynchronizedRecognizer {
 
     /**
-     * Recognize synchronized blocks in the IR and annotate them.
+     * 识别 IR 中的 synchronized 块并添加语义注解标记.
      *
-     * @return true if any synchronized blocks were recognized
+     * @param ir  待处理的线性 IR
+     * @param cfg 控制流图(用于异常处理器分析)
+     * @return 如果识别出任何 synchronized 块则返回 true
      */
     public boolean recognize(LinearIr ir, ControlFlowGraph cfg) {
         boolean changed = false;
         List<IrInstruction> instructions = ir.instructions();
 
-        // Find all MONITOR_ENTER instructions
+        // 收集所有 MONITOR_ENTER 指令
         List<IrInstruction> monitorEnters = new ArrayList<>();
         for (IrInstruction insn : instructions) {
             if (insn.opcode() == IrOpcode.MONITOR_ENTER) {
@@ -62,7 +65,7 @@ public final class SynchronizedRecognizer {
             return false;
         }
 
-        // Build block→instructions index
+        // 构建基本块 ID → 指令列表索引
         Map<Integer, List<IrInstruction>> blockInsns = buildBlockIndex(instructions);
 
         for (IrInstruction enter : monitorEnters) {
@@ -72,7 +75,7 @@ public final class SynchronizedRecognizer {
 
             Value monitorObj = enter.operands().getFirst();
 
-            // Find the exception handler that covers this monitor enter's block
+            // 查找包含该 monitorenter 所在基本块的异常处理器
             BasicBlock enterBlock = findBlock(cfg, enter.blockId());
             if (enterBlock == null) {
                 continue;
@@ -83,14 +86,14 @@ public final class SynchronizedRecognizer {
                 continue;
             }
 
-            // Verify the handler does: MONITOR_EXIT + THROW
+            // 验证异常处理器包含 MONITOR_EXIT + THROW 模式
             BasicBlock handlerBlock = handler.handlerBlock();
             List<IrInstruction> handlerInsns = blockInsns.getOrDefault(handlerBlock.id(), List.of());
             if (!isMonitorExitThrow(handlerInsns, monitorObj)) {
                 continue;
             }
 
-            // Find monitorexit in the try body (normal exit path)
+            // 在 try 方法体中查找 monitorexit(正常退出路径)
             boolean foundNormalExit = false;
             for (var entry : blockInsns.entrySet()) {
                 if (entry.getKey() == handlerBlock.id()) {
@@ -108,13 +111,13 @@ public final class SynchronizedRecognizer {
             }
 
             if (foundNormalExit) {
-                // Mark the enter instruction block as synchronized
+                // 标记 monitorenter 所在基本块为 synchronized 块
                 enter.addAnnotation(SemanticAnnotation.of(
                         SemanticTag.SYNCHRONIZED_BLOCK,
                         SemanticAnnotation.KEY_MONITOR_OBJECT,
                         describeMonitor(monitorObj)));
 
-                // Mark all MONITOR_EXIT instructions for removal
+                // 标记所有 MONITOR_EXIT 指令为待移除(后续由结构化层处理)
                 for (var entry : blockInsns.entrySet()) {
                     for (IrInstruction insn : entry.getValue()) {
                         if (insn.opcode() == IrOpcode.MONITOR_EXIT && matchesObject(insn, monitorObj)) {
@@ -130,7 +133,7 @@ public final class SynchronizedRecognizer {
         return changed;
     }
 
-    /** Build blockId → instructions index. */
+    /** 构建基本块 ID → 指令列表的索引映射 */
     private Map<Integer, List<IrInstruction>> buildBlockIndex(List<IrInstruction> instructions) {
         Map<Integer, List<IrInstruction>> index = new HashMap<>();
         for (IrInstruction insn : instructions) {
@@ -139,7 +142,7 @@ public final class SynchronizedRecognizer {
         return index;
     }
 
-    /** Find the BasicBlock with the given ID. */
+    /** 根据 ID 在控制流图中查找对应的基本块 */
     private BasicBlock findBlock(ControlFlowGraph cfg, int blockId) {
         for (BasicBlock b : cfg.blocks()) {
             if (b.id() == blockId) {
@@ -150,17 +153,21 @@ public final class SynchronizedRecognizer {
     }
 
     /**
-     * Find the exception handler (catch-all) that covers the given block.
+     * 查找覆盖指定基本块的异常处理器(优先匹配 catch-all).
+     *
+     * @param cfg   控制流图
+     * @param block 目标基本块
+     * @return 覆盖该块的异常处理器范围,未找到则返回 null
      */
     private ExceptionRange findCoveringHandler(ControlFlowGraph cfg, BasicBlock block) {
         for (ExceptionRange er : cfg.exceptionRanges()) {
             if (er.catchType() == null && covers(er, block)) {
-                // catchType == null means finally / catch-all
-                // Check if the handler block contains monitorexit
+                // catchType == null 表示 finally 或 catch-all
+                // 检查处理器块是否包含 monitorexit
                 return er;
             }
         }
-        // Also check typed handlers (they might contain the monitor pattern)
+        // 也检查带类型的异常处理器(可能包含监视器模式)
         for (ExceptionRange er : cfg.exceptionRanges()) {
             if (er.catchType() != null && covers(er, block)) {
                 return er;
@@ -169,7 +176,7 @@ public final class SynchronizedRecognizer {
         return null;
     }
 
-    /** Check if the exception range covers the given block. */
+    /** 检查异常处理器范围是否覆盖指定基本块 */
     private boolean covers(ExceptionRange er, BasicBlock block) {
         int start = er.startPc();
         int end = er.endPc();
@@ -177,7 +184,7 @@ public final class SynchronizedRecognizer {
     }
 
     /**
-     * Check if the handler instructions contain MONITOR_EXIT + THROW pattern.
+     * 检查异常处理器指令列表是否包含 MONITOR_EXIT + THROW 模式.
      */
     private boolean isMonitorExitThrow(List<IrInstruction> handlerInsns, Value monitorObj) {
         boolean hasMonitorExit = false;
@@ -193,7 +200,7 @@ public final class SynchronizedRecognizer {
         return hasMonitorExit && hasThrow;
     }
 
-    /** Check if a MONITOR_EXIT instruction references the given monitor object. */
+    /** 检查 MONITOR_EXIT 指令是否引用了预期的监视器对象 */
     private boolean matchesObject(IrInstruction monInsn, Value expected) {
         if (monInsn.operands().isEmpty()) {
             return false;
@@ -205,7 +212,7 @@ public final class SynchronizedRecognizer {
         return obj.equals(expected);
     }
 
-    /** Convert a monitor object Value to a readable description. */
+    /** 将监视器对象 Value 转换为可读的描述字符串 */
     private String describeMonitor(Value v) {
         if (v instanceof Variable var) {
             return "var" + var.slot();

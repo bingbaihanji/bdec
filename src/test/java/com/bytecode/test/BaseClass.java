@@ -1,6 +1,6 @@
 package com.bytecode.test;
 
-// 抽象类，包含多种修饰符
+// 抽象类,包含多种修饰符
 public abstract class BaseClass {
 
     public static final double PI = 3.14159;

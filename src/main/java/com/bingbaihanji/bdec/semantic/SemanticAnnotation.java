@@ -5,47 +5,47 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * A semantic annotation attached to an {@link com.bingbaihanji.bdec.ir.IrInstruction}.
+ * 语义注解,附加于 {@link com.bingbaihanji.bdec.ir.IrInstruction} 之上.
  *
- * Each annotation carries a {@link SemanticTag} and optional typed properties.
- * Properties are stored as String→Object for flexibility; keys should use
- * the constants defined in this class.
+ * <p>每条注解携带一个 {@link SemanticTag} 标签以及可选的带类型属性.
+ * 属性以 {@code String → Object} 键值对形式存储以保持灵活性;
+ * 键名应使用本类中定义的常量.
  */
 public record SemanticAnnotation(
         SemanticTag tag,
         Map<String, Object> properties
 ) {
 
-    // ── Well-known property keys ──────────────────────────────────
+    // ── 常用属性键名常量 ──────────────────────────────────
 
-    /** Boolean value for BOOLEAN_RETURN (Boolean). */
+    /** 布尔返回值(Boolean 类型),用于 BOOLEAN_RETURN 标签 */
     public static final String KEY_BOOLEAN_VALUE = "booleanValue";
 
-    /** Target class name for constructor delegation (String). */
+    /** 构造函数委托调用的目标类名(String 类型) */
     public static final String KEY_TARGET_CLASS = "targetClass";
 
-    /** Monitor object variable name for SYNCHRONIZED_BLOCK (String). */
+    /** synchronized 块的监视器对象变量名(String 类型) */
     public static final String KEY_MONITOR_OBJECT = "monitorObject";
 
-    /** Original method name before elimination (String). */
+    /** 消除前的原始方法名(String 类型) */
     public static final String KEY_ORIGINAL_METHOD = "originalMethod";
 
-    /** Declaring class name for static method calls (String). */
+    /** 静态方法调用的声明类名(String 类型) */
     public static final String KEY_DECLARING_CLASS = "declaringClass";
 
-    // ── Factories ─────────────────────────────────────────────────
+    // ── 工厂方法 ─────────────────────────────────────────────────
 
-    /** Create an annotation with just a tag (no properties). */
+    /** 创建仅含标签,不含属性的语义注解 */
     public static SemanticAnnotation of(SemanticTag tag) {
         return new SemanticAnnotation(tag, Collections.emptyMap());
     }
 
-    /** Create an annotation with one property. */
+    /** 创建含单个属性的语义注解 */
     public static SemanticAnnotation of(SemanticTag tag, String key, Object value) {
         return new SemanticAnnotation(tag, Map.of(key, value));
     }
 
-    /** Create an annotation with two properties. */
+    /** 创建含两个属性的语义注解 */
     public static SemanticAnnotation of(SemanticTag tag,
                                         String k1, Object v1,
                                         String k2, Object v2) {
@@ -55,30 +55,30 @@ public record SemanticAnnotation(
         return new SemanticAnnotation(tag, Collections.unmodifiableMap(props));
     }
 
-    /** Create an annotation with a tag and a map of properties. */
+    /** 创建携带标签和完整属性映射的语义注解 */
     public static SemanticAnnotation of(SemanticTag tag, Map<String, Object> properties) {
         return new SemanticAnnotation(tag, Collections.unmodifiableMap(
                 new LinkedHashMap<>(properties)));
     }
 
-    /** Convenience: get a property value with a default. */
+    /** 便捷方法:获取属性值,支持默认值回退 */
     public Object get(String key, Object defaultValue) {
         return properties.getOrDefault(key, defaultValue);
     }
 
-    /** Convenience: get a boolean property. */
+    /** 便捷方法:获取布尔类型的属性值 */
     public boolean getBoolean(String key) {
         Object v = properties.get(key);
         return v instanceof Boolean b && b;
     }
 
-    /** Convenience: get a string property. */
+    /** 便捷方法:获取字符串类型的属性值 */
     public String getString(String key) {
         Object v = properties.get(key);
         return v instanceof String s ? s : null;
     }
 
-    /** Check if this annotation has the given tag. */
+    /** 检查当前注解是否匹配指定的标签 */
     public boolean is(SemanticTag t) {
         return tag == t;
     }

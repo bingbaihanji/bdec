@@ -14,17 +14,21 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarInputStream;
 
 /**
- * BDEC CLI — command-line interface for the decompiler engine.
+ * BDEC 命令行接口(CLI),提供反编译引擎的命令行交互功能.
  *
- * Usage:
+ * <p>用法示例:</p>
+ * <pre>
  *   java -jar bdec.jar --help
  *   java -jar bdec.jar -class &lt;classfile&gt; [outputDir]
  *   java -jar bdec.jar -jar &lt;jarfile&gt; [outputDir]
+ * </pre>
  */
 public final class BdecCli {
 
+    /** 当前版本号 */
     private static final String VERSION = "0.1.0";
 
+    /** 命令行帮助信息模板 */
     private static final String HELP = """
                                        BDEC (Bingbaihanji Decompiler) v%s — Java 反编译引擎
                                        
@@ -45,9 +49,14 @@ public final class BdecCli {
                                          java -jar bdec.jar -jar "lib.jar" ./output/
                                        
                                        输出:
-                                         对每个类 com.example.Foo，生成 输出目录/com/example/Foo.java
+                                         对每个类 com.example.Foo,生成 输出目录/com/example/Foo.java
                                        """.formatted(VERSION);
 
+    /**
+     * 命令行主入口方法,解析参数并分派到相应的反编译处理逻辑.
+     *
+     * @param args 命令行参数
+     */
     public static void main(String[] args) {
         if (args.length == 0) {
             System.out.println(HELP);
@@ -68,7 +77,13 @@ public final class BdecCli {
         }
     }
 
-    // === -class <file> [outDir] ===
+    /**
+     * 反编译单个 .class 文件.
+     *
+     * <p>用法:{@code -class <classfile> [outputDir]}</p>
+     *
+     * @param args 命令行参数数组
+     */
     private static void decompileClass(String[] args) {
         if (args.length < 2) {
             System.err.println("Usage: -class <classfile> [outputDir]");
@@ -89,7 +104,7 @@ public final class BdecCli {
             List<DecompilerDiagnostic> diags = new ArrayList<>();
             BdecEngine engine = new BdecEngine(config, diags::add);
 
-            // Read internal name from the class file itself (most reliable)
+            // 直接从 class 文件字节中读取内部名称(最可靠的方式)
             String name = readInternalName(bytes, classFile.toString());
             BdecResult result = engine.decompile(name, bytes, DecompileContext.empty(config));
 
@@ -99,10 +114,10 @@ public final class BdecCli {
                 System.exit(1);
             }
 
-            // Write output
+            // 将反编译结果写入输出文件
             writeJavaFile(outputDir, name, result.decompiledCode());
 
-            // Report diagnostics
+            // 输出诊断信息
             for (var d : diags) {
                 if (d.level() == DiagnosticLevel.ERROR || d.level() == DiagnosticLevel.WARNING) {
                     System.err.println("  " + d.level() + " [" + d.phase() + "] " + d.message());
@@ -119,7 +134,13 @@ public final class BdecCli {
         }
     }
 
-    // === -jar <jarfile> [outDir] ===
+    /**
+     * 反编译整个 JAR 包中的所有 .class 文件.
+     *
+     * <p>用法:{@code -jar <jarfile> [outputDir]}</p>
+     *
+     * @param args 命令行参数数组
+     */
     private static void decompileJar(String[] args) {
         if (args.length < 2) {
             System.err.println("Usage: -jar <jarfile> [outputDir]");
@@ -150,12 +171,13 @@ public final class BdecCli {
                 if (!name.endsWith(".class")) {
                     continue;
                 }
-                // Skip module-info and package-info
+                // 跳过 module-info 和 package-info
                 if (name.endsWith("module-info.class") || name.endsWith("package-info.class")) {
                     continue;
                 }
 
-                String internalName = name.substring(0, name.length() - 6); // strip .class
+                // 去掉 .class 后缀得到内部名称
+                String internalName = name.substring(0, name.length() - 6);
 
                 try {
                     byte[] bytes = jis.readAllBytes();
@@ -176,7 +198,7 @@ public final class BdecCli {
                     System.err.println("  FAIL " + internalName + ": " + e.getMessage());
                 }
 
-                // Print progress every 100 classes
+                // 每处理 100 个类输出一次进度
                 if ((success + failed) % 100 == 0) {
                     System.out.println("  ... " + success + " OK, " + failed + " failed");
                 }
@@ -190,8 +212,16 @@ public final class BdecCli {
         System.out.println("Output: " + outputDir.toAbsolutePath().normalize());
     }
 
-    // === Helpers ===
-
+    /**
+     * 将 Java 源代码写入输出目录中对应的文件路径.
+     *
+     * <p>根据内部类名自动创建目录结构并写入 .java 源文件.</p>
+     *
+     * @param outputDir    输出根目录
+     * @param internalName 类的内部名称(如 {@code com/example/Foo})
+     * @param source       Java 源代码字符串
+     * @throws IOException 当文件写入失败时抛出
+     */
     private static void writeJavaFile(Path outputDir, String internalName, String source) throws IOException {
         Path outPath = outputDir.resolve(internalName.replace('/', File.separatorChar) + ".java");
         Files.createDirectories(outPath.getParent());
@@ -199,19 +229,26 @@ public final class BdecCli {
     }
 
     /**
-     * Extract the internal class name directly from the class file bytes.
-     * This is more reliable than trying to derive it from the file path.
+     * 从 class 文件字节码中提取类的内部名称.
+     *
+     * <p>通过 {@link com.bingbaihanji.bdec.bytecode.parser.ClassFileReader}
+     * 解析字节码获取内部名称,比从文件路径推导更加可靠.</p>
+     *
+     * <p>Class 文件布局:magic(4字节) + minor(2字节) + major(2字节) + cp_count(2字节) + cp...<br>
+     * 由于常量池长度可变,不能简单从固定偏移量读取 this_class 索引,
+     * 因此使用 ClassFileReader 进行完整解析.</p>
+     *
+     * @param bytes        class 文件的字节数组
+     * @param fallbackPath 解析失败时的回退文件路径
+     * @return 类的内部名称
      */
     private static String readInternalName(byte[] bytes, String fallbackPath) {
         try {
-            // Class file layout: magic(4) + minor(2) + major(2) + cp_count(2) + cp...
-            // We just need the this_class index at a fixed offset after the constant pool.
-            // But the CP is variable-length. Use a full parse via ClassFileReader.
             var reader = new com.bingbaihanji.bdec.bytecode.parser.ClassFileReader();
             var model = reader.read(fallbackPath, bytes);
             return model.internalName();
         } catch (Exception e) {
-            // Fallback: simple name from file path
+            // 解析失败时的回退方案:从文件路径提取简单类名
             String fileName = java.nio.file.Path.of(fallbackPath).getFileName().toString();
             return fileName.endsWith(".class")
                     ? fileName.substring(0, fileName.length() - 6) : fileName;

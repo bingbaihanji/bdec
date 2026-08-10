@@ -1,6 +1,6 @@
 package com.bytecode.test;
 
-// 记录，含紧凑构造器和自定义方法
+// 记录,含紧凑构造器和自定义方法
 public record RecordDemo(String name, int age) {
 
     public RecordDemo {

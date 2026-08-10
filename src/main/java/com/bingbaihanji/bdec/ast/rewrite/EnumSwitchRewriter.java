@@ -24,13 +24,12 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Detects javac-generated enum switch scaffolding and collapses
- * it back to a native {@code switch (enumValue)} statement.
+ * 枚举 Switch 重写器,检测 javac 生成的枚举 switch 辅助代码,
+ * 将其缩减还原为原生的 {@code switch (enumValue)} 语句.
  *
- * <p>When javac compiles {@code switch(enumValue)}, it generates a
- * synthetic inner class containing a {@code $SwitchMap$} int array
- * that maps enum ordinals to small sequential integers (1, 2, 3...).
- * The actual switch then uses this array:
+ * <p>当 javac 编译 {@code switch(enumValue)} 时,会生成一个合成的内部类,
+ * 其中包含一个 {@code $SwitchMap$} int 数组,将枚举序数映射为小整数(1, 2, 3...).
+ * 实际的 switch 语句会使用该数组:
  * <pre>
  *   switch ($SwitchMap$EnumClass[enumValue.ordinal()]) {
  *       case 1: ... break;
@@ -38,22 +37,20 @@ import java.util.Set;
  *   }
  * </pre>
  *
- * <p>This rewriter detects the {@code $SwitchMap$} pattern in switch
- * discriminants, replaces the array-and-ordinal expression with the
- * original enum variable, and removes the synthetic SwitchMap class
- * if it appears in the compilation unit.
+ * <p>本重写器检测 switch 判别式中的 {@code $SwitchMap$} 模式,
+ * 将数组加序数表达式替换为原始的枚举变量,并移除编译单元中的合成 SwitchMap 类.
  *
- * <p>Inspired by CFR's {@code SwitchReWriter.rewriteEnumSwitch()}
- * and Vineflower's {@code SwitchMapProcessor}.
+ * <p>设计参考 CFR 的 {@code SwitchReWriter.rewriteEnumSwitch()}
+ * 和 Vineflower 的 {@code SwitchMapProcessor}.
  */
 public class EnumSwitchRewriter implements RewriteRule {
 
-    /** Check if a field name indicates a SwitchMap int array. */
+    /** 判断字段名是否指示 SwitchMap int 数组 */
     private static boolean isSwitchMapFieldName(String name) {
         return name.startsWith("$SwitchMap$") || name.contains("SwitchMap");
     }
 
-    /** Extract the field name from an expression that might be a {@link FieldAccessExpr}. */
+    /** 从可能是 {@link FieldAccessExpr} 的表达式中提取字段名 */
     private static String extractFieldName(Expression expr) {
         if (expr instanceof FieldAccessExpr fae) {
             return fae.fieldName();
@@ -61,19 +58,18 @@ public class EnumSwitchRewriter implements RewriteRule {
         return null;
     }
 
-    // ── Phase 1: collect SwitchMap info ────────────────────────────────
+    // ======== 阶段一:收集 SwitchMap 信息 ========
 
     @Override
     public String name() {return "enum-switch";}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
-        // Phase 1: Collect $SwitchMap$ field names from all types at all nesting levels.
+        // 阶段一:从所有嵌套层级的类型中收集 $SwitchMap$ 字段名
         Set<String> switchMapFieldNames = new HashSet<>();
         collectSwitchMapFieldNames(unit.types(), switchMapFieldNames);
 
-        // Phase 2: Rewrite each type — find and rewrite enum switch discriminants,
-        // and remove synthetic SwitchMap types.
+        // 阶段二:重写每个类型——查找并重写枚举 switch 判别式,移除合成 SwitchMap 类型
         List<TypeDeclaration> newTypes = new ArrayList<>();
         for (TypeDeclaration td : unit.types()) {
             TypeDeclaration rewritten = rewriteType(td, switchMapFieldNames);
@@ -85,15 +81,14 @@ public class EnumSwitchRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), newTypes);
     }
 
-    /** Recursively collect field names that look like SwitchMap arrays. */
+    /** 递归收集所有类型中类似 SwitchMap 数组的字段名 */
     private void collectSwitchMapFieldNames(List<TypeDeclaration> types, Set<String> names) {
         for (TypeDeclaration td : types) {
             collectFromType(td, names);
         }
     }
 
-    // ── Phase 2: rewrite types ─────────────────────────────────────────
-
+    /** 从单个类型声明中收集 SwitchMap 字段名 */
     private void collectFromType(TypeDeclaration td, Set<String> names) {
         for (AstNode member : td.children()) {
             if (member instanceof FieldDeclaration fd) {
@@ -107,16 +102,18 @@ public class EnumSwitchRewriter implements RewriteRule {
         }
     }
 
+    // ======== 阶段二:重写类型声明 ========
+
     /**
-     * Rewrite a TypeDeclaration:
+     * 重写类型声明:
      * <ul>
-     *   <li>If the type itself is a SwitchMap holder, return {@code null} to remove it.</li>
-     *   <li>Otherwise recursively rewrite methods (converting enum switches) and nested types.</li>
+     *   <li>若该类型本身是 SwitchMap 持有者,返回 {@code null} 将其移除.</li>
+     *   <li>否则递归重写方法(转换枚举 switch)和嵌套类型.</li>
      * </ul>
      */
     private TypeDeclaration rewriteType(TypeDeclaration td, Set<String> switchMapFieldNames) {
         if (isSwitchMapType(td, switchMapFieldNames)) {
-            return null;
+            return null; // 移除合成 SwitchMap 类型
         }
 
         List<AstNode> newMembers = new ArrayList<>();
@@ -137,20 +134,16 @@ public class EnumSwitchRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), newMembers);
     }
 
-    // ── Method and statement rewriting ─────────────────────────────────
-
     /**
-     * Determine if a type is a synthetic SwitchMap holder that should be removed.
-     * Checks the type name for SwitchMap-like patterns, and also checks whether
-     * the type contains {@code $SwitchMap$} static fields (for anonymous holders).
+     * 判断类型是否为应移除的合成 SwitchMap 持有者.
+     * 检查类型名是否匹配 SwitchMap 模式,以及是否包含 {@code $SwitchMap$} 静态字段.
      */
     private boolean isSwitchMapType(TypeDeclaration td, Set<String> switchMapFieldNames) {
         String name = td.simpleName();
         if (name != null && (name.startsWith("$SwitchMap$") || name.contains("SwitchMap"))) {
             return true;
         }
-        // Anonymous inner class holder: check if this type's fields include
-        // a $SwitchMap$ field that we already identified.
+        // 匿名内部类持有者:检查该类型的字段是否包含已识别的 $SwitchMap$ 字段
         for (AstNode member : td.children()) {
             if (member instanceof FieldDeclaration fd) {
                 String fieldName = fd.name();
@@ -162,12 +155,14 @@ public class EnumSwitchRewriter implements RewriteRule {
         return false;
     }
 
+    /** 重写方法声明中的方法体 */
     private MethodDeclaration rewriteMethod(MethodDeclaration md, Set<String> switchMapFieldNames) {
         Statement newBody = md.body() != null ? rewriteStatement(md.body(), switchMapFieldNames) : null;
         return new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                 md.parameterNames(), md.parameterTypes(), md.typeParameters(), newBody);
     }
 
+    /** 递归重写各种语句类型 */
     private Statement rewriteStatement(Statement s, Set<String> switchMapFieldNames) {
         if (s instanceof BlockStatement bs) {
             List<Statement> newStmts = new ArrayList<>();
@@ -214,14 +209,14 @@ public class EnumSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Check if the switch discriminant uses the SwitchMap pattern and
-     * rewrite it if so. Also recurse into case bodies.
+     * 检查 switch 判别式是否使用了 SwitchMap 模式,若是则重写;
+     * 同时递归处理各 case 分支体.
      */
     private SwitchStatement rewriteSwitch(SwitchStatement sw, Set<String> switchMapFieldNames) {
-        // Try to detect and rewrite the enum switch discriminant.
+        // 尝试检测并重写枚举 switch 判别式
         Expression newDiscriminant = tryRewriteDiscriminant(sw.discriminant(), switchMapFieldNames);
 
-        // Recurse into case bodies.
+        // 递归处理 case 分支体
         List<SwitchStatement.CaseGroup> newCases = new ArrayList<>();
         for (SwitchStatement.CaseGroup cg : sw.cases()) {
             List<Statement> newBody = new ArrayList<>();
@@ -235,18 +230,20 @@ public class EnumSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Try to match the enum switch pattern and extract the enum variable.
-     * Pattern: {@code $SwitchMap$XXX[enumValue.ordinal()]}.
+     * 尝试匹配枚举 switch 模式并提取枚举变量.
+     * 模式:{@code $SwitchMap$XXX[enumValue.ordinal()]}.
      *
-     * <p>In the AST this is represented as:
+     * <p>在 AST 中表示为:
      * <pre>
      *   ArrayAccessExpr(
-     *       FieldAccessExpr(target, "$SwitchMap$..."),   // the int array
-     *       InvocationExpr(enumVar, "ordinal", [])        // enumVar.ordinal()
+     *       FieldAccessExpr(target, "$SwitchMap$..."),  // int 数组
+     *       InvocationExpr(enumVar, "ordinal", [])       // enumVar.ordinal()
      *   )
      * </pre>
      *
-     * @return the enum variable expression if matched, otherwise the original expression
+     * @param discriminant 原始 switch 判别式
+     * @param switchMapFieldNames 已收集的 SwitchMap 字段名集合
+     * @return 若匹配成功则返回枚举变量表达式,否则返回原始表达式
      */
     private Expression tryRewriteDiscriminant(Expression discriminant,
                                               Set<String> switchMapFieldNames) {
@@ -257,13 +254,13 @@ public class EnumSwitchRewriter implements RewriteRule {
         Expression arrayExpr = arrayAccess.array();
         Expression indexExpr = arrayAccess.index();
 
-        // The array being accessed must reference a $SwitchMap$ field.
+        // 被访问的数组必须引用 $SwitchMap$ 字段
         String fieldName = extractFieldName(arrayExpr);
         if (fieldName == null || !isSwitchMapFieldName(fieldName)) {
             return discriminant;
         }
 
-        // The index must be a call to ordinal() with no arguments.
+        // 数组索引必须是 ordinal() 调用且无参数
         if (!(indexExpr instanceof InvocationExpr inv)) {
             return discriminant;
         }
@@ -274,7 +271,7 @@ public class EnumSwitchRewriter implements RewriteRule {
             return discriminant;
         }
 
-        // Extract the enum variable from the ordinal() target.
+        // 从 ordinal() 的调用目标中提取枚举变量
         Expression enumTarget = inv.target();
         if (enumTarget == null) {
             return discriminant;

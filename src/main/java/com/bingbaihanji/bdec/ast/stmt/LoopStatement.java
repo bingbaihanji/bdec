@@ -8,23 +8,44 @@ import com.bingbaihanji.bdec.ast.expr.Expression;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 循环语句节点,表示 while,do-while,for 和增强 for-each 四种循环结构.
+ *
+ * <p>根据 {@link LoopKind} 区分循环类型.对于 for-each 循环,
+ * 使用特殊的构造函数来设置循环变量和可迭代表达式.
+ */
 public final class LoopStatement extends Statement {
 
+    /** 循环类型枚举,区分 while / do-while / for / for-each */
     private final LoopKind loopKind;
 
+    /** for 循环的初始化表达式(仅 for 循环使用) */
     private final Expression initExpr;
 
+    /** 循环条件表达式 */
     private final Expression condition;
 
+    /** for 循环的增量表达式(仅 for 循环使用) */
     private final Expression incrExpr;
 
+    /** 循环体语句 */
     private final Statement body;
 
-    /** For-each: the variable declared in the loop header ({@code Type var}).
-     *  Stored as an AssignExpr or VarExpr; emits as {@code Type var} in for-each. */
+    /**
+     * for-each 循环中的变量声明表达式(如 {@code Type var}).
+     * 内部存储为 AssignExpr 或 VarExpr,在输出时渲染为 {@code Type var}.
+     */
     private final Expression forEachVar;
 
-    /** Full constructor for for-loops. */
+    /**
+     * for 循环的完整构造器.
+     *
+     * @param k    循环类型
+     * @param init 初始化表达式
+     * @param cond 条件表达式
+     * @param incr 增量表达式
+     * @param b    循环体语句
+     */
     public LoopStatement(LoopKind k, Expression init, Expression cond, Expression incr, Statement b) {
         loopKind = k;
         initExpr = init;
@@ -34,39 +55,50 @@ public final class LoopStatement extends Statement {
         forEachVar = null;
     }
 
-    /** Constructor for for-each loops.
-     *  @param k         must be {@link LoopKind#FOR_EACH}
-     *  @param varExpr   the loop variable expression (VarExpr or AssignExpr)
-     *  @param iterable  the collection/array to iterate over
-     *  @param b         the loop body
+    /**
+     * for-each 循环的专用构造器.
+     *
+     * @param k        循环类型,必须为 {@link LoopKind#FOR_EACH}
+     * @param varExpr  循环变量表达式(VarExpr 或 AssignExpr)
+     * @param iterable 待遍历的集合或数组表达式
+     * @param b        循环体语句
      */
     public LoopStatement(LoopKind k, Expression varExpr, Expression iterable, Statement b) {
         loopKind = k;
         initExpr = null;
-        condition = iterable;  // iterable expression stored as condition
+        condition = iterable;  // 将可迭代表达式存储在 condition 字段中
         incrExpr = null;
         body = b;
         forEachVar = varExpr;
     }
 
-    /** Backward-compatible constructor without init/incr. */
+    /**
+     * 向后兼容的构造器,不含初始化和增量表达式.
+     *
+     * @param k 循环类型
+     * @param c 条件表达式
+     * @param b 循环体语句
+     */
     public LoopStatement(LoopKind k, Expression c, Statement b) {
         this(k, null, c, null, b);
     }
 
+    /** @return 循环类型 */
     public LoopKind loopKind() {return loopKind;}
 
-    /** For-loop initializer expression, or for-each variable. */
+    /** @return for 循环初始化表达式或 for-each 变量表达式 */
     public Expression initExpr() {return initExpr;}
 
+    /** @return 循环条件表达式 */
     public Expression condition() {return condition;}
 
-    /** For-loop increment expression, or null. */
+    /** @return for 循环增量表达式,非 for 循环时为 null */
     public Expression incrExpr() {return incrExpr;}
 
-    /** For-each loop variable, or null for regular for/while loops. */
+    /** @return for-each 循环变量表达式,普通 for/while 循环时为 null */
     public Expression forEachVar() {return forEachVar;}
 
+    /** @return 循环体语句 */
     public Statement body() {return body;}
 
     @Override
@@ -91,10 +123,15 @@ public final class LoopStatement extends Statement {
     @Override
     public <R, C> R accept(AstVisitor<R, C> v, C c) {return v.visitStatement(this, c);}
 
+    /** 循环类型枚举 */
     public enum LoopKind {
+        /** while 循环 */
         WHILE,
+        /** do-while 循环 */
         DO_WHILE,
+        /** 传统 for 循环 */
         FOR,
+        /** 增强 for-each 循环 */
         FOR_EACH
     }
 }

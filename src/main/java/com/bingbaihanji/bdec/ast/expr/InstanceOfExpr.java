@@ -7,20 +7,35 @@ import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.List;
 
-/** {@code obj instanceof Type} expression. */
+/**
+ * instanceof 类型判断表达式:{@code 对象 instanceof 类型}.
+ * <p>
+ * 表示Java中的运行时类型检查操作,判断操作数对象是否为目标类型的实例.
+ * </p>
+ */
 public final class InstanceOfExpr extends Expression {
 
+    /** 被检查的操作数表达式 */
     private final Expression operand;
 
+    /** 目标检查类型 */
     private final JavaType targetType;
 
+    /**
+     * 构造instanceof表达式.
+     *
+     * @param operand    被检查的操作数
+     * @param targetType 目标类型
+     */
     public InstanceOfExpr(Expression operand, JavaType targetType) {
         this.operand = operand;
         this.targetType = targetType;
     }
 
+    /** @return 被检查的操作数 */
     public Expression operand() {return operand;}
 
+    /** @return 目标类型 */
     public JavaType targetType() {return targetType;}
 
     @Override

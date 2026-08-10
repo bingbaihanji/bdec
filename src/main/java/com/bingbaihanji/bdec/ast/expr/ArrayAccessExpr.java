@@ -6,21 +6,36 @@ import com.bingbaihanji.bdec.ast.AstVisitor;
 
 import java.util.List;
 
-/** Array element access expression: {@code array[index]}.
- *  Covers both reads (a[i]) and the left-hand-side of assigns (a[i] = x). */
+/**
+ * 数组元素访问表达式:{@code 数组[索引]}.
+ * <p>
+ * 涵盖数组元素的读取操作(如 {@code a[i]})和赋值操作的左值部分(如 {@code a[i] = x}).
+ * 数组引用和索引值均为子表达式.
+ * </p>
+ */
 public final class ArrayAccessExpr extends Expression {
 
+    /** 数组表达式(被访问的数组对象) */
     private final Expression array;
 
+    /** 索引表达式(数组下标) */
     private final Expression index;
 
+    /**
+     * 构造数组访问表达式.
+     *
+     * @param array 数组表达式
+     * @param index 索引表达式
+     */
     public ArrayAccessExpr(Expression array, Expression index) {
         this.array = array;
         this.index = index;
     }
 
+    /** @return 数组表达式 */
     public Expression array() {return array;}
 
+    /** @return 索引表达式 */
     public Expression index() {return index;}
 
     @Override

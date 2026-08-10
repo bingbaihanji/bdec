@@ -4,11 +4,50 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * JVM opcode metadata. Phase 1a: ~140 high-frequency opcodes.
- * Phase 1b adds remaining opcodes (tableswitch, lookupswitch, invokedynamic, wide, etc.).
+ * JVM 操作码元数据枚举.
+ *
+ * <p>完整枚举了 JVM 规范定义的全部操作码(共计约 200+ 条),
+ * 按功能分组为:
+ * <ul>
+ *   <li>常量加载指令({@code nop} ~ {@code ldc2_w})</li>
+ *   <li>局部变量加载指令({@code iload} ~ {@code aload_3})</li>
+ *   <li>数组元素加载指令({@code iaload} ~ {@code saload})</li>
+ *   <li>局部变量存储指令({@code istore} ~ {@code astore_3})</li>
+ *   <li>数组元素存储指令({@code iastore} ~ {@code sastore})</li>
+ *   <li>栈操作指令({@code pop} ~ {@code swap})</li>
+ *   <li>算术运算指令({@code iadd} ~ {@code dneg})</li>
+ *   <li>位运算与移位指令({@code ishl} ~ {@code iinc})</li>
+ *   <li>类型转换指令({@code i2l} ~ {@code i2s})</li>
+ *   <li>比较指令({@code lcmp} ~ {@code dcmpg})</li>
+ *   <li>分支控制指令({@code ifeq} ~ {@code jsr})</li>
+ *   <li>返回指令({@code ireturn} ~ {@code return})</li>
+ *   <li>字段访问指令({@code getstatic} ~ {@code putfield})</li>
+ *   <li>方法调用指令({@code invokevirtual} ~ {@code invokeinterface})</li>
+ *   <li>对象与数组创建指令({@code new} ~ {@code arraylength})</li>
+ *   <li>异常,类型转换与类型检查指令({@code athrow} ~ {@code instanceof})</li>
+ *   <li>同步指令({@code monitorenter} ~ {@code monitorexit})</li>
+ *   <li>扩展分支指令({@code ifnull} ~ {@code jsr_w})</li>
+ *   <li>变长 switch 指令({@code tableswitch},{@code lookupswitch})</li>
+ *   <li>动态调用指令({@code invokedynamic})</li>
+ *   <li>扩展与多维数组指令({@code ret},{@code wide},{@code multianewarray})</li>
+ * </ul>
+ *
+ * <p>每条操作码枚举值携带以下元数据:
+ * <ul>
+ *   <li>{@code code} — 操作码数值(0-255)</li>
+ *   <li>{@code mnemonic} — 操作码助记符</li>
+ *   <li>{@code operandBytes} — 操作数字节数(变长指令如 switch 标记为 0)</li>
+ *   <li>{@code stackDelta} — 操作数栈高度变化量(正值增加,负值减少,0 不变)</li>
+ *   <li>{@code canFallThrough} — 指令执行后控制流可否穿透至下一条指令</li>
+ *   <li>{@code isTerminal} — 是否为方法的终止指令</li>
+ *   <li>{@code isConditional} — 是否为条件跳转指令</li>
+ *   <li>{@code implicitVarIndex} — 隐式局部变量索引(-1 表示不适用)</li>
+ * </ul>
+ *
+ * @see <a href="https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-6.html">JVM Spec Chapter 6</a>
  */
 public enum Opcode {
-    // === Constants (0-20) ===
+    // ===== 常量指令(0-20)=====
     NOP(0, "nop", 0, 0, true, false, false, -1),
     ACONST_NULL(1, "aconst_null", 0, 1, true, false, false, -1),
     ICONST_M1(2, "iconst_m1", 0, 1, true, false, false, -1),
@@ -31,7 +70,7 @@ public enum Opcode {
     LDC_W(19, "ldc_w", 2, 1, true, false, false, -1),
     LDC2_W(20, "ldc2_w", 2, 2, true, false, false, -1),
 
-    // === Loads (21-45) ===
+    // ===== 局部变量加载指令(21-45)=====
     ILOAD(21, "iload", 1, 1, true, false, false, 0),
     LLOAD(22, "lload", 1, 2, true, false, false, 0),
     FLOAD(23, "fload", 1, 1, true, false, false, 0),
@@ -58,7 +97,7 @@ public enum Opcode {
     ALOAD_2(44, "aload_2", 0, 1, true, false, false, 2),
     ALOAD_3(45, "aload_3", 0, 1, true, false, false, 3),
 
-    // === Array loads (46-53) ===
+    // ===== 数组元素加载指令(46-53)=====
     IALOAD(46, "iaload", 0, -1, true, false, false, -1),
     LALOAD(47, "laload", 0, 0, true, false, false, -1),
     FALOAD(48, "faload", 0, -1, true, false, false, -1),
@@ -68,7 +107,7 @@ public enum Opcode {
     CALOAD(52, "caload", 0, -1, true, false, false, -1),
     SALOAD(53, "saload", 0, -1, true, false, false, -1),
 
-    // === Stores (54-78) ===
+    // ===== 局部变量存储指令(54-78)=====
     ISTORE(54, "istore", 1, -1, true, false, false, 0),
     LSTORE(55, "lstore", 1, -2, true, false, false, 0),
     FSTORE(56, "fstore", 1, -1, true, false, false, 0),
@@ -95,7 +134,7 @@ public enum Opcode {
     ASTORE_2(77, "astore_2", 0, -1, true, false, false, 2),
     ASTORE_3(78, "astore_3", 0, -1, true, false, false, 3),
 
-    // === Array stores (79-86) ===
+    // ===== 数组元素存储指令(79-86)=====
     IASTORE(79, "iastore", 0, -3, true, false, false, -1),
     LASTORE(80, "lastore", 0, -4, true, false, false, -1),
     FASTORE(81, "fastore", 0, -3, true, false, false, -1),
@@ -105,7 +144,7 @@ public enum Opcode {
     CASTORE(85, "castore", 0, -3, true, false, false, -1),
     SASTORE(86, "sastore", 0, -3, true, false, false, -1),
 
-    // === Stack manipulation (87-95) ===
+    // ===== 栈操作指令(87-95)=====
     POP(87, "pop", 0, -1, true, false, false, -1),
     POP2(88, "pop2", 0, -2, true, false, false, -1),
     DUP(89, "dup", 0, 1, true, false, false, -1),
@@ -116,7 +155,7 @@ public enum Opcode {
     DUP2_X2(94, "dup2_x2", 0, 2, true, false, false, -1),
     SWAP(95, "swap", 0, 0, true, false, false, -1),
 
-    // === Arithmetic (96-119) ===
+    // ===== 算术运算指令(96-119)=====
     IADD(96, "iadd", 0, -1, true, false, false, -1),
     LADD(97, "ladd", 0, -2, true, false, false, -1),
     FADD(98, "fadd", 0, -1, true, false, false, -1),
@@ -142,7 +181,7 @@ public enum Opcode {
     FNEG(118, "fneg", 0, 0, true, false, false, -1),
     DNEG(119, "dneg", 0, 0, true, false, false, -1),
 
-    // === Bitwise/Shift (120-132) ===
+    // ===== 位运算与移位指令(120-132)=====
     ISHL(120, "ishl", 0, -1, true, false, false, -1),
     LSHL(121, "lshl", 0, -1, true, false, false, -1),
     ISHR(122, "ishr", 0, -1, true, false, false, -1),
@@ -157,7 +196,7 @@ public enum Opcode {
     LXOR(131, "lxor", 0, -2, true, false, false, -1),
     IINC(132, "iinc", 2, 0, true, false, false, -1),
 
-    // === Conversions (133-147) ===
+    // ===== 类型转换指令(133-147)=====
     I2L(133, "i2l", 0, 1, true, false, false, -1),
     I2F(134, "i2f", 0, 0, true, false, false, -1),
     I2D(135, "i2d", 0, 1, true, false, false, -1),
@@ -174,14 +213,14 @@ public enum Opcode {
     I2C(146, "i2c", 0, 0, true, false, false, -1),
     I2S(147, "i2s", 0, 0, true, false, false, -1),
 
-    // === Comparisons (148-152) ===
+    // ===== 比较指令(148-152)=====
     LCMP(148, "lcmp", 0, -3, true, false, false, -1),
     FCMPL(149, "fcmpl", 0, -1, true, false, false, -1),
     FCMPG(150, "fcmpg", 0, -1, true, false, false, -1),
     DCMPL(151, "dcmpl", 0, -3, true, false, false, -1),
     DCMPG(152, "dcmpg", 0, -3, true, false, false, -1),
 
-    // === Branch instructions (153-168) ===
+    // ===== 分支控制指令(153-168)=====
     IFEQ(153, "ifeq", 2, -1, false, false, true, -1),
     IFNE(154, "ifne", 2, -1, false, false, true, -1),
     IFLT(155, "iflt", 2, -1, false, false, true, -1),
@@ -199,7 +238,7 @@ public enum Opcode {
     GOTO(167, "goto", 2, 0, false, false, true, -1),
     JSR(168, "jsr", 2, 1, false, false, true, -1),
 
-    // === Returns (172-177) ===
+    // ===== 返回指令(172-177)=====
     IRETURN(172, "ireturn", 0, -1, false, true, false, -1),
     LRETURN(173, "lreturn", 0, -2, false, true, false, -1),
     FRETURN(174, "freturn", 0, -1, false, true, false, -1),
@@ -207,51 +246,52 @@ public enum Opcode {
     ARETURN(176, "areturn", 0, -1, false, true, false, -1),
     RETURN(177, "return", 0, 0, false, true, false, -1),
 
-    // === Field access (178-181) ===
+    // ===== 字段访问指令(178-181)=====
     GETSTATIC(178, "getstatic", 2, 0, true, false, false, -1),
     PUTSTATIC(179, "putstatic", 2, 0, true, false, false, -1),
     GETFIELD(180, "getfield", 2, 0, true, false, false, -1),
     PUTFIELD(181, "putfield", 2, 0, true, false, false, -1),
 
-    // === Method invocation (182-185) ===
+    // ===== 方法调用指令(182-185)=====
     INVOKEVIRTUAL(182, "invokevirtual", 2, 0, true, false, false, -1),
     INVOKESPECIAL(183, "invokespecial", 2, 0, true, false, false, -1),
     INVOKESTATIC(184, "invokestatic", 2, 0, true, false, false, -1),
     INVOKEINTERFACE(185, "invokeinterface", 4, 0, true, false, false, -1),
 
-    // === Object/Array creation (187-190) ===
+    // ===== 对象与数组创建指令(187-190)=====
     NEW(187, "new", 2, 1, true, false, false, -1),
     NEWARRAY(188, "newarray", 1, 0, true, false, false, -1),
     ANEWARRAY(189, "anewarray", 2, 0, true, false, false, -1),
     ARRAYLENGTH(190, "arraylength", 0, 0, true, false, false, -1),
 
-    // === Throw/Cast/InstanceOf (191-193) ===
+    // ===== 异常,类型转换与类型检查指令(191-193)=====
     ATHROW(191, "athrow", 0, -1, false, true, false, -1),
     CHECKCAST(192, "checkcast", 2, 0, true, false, false, -1),
     INSTANCEOF(193, "instanceof", 2, 0, true, false, false, -1),
 
-    // === Synchronization (194-195) ===
+    // ===== 同步指令(194-195)=====
     MONITORENTER(194, "monitorenter", 0, -1, true, false, false, -1),
     MONITOREXIT(195, "monitorexit", 0, -1, true, false, false, -1),
 
-    // === Extended branch (198-199) ===
+    // ===== 扩展分支指令(198-199)=====
     IFNULL(198, "ifnull", 2, -1, false, false, true, -1),
     IFNONNULL(199, "ifnonnull", 2, -1, false, false, true, -1),
 
-    // Switch (variable-length, decoded specially in InstructionDecoder)
+    // ===== Switch 指令(变长,由 InstructionDecoder 特殊处理)=====
     TABLESWITCH(170, "tableswitch", 0, -1, false, true, false, -1),
     LOOKUPSWITCH(171, "lookupswitch", 0, -1, false, true, false, -1),
 
-    // InvokeDynamic (Java 7+ lambdas, string concat, method refs)
+    // ===== 动态调用指令(Java 7+ Lambda,字符串拼接,方法引用)=====
     INVOKEDYNAMIC(186, "invokedynamic", 4, 0, false, false, false, -1),
 
-    // Extended instructions
+    // ===== 扩展指令 =====
     RET(169, "ret", 1, 0, false, false, false, 0),
     WIDE(196, "wide", 0, 0, true, false, false, -1),
     MULTIANEWARRAY(197, "multianewarray", 3, -1, true, false, false, -1),
     GOTO_W(200, "goto_w", 4, 0, false, false, true, -1),
     JSR_W(201, "jsr_w", 4, 1, false, false, true, -1);
 
+    /** 操作码数值到枚举值的快速查找表. */
     private static final Map<Integer, Opcode> BY_CODE = new HashMap<>();
 
     static {
@@ -260,20 +300,28 @@ public enum Opcode {
         }
     }
 
+    /** 操作码数值(0-255). */
     private final int code;
 
+    /** 操作码助记符字符串. */
     private final String mnemonic;
 
+    /** 操作数字节数(变长指令标记为 0). */
     private final int operandBytes;
 
+    /** 操作数栈高度变化量(正值为入栈,负值为出栈). */
     private final int stackDelta;
 
+    /** 指令执行后控制流可否穿透至下一条指令. */
     private final boolean canFallThrough;
 
+    /** 是否为终止指令. */
     private final boolean isTerminal;
 
+    /** 是否为条件跳转指令. */
     private final boolean isConditional;
 
+    /** 隐式局部变量索引(-1 表示不涉及局部变量). */
     private final int implicitVarIndex;
 
     Opcode(int code, String mnemonic, int operandBytes, int stackDelta,
@@ -289,6 +337,13 @@ public enum Opcode {
         this.implicitVarIndex = implicitVarIndex;
     }
 
+    /**
+     * 根据操作码数值查找对应的枚举值.
+     *
+     * @param code 操作码数值
+     * @return 对应的 Opcode 枚举值
+     * @throws IllegalArgumentException 如果操作码未被识别
+     */
     public static Opcode byCode(int code) {
         Opcode op = BY_CODE.get(code);
         if (op == null) {
@@ -297,19 +352,27 @@ public enum Opcode {
         return op;
     }
 
+    /** 返回操作码数值. */
     public int code() {return code;}
 
+    /** 返回操作码助记符. */
     public String mnemonic() {return mnemonic;}
 
+    /** 返回操作数字节数. */
     public int operandBytes() {return operandBytes;}
 
+    /** 返回操作数栈高度变化量. */
     public int stackDelta() {return stackDelta;}
 
+    /** 返回控制流可否穿透至下一条指令. */
     public boolean canFallThrough() {return canFallThrough;}
 
+    /** 返回是否为终止指令. */
     public boolean isTerminal() {return isTerminal;}
 
+    /** 返回是否为条件跳转指令. */
     public boolean isConditional() {return isConditional;}
 
+    /** 返回隐式局部变量索引. */
     public int implicitVarIndex() {return implicitVarIndex;}
 }

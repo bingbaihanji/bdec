@@ -1,6 +1,6 @@
 package com.bytecode.test;
 
-// 枚举，带抽象方法和常量特定实现
+// 枚举,带抽象方法和常量特定实现
 public enum EnumDemo {
     ONE(1) {
         @Override

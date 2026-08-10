@@ -18,38 +18,44 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Reconstructs complex expressions from flat IR sequences.
- *
- * Post-processes structured AST blocks to:
- * 1. Inline simple assignments (var = expr → replace var usages with expr)
- * 2. Chain arithmetic operations into expression trees
- * 3. Eliminate temporary variables created by stack-to-register translation
+ * 表达式重构器.
+ * <p>
+ * 从扁平的IR序列中重建复杂的表达式树.后处理已结构化的AST块,完成以下工作:
+ * </p>
+ * <ol>
+ *   <li>内联简单赋值:将 var = expr 中的变量使用替换为表达式</li>
+ *   <li>将算术操作链组合成表达式树</li>
+ *   <li>消除由栈到寄存器转换引入的临时变量</li>
+ * </ol>
  */
 public final class ExpressionReconstructor {
 
     /**
-     * Reconstruct expressions in a block statement, returning an optimized version.
+     * 对块语句进行表达式重构,返回优化后的版本.
+     *
+     * @param block 原始块语句
+     * @return 表达式重构后的块语句
      */
     public BlockStatement reconstruct(BlockStatement block) {
         List<Statement> stmts = new ArrayList<>(block.statements());
         List<Statement> optimized = new ArrayList<>();
 
-        // Map: variable name → expression it was assigned
+        // 变量名 → 其所赋值的表达式映射(内联候选)
         Map<String, Expression> inlineCandidates = new HashMap<>();
-        // Count how many times each variable is used
+        // 变量名 → 使用次数映射
         Map<String, Integer> useCount = new HashMap<>();
 
-        // First pass: count variable uses
+        // 第一遍:统计变量使用次数
         for (Statement s : stmts) {
             countUses(s, useCount);
         }
 
-        // Second pass: inline single-use assignments
+        // 第二遍:内联仅使用一次的简单赋值
         for (int i = 0; i < stmts.size(); i++) {
             Statement s = stmts.get(i);
             Statement processed = tryInline(s, inlineCandidates, useCount);
 
-            // If this is an assignment to a temp var used only once, remember it
+            // 如果是赋值给仅使用一次的临时变量,记录为内联候选而非输出
             if (processed instanceof ExpressionStatement es
                     && es.expression() instanceof AssignExpr assign
                     && assign.target() instanceof VarExpr targetVar
@@ -57,7 +63,7 @@ public final class ExpressionReconstructor {
                 int uses = useCount.getOrDefault(targetVar.name(), 0);
                 if (uses == 1) {
                     inlineCandidates.put(targetVar.name(), assign.value());
-                    continue; // don't add this assignment to output
+                    continue; // 不将赋值语句添加到输出
                 }
             }
 
@@ -67,7 +73,9 @@ public final class ExpressionReconstructor {
         return new BlockStatement(optimized);
     }
 
-    /** Try to replace inline candidates in a statement. */
+    /**
+     * 尝试在语句中替换内联候选变量.
+     */
     private Statement tryInline(Statement stmt, Map<String, Expression> candidates,
                                 Map<String, Integer> useCount) {
         if (stmt instanceof ExpressionStatement es) {
@@ -93,7 +101,9 @@ public final class ExpressionReconstructor {
         return stmt;
     }
 
-    /** Recursively inline expressions. */
+    /**
+     * 递归地在表达式中替换内联候选变量.
+     */
     private Expression inlineExpr(Expression expr, Map<String, Expression> candidates) {
         if (expr instanceof VarExpr v && candidates.containsKey(v.name())) {
             return candidates.get(v.name());
@@ -110,12 +120,14 @@ public final class ExpressionReconstructor {
             return new AssignExpr(
                     inlineExpr(assign.target(), candidates),
                     inlineExpr(assign.value(), candidates),
-                    assign.compoundOp()); // preserve compound assignment operator
+                    assign.compoundOp()); // 保留复合赋值运算符
         }
         return expr;
     }
 
-    /** Count variable references in a statement subtree. */
+    /**
+     * 统计语句子树中的变量引用次数.
+     */
     private void countUses(Statement stmt, Map<String, Integer> counts) {
         if (stmt instanceof ExpressionStatement es) {
             countUsesExpr(es.expression(), counts);
@@ -131,19 +143,22 @@ public final class ExpressionReconstructor {
             }
             countUses(loop.body(), counts);
         } else if (stmt instanceof BlockStatement block) {
-            // Process nested block independently to avoid scope leak
-            // (temp vars inside a nested block shouldn't affect outer inlining)
+            // 独立处理嵌套块以避免作用域泄漏
+            // (嵌套块内的临时变量不应影响外层的内联判断)
             Map<String, Integer> nestedCounts = new HashMap<>();
             for (Statement s : block.statements()) {
                 countUses(s, nestedCounts);
             }
-            // Only merge counts for variables defined outside the block
+            // 仅合并外部定义的变量的计数
             for (var entry : nestedCounts.entrySet()) {
                 counts.merge(entry.getKey(), entry.getValue(), Integer::sum);
             }
         }
     }
 
+    /**
+     * 统计表达式中的变量引用次数.
+     */
     private void countUsesExpr(Expression expr, Map<String, Integer> counts) {
         if (expr instanceof VarExpr v) {
             counts.merge(v.name(), 1, Integer::sum);
@@ -162,6 +177,9 @@ public final class ExpressionReconstructor {
         }
     }
 
+    /**
+     * 判断变量名是否为临时变量(以"var"或"tmp"开头).
+     */
     private boolean isTempVar(String name) {
         return name.startsWith("var") || name.startsWith("tmp");
     }

@@ -1,18 +1,27 @@
 -------------------------------------------------------------------------------
 Test set: com.bingbaihanji.bdec.BytecodeTestRoundTripTest
 -------------------------------------------------------------------------------
-Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.564 s <<< FAILURE! -- in com.bingbaihanji.bdec.BytecodeTestRoundTripTest
-com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testEnumDemoRoundTrip -- Time elapsed: 0.505 s <<< FAILURE!
+Tests run: 11, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 1.129 s <<< FAILURE! -- in com.bingbaihanji.bdec.BytecodeTestRoundTripTest
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip -- Time elapsed: 0.068 s <<< FAILURE!
 org.junit.ComparisonFailure: 
 expected:<[OK]> but was:<[COMPILE FAILED:
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1627058611424302506\compile-10353804815758729198\EnumDemo.java:3: 错误: EnumDemo不是抽象的, 并且未覆盖EnumDemo中的抽象方法action()
-public enum EnumDemo {
-       ^
-1 个错误
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-10621877012062695855\compile-7992790409682956814\TestClass2.java:125: 错误: 非法的表达式开始
+            () -> /* lambda$unnamedDemo$0 */;
+                                            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-10621877012062695855\compile-7992790409682956814\TestClass2.java:125: 错误: 不是语句
+            () -> /* lambda$unnamedDemo$0 */;
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-10621877012062695855\compile-7992790409682956814\TestClass2.java:141: 错误: 非法的表达式开始
+        () -> /* lambda$streamDemo$0 */;
+                                       ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-10621877012062695855\compile-7992790409682956814\TestClass2.java:141: 错误: 不是语句
+        () -> /* lambda$streamDemo$0 */;
+        ^
+4 个错误
 ]>
 	at org.junit.Assert.assertEquals(Assert.java:117)
 	at org.junit.Assert.assertEquals(Assert.java:146)
-	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testEnumDemoRoundTrip(BytecodeTestRoundTripTest.java:139)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip(BytecodeTestRoundTripTest.java:199)
 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
 	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
 	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)

@@ -9,9 +9,9 @@ import java.util.Collections;
 import java.util.Map;
 
 /**
- * 反编译引擎统一接口。
+ * 反编译引擎统一接口.
  * <p>
- * 所有引擎实现必须保证<b>线程安全（Thread-Safe）</b>或<b>无状态（Stateless）</b>。
+ * 所有引擎实现必须保证<b>线程安全(Thread-Safe)</b>或<b>无状态(Stateless)</b>.
  *
  * @author bingbaihanji
  * @date 2026-06-17
@@ -21,7 +21,7 @@ public interface Decompiler extends AutoCloseable {
     /**
      * 获取引擎标识/名称
      *
-     * @return 引擎名称，例如 "bdec-core"
+     * @return 引擎名称,例如 "bdec-core"
      */
     default String getName() {
         return "bdec";
@@ -37,7 +37,7 @@ public interface Decompiler extends AutoCloseable {
     }
 
     /**
-     * 引擎初始化（在引擎加载或配置变更时调用）
+     * 引擎初始化(在引擎加载或配置变更时调用)
      *
      * @param globalOptions 引擎全局配置选项
      */
@@ -47,7 +47,7 @@ public interface Decompiler extends AutoCloseable {
     /**
      * 按字节码反编译单个 Class
      *
-     * @param internalName 类内部名称（例如: "java/lang/String" 或 "com/example/TestClass$InnerClass"）
+     * @param internalName 类内部名称(例如: "java/lang/String" 或 "com/example/TestClass$InnerClass")
      * @param classBytes   字节码数据
      * @return 反编译结果对象
      */
@@ -56,17 +56,17 @@ public interface Decompiler extends AutoCloseable {
     }
 
     /**
-     * 带上下文的反编译接口（核心 API）
+     * 带上下文的反编译接口(核心 API)
      *
      * @param internalName 类内部名称
      * @param classBytes   目标字节码数据
-     * @param context      反编译上下文（包含依赖加载器、自定义选项等）
+     * @param context      反编译上下文(包含依赖加载器,自定义选项等)
      * @return 反编译结果对象
      */
     BdecResult decompile(String internalName, byte[] classBytes, DecompileContext context);
 
     /**
-     * 便捷方法：直接从本地文件系统反编译 Class 文件
+     * 便捷方法:直接从本地文件系统反编译 Class 文件
      *
      * @param classFile Class 文件路径
      * @param context   反编译上下文
@@ -82,7 +82,7 @@ public interface Decompiler extends AutoCloseable {
         }
     }
 
-    /** Derive internal name from a class file path, walking up for package directories. */
+    /** 从 Class 文件路径推导内部名称,向上遍历包目录结构 */
     private String deriveInternalName(Path classFile) {
         Path absolute = classFile.toAbsolutePath().normalize();
         String fileName = absolute.getFileName().toString();
@@ -103,6 +103,7 @@ public interface Decompiler extends AutoCloseable {
         return String.join("/", parts);
     }
 
+    /** 检查字符串是否为合法的 Java 标识符 */
     private boolean isJavaIdentifier(String s) {
         if (s.isEmpty()) {
             return false;
@@ -128,7 +129,7 @@ public interface Decompiler extends AutoCloseable {
     }
 
     /**
-     * 资源清理（实现 AutoCloseable 接口，方便在 Try-with-resources 中安全销毁）
+     * 资源清理(实现 AutoCloseable 接口,方便在 Try-with-resources 中安全销毁)
      */
     @Override
     default void close() {

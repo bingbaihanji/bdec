@@ -8,32 +8,59 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * IR指令.
+ * <p>
+ * 中间表示(IR)中的一条指令,是从底层字节码指令(栈式)抽象而来的寄存器式指令.
+ * 每条指令包含操作码({@link IrOpcode}),结果类型,操作数列表,
+ * 源字节码偏移量,所属基本块ID以及可选的元数据(原始字节码操作码,名称提示).
+ * 支持语义注解以及大量便捷的静态工厂方法.
+ * </p>
+ */
 public class IrInstruction {
 
+    /** 指令唯一标识符 */
     private final int id;
 
+    /** IR操作码 */
     private final IrOpcode opcode;
 
+    /** 指令结果类型 */
     private final JavaType resultType;
 
+    /** 操作数列表(不可变) */
     private final List<Value> operands;
 
+    /** 源字节码偏移量 */
     private final int sourceOffset;
 
+    /** 所属基本块ID */
     private final int blockId;
 
-    /** Original JVM bytecode opcode (e.g. 0x60=IADD, 0x64=ISUB).
-     *  Zero means no original opcode (synthetic PHI, etc.). */
+    /** 原始JVM字节码操作码(如0x60=IADD, 0x64=ISUB).0表示无原始操作码(合成的PHI等). */
     private final int originalOpcode;
 
-    /** Resolved name hint — field name or method name from constant pool. */
+    /** 已解析的名称提示——来自常量池的字段名或方法名. */
     private final String nameHint;
 
-    /** Semantic annotations attached by the SemanticReconstructor pipeline. */
+    /** 语义注解列表,由语义重建管道附加. */
     private List<SemanticAnnotation> annotations;
 
+    /** 该指令产生的结果值 */
     private Value resultValue;
 
+    /**
+     * 构造一条IR指令(含元数据).
+     *
+     * @param id             指令ID
+     * @param opcode         IR操作码
+     * @param resultType     结果类型
+     * @param operands       操作数列表
+     * @param sourceOffset   源字节码偏移量
+     * @param blockId        基本块ID
+     * @param originalOpcode 原始JVM字节码操作码
+     * @param nameHint       名称提示
+     */
     public IrInstruction(int id, IrOpcode opcode, JavaType resultType,
                          List<Value> operands, int sourceOffset, int blockId,
                          int originalOpcode, String nameHint) {
@@ -47,24 +74,35 @@ public class IrInstruction {
         this.nameHint = nameHint;
     }
 
-    /** Backward-compatible constructor without metadata. */
+    /**
+     * 构造一条IR指令(不含元数据),保持向后兼容.
+     */
     public IrInstruction(int id, IrOpcode opcode, JavaType resultType,
                          List<Value> operands, int sourceOffset, int blockId) {
         this(id, opcode, resultType, operands, sourceOffset, blockId, 0, null);
     }
 
-    // --- Factory methods ---
+    // ── 工厂方法 ───────────────────────────────────────────────────────
 
+    /**
+     * 创建变量加载指令(LOAD).
+     */
     public static IrInstruction load(int id, Variable var, int offset, int blockId) {
         return new IrInstruction(id, IrOpcode.LOAD, var.type(), List.of(var),
                 offset, blockId, 0, null);
     }
 
+    /**
+     * 创建变量存储指令(STORE).
+     */
     public static IrInstruction store(int id, Variable var, Value value, int offset, int blockId) {
         return new IrInstruction(id, IrOpcode.STORE, var.type(), List.of(var, value),
                 offset, blockId, 0, null);
     }
 
+    /**
+     * 创建二元运算指令(含原始字节码操作码).
+     */
     public static IrInstruction binary(int id, IrOpcode op, Value left, Value right,
                                        JavaType resultType, int offset, int blockId,
                                        int originalOpcode) {
@@ -72,12 +110,17 @@ public class IrInstruction {
                 offset, blockId, originalOpcode, null);
     }
 
-    /** Backward-compatible binary factory. */
+    /**
+     * 创建二元运算指令(向后兼容,无原始字节码操作码).
+     */
     public static IrInstruction binary(int id, IrOpcode op, Value left, Value right,
                                        JavaType resultType, int offset, int blockId) {
         return binary(id, op, left, right, resultType, offset, blockId, 0);
     }
 
+    /**
+     * 创建方法调用指令(INVOKE),含方法名.
+     */
     public static IrInstruction invoke(int id, Value target, List<Value> args,
                                        JavaType returnType, int offset, int blockId,
                                        String methodName) {
@@ -90,11 +133,17 @@ public class IrInstruction {
                 offset, blockId, 0, methodName);
     }
 
+    /**
+     * 创建方法调用指令(INVOKE),无方法名(向后兼容).
+     */
     public static IrInstruction invoke(int id, Value target, List<Value> args,
                                        JavaType returnType, int offset, int blockId) {
         return invoke(id, target, args, returnType, offset, blockId, null);
     }
 
+    /**
+     * 创建字段加载指令(FIELD_LOAD),含字段名.
+     */
     public static IrInstruction fieldLoad(int id, Value obj, JavaType fieldType,
                                           int offset, int blockId, String fieldName) {
         List<Value> ops = obj != null ? List.of(obj) : List.of();
@@ -102,11 +151,17 @@ public class IrInstruction {
                 offset, blockId, 0, fieldName);
     }
 
+    /**
+     * 创建字段加载指令(FIELD_LOAD),无字段名(向后兼容).
+     */
     public static IrInstruction fieldLoad(int id, Value obj, JavaType fieldType,
                                           int offset, int blockId) {
         return fieldLoad(id, obj, fieldType, offset, blockId, null);
     }
 
+    /**
+     * 创建字段存储指令(FIELD_STORE),含字段名.
+     */
     public static IrInstruction fieldStore(int id, Value obj, Value value,
                                            int offset, int blockId, String fieldName) {
         List<Value> ops = obj != null ? List.of(obj, value) : List.of(value);
@@ -114,46 +169,67 @@ public class IrInstruction {
                 offset, blockId, 0, fieldName);
     }
 
+    /**
+     * 创建字段存储指令(FIELD_STORE),无字段名(向后兼容).
+     */
     public static IrInstruction fieldStore(int id, Value obj, Value value,
                                            int offset, int blockId) {
         return fieldStore(id, obj, value, offset, blockId, null);
     }
 
+    /**
+     * 创建返回指令(RETURN).
+     */
     public static IrInstruction returnInsn(int id, Value value, int offset, int blockId) {
         List<Value> ops = value != null ? List.of(value) : List.of();
         JavaType t = value != null ? value.type() : JavaType.VOID;
         return new IrInstruction(id, IrOpcode.RETURN, t, ops, offset, blockId, 0, null);
     }
 
+    /**
+     * 创建对象创建指令(NEW).
+     */
     public static IrInstruction newInsn(int id, JavaType type, int offset, int blockId) {
         return new IrInstruction(id, IrOpcode.NEW, type, List.of(), offset, blockId, 0, null);
     }
 
+    /**
+     * 创建类型转换指令(CAST),含原始字节码操作码.
+     */
     public static IrInstruction cast(int id, Value value, JavaType targetType,
                                      int offset, int blockId, int originalOpcode) {
         return new IrInstruction(id, IrOpcode.CAST, targetType, List.of(value),
                 offset, blockId, originalOpcode, null);
     }
 
+    /**
+     * 创建类型转换指令(CAST),无原始字节码操作码(向后兼容).
+     */
     public static IrInstruction cast(int id, Value value, JavaType targetType,
                                      int offset, int blockId) {
         return cast(id, value, targetType, offset, blockId, 0);
     }
 
+    /**
+     * 创建常量指令(CONST).
+     */
     public static IrInstruction constInsn(int id, ConstantValue value, int offset, int blockId) {
         return new IrInstruction(id, IrOpcode.CONST, value.type(), List.of(value),
                 offset, blockId, 0, null);
     }
 
-    // --- Getters ---
+    // ── 属性访问器 ────────────────────────────────────────────────────
 
     /**
-     * Map a JVM bytecode opcode to the corresponding BinaryOperator.
-     * Returns null for non-binary/comparison opcodes.
+     * 将JVM字节码操作码映射为对应的二元运算符.
+     * 涵盖算术运算,位运算,位移运算,比较运算和空值比较.
+     *
+     * @param bc JVM字节码操作码
+     * @return 对应的二元运算符,非二元/比较操作码返回 {@code null}
      */
     public static BinaryOperator binaryOpFromBytecode(int bc) {
         return switch (bc) {
-            // Arithmetic
+            // 算术运算
             case 0x60 -> BinaryOperator.ADD;    // IADD
             case 0x64 -> BinaryOperator.SUB;    // ISUB
             case 0x68 -> BinaryOperator.MUL;    // IMUL
@@ -174,67 +250,86 @@ public class IrInstruction {
             case 0x6b -> BinaryOperator.MUL;    // DMUL
             case 0x6f -> BinaryOperator.DIV;    // DDIV
             case 0x73 -> BinaryOperator.REM;    // DREM
-            // Bitwise
+            // 位运算
             case 0x7e -> BinaryOperator.BIT_AND; // IAND
             case 0x7f -> BinaryOperator.BIT_AND; // LAND
             case 0x80 -> BinaryOperator.BIT_OR;  // IOR
             case 0x81 -> BinaryOperator.BIT_OR;  // LOR
             case 0x82 -> BinaryOperator.BIT_XOR; // IXOR
             case 0x83 -> BinaryOperator.BIT_XOR; // LXOR
-            // Shift
+            // 位移运算
             case 0x78 -> BinaryOperator.SHL;     // ISHL
             case 0x79 -> BinaryOperator.SHL;     // LSHL
             case 0x7a -> BinaryOperator.SHR;     // ISHR
             case 0x7b -> BinaryOperator.SHR;     // LSHR
             case 0x7c -> BinaryOperator.USHR;    // IUSHR
             case 0x7d -> BinaryOperator.USHR;    // LUSHR
-            // Comparisons (int)
+            // 整数比较
             case 0x9f -> BinaryOperator.EQ;      // IF_ICMPEQ
             case 0xa0 -> BinaryOperator.NE;      // IF_ICMPNE
             case 0xa1 -> BinaryOperator.LT;      // IF_ICMPLT
             case 0xa2 -> BinaryOperator.GE;      // IF_ICMPGE
             case 0xa3 -> BinaryOperator.GT;      // IF_ICMPGT
             case 0xa4 -> BinaryOperator.LE;      // IF_ICMPLE
-            // Comparisons (ref)
+            // 引用比较
             case 0xa5 -> BinaryOperator.EQ;      // IF_ACMPEQ
             case 0xa6 -> BinaryOperator.NE;      // IF_ACMPNE
-            // Zero comparisons
+            // 零值比较
             case 0x99 -> BinaryOperator.EQ;      // IFEQ
             case 0x9a -> BinaryOperator.NE;      // IFNE
             case 0x9b -> BinaryOperator.LT;      // IFLT
             case 0x9c -> BinaryOperator.GE;      // IFGE
             case 0x9d -> BinaryOperator.GT;      // IFGT
             case 0x9e -> BinaryOperator.LE;      // IFLE
-            // Null comparisons
+            // 空值比较
             case 0xc6 -> BinaryOperator.EQ;      // IFNULL  (ref == null)
             case 0xc7 -> BinaryOperator.NE;      // IFNONNULL (ref != null)
             default -> null;
         };
     }
 
+    /** @return 指令ID */
     public int id() {return id;}
 
+    /** @return IR操作码 */
     public IrOpcode opcode() {return opcode;}
 
+    /** @return 指令结果类型 */
     public JavaType resultType() {return resultType;}
 
+    /** @return 操作数列表 */
     public List<Value> operands() {return operands;}
 
+    /** @return 源字节码偏移量 */
     public int sourceOffset() {return sourceOffset;}
 
+    /** @return 所属基本块ID */
     public int blockId() {return blockId;}
 
+    /** @return 原始JVM字节码操作码,0表示合成指令 */
     public int originalOpcode() {return originalOpcode;}
 
-    /** Resolved field or method name, or null if not resolved. */
+    /**
+     * 获取已解析的字段名或方法名.
+     *
+     * @return 名称提示,未解析时返回 {@code null}
+     */
     public String nameHint() {return nameHint;}
 
-    /** Semantic annotations attached by the semantic reconstruction pipeline. */
+    /**
+     * 获取语义注解列表.
+     *
+     * @return 语义注解列表,无注解时返回空列表
+     */
     public List<SemanticAnnotation> annotations() {
         return annotations != null ? annotations : Collections.emptyList();
     }
 
-    /** Add a semantic annotation to this instruction. */
+    /**
+     * 为指令附加一条语义注解.
+     *
+     * @param ann 语义注解
+     */
     public void addAnnotation(SemanticAnnotation ann) {
         if (annotations == null) {
             annotations = new ArrayList<>(2);
@@ -242,7 +337,12 @@ public class IrInstruction {
         annotations.add(ann);
     }
 
-    /** Check if this instruction has a specific semantic tag. */
+    /**
+     * 检查指令是否具有指定的语义标签.
+     *
+     * @param tag 语义标签
+     * @return 如果有该标签则返回 {@code true}
+     */
     public boolean hasTag(com.bingbaihanji.bdec.semantic.SemanticTag tag) {
         if (annotations == null) {
             return false;
@@ -255,7 +355,12 @@ public class IrInstruction {
         return false;
     }
 
-    /** Get the first annotation with the given tag, or null. */
+    /**
+     * 获取指定标签的第一条语义注解.
+     *
+     * @param tag 语义标签
+     * @return 语义注解,若无则返回 {@code null}
+     */
     public SemanticAnnotation getAnnotation(com.bingbaihanji.bdec.semantic.SemanticTag tag) {
         if (annotations == null) {
             return null;
@@ -268,10 +373,10 @@ public class IrInstruction {
         return null;
     }
 
+    /** @return 该指令产生的结果值 */
     public Value resultValue() {return resultValue;}
 
-    // --- Operator inference from bytecode opcode ---
-
+    /** 设置该指令产生的结果值 */
     public void setResultValue(Value v) {this.resultValue = v;}
 
     @Override

@@ -24,35 +24,38 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Detects javac-generated string switch scaffolding and collapses
- * it back to a native {@code switch (str)} statement.
+ * 字符串 switch 重写器,检测 javac 生成的字符串 switch 脚手架代码并将其还原为原生 {@code switch (str)} 语句.
  *
- * <p>Pattern:
+ * <p>匹配模式:</p>
  * <pre>
- *   switch (str.hashCode()) {                    // First switch
+ *   // 第一个 switch:基于 hashCode 的分发
+ *   switch (str.hashCode()) {
  *       case hash1:
- *           if (str.equals("foo")) temp = 0;     // String → int mapping
+ *           if (str.equals("foo")) temp = 0;     // 字符串 → 整数的映射
  *           break;
  *       case hash2:
  *           if (str.equals("bar")) temp = 1;
  *           break;
  *       default: break;
  *   }
- *   switch (temp) {                              // Second switch
+ *
+ *   // 第二个 switch:基于临时变量的实际分支
+ *   switch (temp) {
  *       case 0: ...body... break;
  *       case 1: ...body... break;
  *       default: ...body... break;
  *   }
- *
- *   → switch (str) {
+ * </pre>
+ * <p>还原为:</p>
+ * <pre>
+ *   switch (str) {
  *       case "foo": ...body... break;
  *       case "bar": ...body... break;
  *       default: ...body... break;
  *   }
  * </pre>
  *
- * <p>Inspired by CFR's {@code SwitchReWriter} and Vineflower's
- * {@code SwitchProcessor}.
+ * <p>参考了 CFR 的 {@code SwitchReWriter} 和 Vineflower 的 {@code SwitchProcessor} 实现.</p>
  */
 public class StringSwitchRewriter implements RewriteRule {
 
@@ -68,6 +71,12 @@ public class StringSwitchRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /**
+     * 重写类型声明中的所有方法体,检测并还原字符串 switch 模式.
+     *
+     * @param td 待重写的类型声明
+     * @return 重写后的类型声明
+     */
     private TypeDeclaration rewriteType(TypeDeclaration td) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
@@ -84,6 +93,12 @@ public class StringSwitchRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
+    /**
+     * 递归重写代码块,并对重写后的块进行字符串 switch 模式检测.
+     *
+     * @param s 待重写的语句
+     * @return 重写后的语句
+     */
     private Statement rewriteBlock(Statement s) {
         if (s instanceof BlockStatement bs) {
             List<Statement> rewritten = new ArrayList<>();
@@ -105,7 +120,7 @@ public class StringSwitchRewriter implements RewriteRule {
             return new LoopStatement(l.loopKind(), l.condition(), rewriteBlock(l.body()));
         }
         if (s instanceof SwitchStatement sw) {
-            // Recursively rewrite nested switches too
+            // 递归重写嵌套的 switch
             List<SwitchStatement.CaseGroup> newCases = new ArrayList<>();
             for (SwitchStatement.CaseGroup cg : sw.cases()) {
                 List<Statement> newBody = new ArrayList<>();
@@ -120,8 +135,10 @@ public class StringSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Walk a block looking for adjacent hashCode-switch + temp-switch
-     * patterns and collapse them into a native string switch.
+     * 遍历代码块查找相邻的 hashCode-switch + temp-switch 模式,并将其合并为原生字符串 switch.
+     *
+     * @param bs 待检测的代码块
+     * @return 合并后的语句
      */
     private Statement detectStringSwitch(BlockStatement bs) {
         List<Statement> stmts = new ArrayList<>(bs.statements());
@@ -129,7 +146,7 @@ public class StringSwitchRewriter implements RewriteRule {
         do {
             changed = false;
             for (int i = 0; i < stmts.size() - 1; i++) {
-                // Look for two adjacent SwitchStatements
+                // 寻找两个相邻的 SwitchStatement
                 if (!(stmts.get(i) instanceof SwitchStatement hashSwitch)) {
                     continue;
                 }
@@ -137,25 +154,25 @@ public class StringSwitchRewriter implements RewriteRule {
                     continue;
                 }
 
-                // Check if first switch is on hashCode()
+                // 检查第一个 switch 是否为 hashCode() 分发
                 HashCodeMatch hashMatch = matchHashCodeSwitch(hashSwitch);
                 if (hashMatch == null) {
                     continue;
                 }
 
-                // Check if second switch uses the same temp variable
+                // 检查第二个 switch 是否使用相同的临时变量
                 TempSwitchMatch tempMatch = matchTempSwitch(tempSwitch, hashMatch);
                 if (tempMatch == null) {
                     continue;
                 }
 
-                // Build the new string switch
+                // 构造新的原生字符串 switch
                 SwitchStatement stringSwitch = buildStringSwitch(hashMatch, tempMatch);
                 if (stringSwitch == null) {
                     continue;
                 }
 
-                // Replace both switches with the new one
+                // 用新 switch 替换原有的两个 switch
                 stmts.remove(i + 1);
                 stmts.remove(i);
                 stmts.add(i, stringSwitch);
@@ -168,11 +185,17 @@ public class StringSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Detect whether a SwitchStatement matches the hashCode-switch pattern:
-     * {@code switch (xxx.hashCode())}.
+     * 判断 SwitchStatement 是否匹配 hashCode-switch 模式:{@code switch (xxx.hashCode())}.
+     * <p>
+     * 提取判别式为 {@code target.hashCode()} 的 switch,
+     * 并从各 case 分支中收集字符串到整数的映射关系.
+     * </p>
+     *
+     * @param sw 待匹配的 switch 语句
+     * @return 匹配成功则返回 HashCodeMatch 对象,否则返回 {@code null}
      */
     private HashCodeMatch matchHashCodeSwitch(SwitchStatement sw) {
-        // Check discriminant is: target.hashCode()
+        // 检查判别式是否为 target.hashCode()
         if (!(sw.discriminant() instanceof InvocationExpr inv)) {
             return null;
         }
@@ -184,7 +207,7 @@ public class StringSwitchRewriter implements RewriteRule {
         }
         Expression stringVar = inv.target();
 
-        // Collect mappings from each case
+        // 从各 case 分支收集映射关系
         LinkedHashMap<Integer, String> hashToString = new LinkedHashMap<>();
         LinkedHashMap<Integer, Integer> hashToTemp = new LinkedHashMap<>();
         String tempVarName = null;
@@ -196,29 +219,30 @@ public class StringSwitchRewriter implements RewriteRule {
                 continue;
             }
 
-            // Each non-default case should have exactly one int label
+            // 每个非 default case 应恰好包含一个整型标签
             int hashCode = extractIntLabel(cg.labels());
             if (hashCode == Integer.MIN_VALUE) {
-                continue; // not an int label, skip
+                continue; // 非整型标签,跳过
             }
 
-            // Try to extract the string from equals() call in case body
+            // 从 case 体中提取 equals() 调用中的字符串字面量
             StringMatch sm = extractStringFromCase(cg, stringVar);
             if (sm == null) {
-                continue; // can't extract string mapping from this case
+                continue; // 无法从该 case 中提取字符串映射,跳过
             }
 
             if (tempVarName == null) {
                 tempVarName = sm.tempVar;
             } else if (!tempVarName.equals(sm.tempVar)) {
-                return null; // inconsistent temp variable name
+                // 临时变量名不一致,不是合法的字符串 switch
+                return null;
             }
 
             hashToString.put(hashCode, sm.stringValue);
             hashToTemp.put(hashCode, sm.tempValue);
         }
 
-        // Need at least one string mapping to be meaningful
+        // 至少需要一个字符串映射才有意义
         if (hashToString.isEmpty() || tempVarName == null) {
             return null;
         }
@@ -227,9 +251,12 @@ public class StringSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Extract the string literal from a hashCode switch case body.
-     * Pattern: {@code if (str.equals("literal")) tempVar = intVal;}
-     * or the IfStatement may be the only statement in the case body.
+     * 从 hashCode switch 的 case 体中提取字符串字面量.
+     * <p>匹配模式:{@code if (str.equals("字面量")) tempVar = intVal;}</p>
+     *
+     * @param cg        case 分组
+     * @param stringVar 字符串变量表达式
+     * @return 匹配成功则返回 StringMatch 对象,否则返回 {@code null}
      */
     private StringMatch extractStringFromCase(SwitchStatement.CaseGroup cg, Expression stringVar) {
         for (Statement s : cg.body()) {
@@ -245,10 +272,14 @@ public class StringSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Match: {@code if (str.equals("literal")) tempVar = intVal;}
+     * 匹配 equals 赋值模式:{@code if (str.equals("字面量")) tempVar = intVal;}
+     *
+     * @param ifStmt        待匹配的 if 语句
+     * @param expectedTarget 期望的字符串变量目标
+     * @return 匹配成功则返回 StringMatch 对象,否则返回 {@code null}
      */
     private StringMatch matchEqualsAssign(IfStatement ifStmt, Expression expectedTarget) {
-        // Condition: str.equals("literal")
+        // 条件:str.equals("字面量")
         if (!(ifStmt.condition() instanceof InvocationExpr condInv)) {
             return null;
         }
@@ -265,11 +296,11 @@ public class StringSwitchRewriter implements RewriteRule {
             return null;
         }
 
-        // Verify target matches (the String variable)
+        // 验证目标变量匹配(字符串变量)
         if (condInv.target() == null) {
             return null;
         }
-        // The target could be a VarExpr with the same name as expectedTarget
+        // 目标应是与预期变量同名的 VarExpr
         if (expectedTarget instanceof VarExpr ev) {
             if (!(condInv.target() instanceof VarExpr tv)) {
                 return null;
@@ -278,10 +309,9 @@ public class StringSwitchRewriter implements RewriteRule {
                 return null;
             }
         }
-        // If expectedTarget is not a VarExpr, just compare structurally
-        // (for non-VarExpr patterns, we skip structural comparison for now)
+        // 若 expectedTarget 不是 VarExpr,跳过结构比较(当前不支持非 VarExpr 模式)
 
-        // Then branch: assign int literal to temp var
+        // then 分支:将整型字面量赋给临时变量
         AssignmentResult ar = extractAssignment(ifStmt.thenBranch());
         if (ar == null) {
             return null;
@@ -291,12 +321,15 @@ public class StringSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Extract: {@code tempVar = intVal;} from a statement.
-     * The statement may be wrapped in a BlockStatement.
+     * 从语句中提取赋值表达式:{@code tempVar = intVal;}
+     * 语句可能被包裹在 BlockStatement 中.
+     *
+     * @param stmt 待提取的语句
+     * @return 提取成功则返回 AssignmentResult 对象,否则返回 {@code null}
      */
     private AssignmentResult extractAssignment(Statement stmt) {
         if (stmt instanceof BlockStatement bs) {
-            // Look for the assignment in the block
+            // 在块中寻找赋值语句
             for (Statement s : bs.statements()) {
                 AssignmentResult ar = extractAssignment(s);
                 if (ar != null) {
@@ -326,8 +359,10 @@ public class StringSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Extract a single int label from a case label list.
-     * Returns Integer.MIN_VALUE if no int label is found.
+     * 从 case 标签列表中提取单个整型标签.
+     *
+     * @param labels case 标签表达式列表
+     * @return 提取到的整数值,若未找到则返回 {@link Integer#MIN_VALUE}
      */
     private int extractIntLabel(List<Expression> labels) {
         for (Expression label : labels) {
@@ -339,10 +374,14 @@ public class StringSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Verify that the temp switch uses the same temp variable as the hashCode switch.
+     * 验证 temp switch 是否使用与 hashCode switch 相同的临时变量.
+     *
+     * @param sw        待匹配的 switch 语句
+     * @param hashMatch 已匹配的 hashCode switch 信息
+     * @return 匹配成功则返回 TempSwitchMatch 对象,否则返回 {@code null}
      */
     private TempSwitchMatch matchTempSwitch(SwitchStatement sw, HashCodeMatch hashMatch) {
-        // Second switch discriminant should be just the temp variable
+        // 第二个 switch 的判别式应仅为临时变量
         if (!(sw.discriminant() instanceof VarExpr ve)) {
             return null;
         }
@@ -350,7 +389,7 @@ public class StringSwitchRewriter implements RewriteRule {
             return null;
         }
 
-        // Collect case groups by their int label
+        // 按整型标签收集 case 分组
         Map<Integer, SwitchStatement.CaseGroup> intToCase = new LinkedHashMap<>();
         SwitchStatement.CaseGroup defaultCase = null;
 
@@ -369,10 +408,14 @@ public class StringSwitchRewriter implements RewriteRule {
     }
 
     /**
-     * Build the new string switch: {@code switch (str) { case "foo": ... case "bar": ... }}.
+     * 构建新的原生字符串 switch:{@code switch (str) { case "foo": ... case "bar": ... }}.
+     *
+     * @param hashMatch hashCode switch 匹配结果
+     * @param tempMatch temp switch 匹配结果
+     * @return 构建成功则返回新的 SwitchStatement,否则返回 {@code null}
      */
     private SwitchStatement buildStringSwitch(HashCodeMatch hashMatch, TempSwitchMatch tempMatch) {
-        // Build mapping: temp int value → string literal
+        // 构建临时整数值到字符串字面量的映射
         Map<Integer, String> tempToString = new LinkedHashMap<>();
         for (Map.Entry<Integer, Integer> entry : hashMatch.hashToTemp.entrySet()) {
             int hashVal = entry.getKey();
@@ -387,7 +430,7 @@ public class StringSwitchRewriter implements RewriteRule {
             return null;
         }
 
-        // Build case groups with string labels
+        // 使用字符串标签构建 case 分组
         List<SwitchStatement.CaseGroup> newCases = new ArrayList<>();
         JavaType stringType = JavaType.classType("java/lang/String");
 
@@ -396,38 +439,43 @@ public class StringSwitchRewriter implements RewriteRule {
             String strVal = entry.getValue();
             SwitchStatement.CaseGroup origCase = tempMatch.intToCase().get(tempVal);
             if (origCase == null) {
-                continue; // temp value has no matching case in second switch
+                continue; // 该临时值在第二个 switch 中没有匹配的 case
             }
 
-            // Replace int labels with string literal labels
+            // 将整型标签替换为字符串字面量标签
             List<Expression> newLabels = List.of(new LitExpr(strVal, stringType));
             newCases.add(new SwitchStatement.CaseGroup(newLabels, origCase.body(), false));
         }
 
-        // If there are temp cases that we couldn't remap, skip them (they're unreachable)
+        // 无法重新映射的临时 case 将被跳过(它们不可达)
 
-        // Find default case: use temp switch's default if available
+        // 查找 default case:优先使用 temp switch 的 default
         SwitchStatement.CaseGroup defCase = tempMatch.defaultCase();
         if (defCase != null) {
             newCases.add(new SwitchStatement.CaseGroup(List.of(), defCase.body(), true));
         }
 
-        // New discriminant is the original String variable (not hashCode target)
+        // 新判别式为原始字符串变量(而非 hashCode 的目标)
         return new SwitchStatement(hashMatch.stringVar, newCases);
     }
 
-    /** Match result for the hashCode-switch pattern. */
+    /** hashCode-switch 模式的匹配结果,保存提取到的映射关系. */
     private static class HashCodeMatch {
 
-        final Expression stringVar;              // the String variable
+        /** 字符串变量表达式 */
+        final Expression stringVar;
 
-        final LinkedHashMap<Integer, String> hashToString; // hashCode → string literal
+        /** hashCode 到字符串字面量的映射 */
+        final LinkedHashMap<Integer, String> hashToString;
 
-        final LinkedHashMap<Integer, Integer> hashToTemp; // hashCode → temp int value
+        /** hashCode 到临时整数值的映射 */
+        final LinkedHashMap<Integer, Integer> hashToTemp;
 
+        /** 临时变量名称 */
         final String tempVarName;
 
-        final SwitchStatement.CaseGroup defaultCase; // may be null
+        /** default case 分组(可能为 null) */
+        final SwitchStatement.CaseGroup defaultCase;
 
         HashCodeMatch(Expression stringVar,
                       LinkedHashMap<Integer, String> hashToString,
@@ -442,19 +490,25 @@ public class StringSwitchRewriter implements RewriteRule {
         }
     }
 
-    /** Match result for the temp-switch pattern. */
+    /** temp-switch 模式的匹配结果. */
     private record TempSwitchMatch(
+            /** 临时变量名称 */
             String tempVarName,
+            /** 整型标签到 case 分组的映射 */
             Map<Integer, SwitchStatement.CaseGroup> intToCase,
+            /** default case 分组(可能为 null) */
             SwitchStatement.CaseGroup defaultCase) {}
 
-    /** Extracted string from a hashCode case body. */
+    /** 从 hashCode switch case 体中提取的字符串匹配信息. */
     private static class StringMatch {
 
+        /** 字符串字面量值 */
         final String stringValue;
 
+        /** 临时变量名 */
         final String tempVar;
 
+        /** 临时变量的整数值 */
         final int tempValue;
 
         StringMatch(String stringValue, String tempVar, int tempValue) {
@@ -464,11 +518,13 @@ public class StringSwitchRewriter implements RewriteRule {
         }
     }
 
-    /** Extracted assignment result. */
+    /** 从语句中提取的赋值结果. */
     private static class AssignmentResult {
 
+        /** 被赋值的变量名 */
         final String varName;
 
+        /** 赋值的整数值 */
         final int intValue;
 
         AssignmentResult(String varName, int intValue) {

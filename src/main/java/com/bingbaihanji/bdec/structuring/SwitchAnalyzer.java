@@ -16,14 +16,20 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Detects switch statements by finding blocks that end in tableswitch/lookupswitch
- * and grouping their case targets into structured SwitchInfo records.
+ * switch 语句分析器.
+ *
+ * <p>检测以 tableswitch/lookupswitch 结尾的基本块,并将其 case 目标
+ * 分组为结构化的 SwitchInfo 记录.
  */
 public final class SwitchAnalyzer {
 
     /**
-     * Analyze the graph and return a list of detected switch structures.
-     * Does not modify the graph; folding is handled by the structurer.
+     * 分析控制流图,返回检测到的 switch 结构列表.
+     * 不修改图结构;折叠工作由 ControlFlowStructurer 处理.
+     *
+     * @param graph 控制流图
+     * @param dom   支配树
+     * @return 检测到的 SwitchInfo 列表
      */
     public List<SwitchInfo> analyze(ControlFlowGraph graph, DominatorTree dom) {
         List<SwitchInfo> results = new ArrayList<>();
@@ -36,6 +42,7 @@ public final class SwitchAnalyzer {
             Map<Integer, Set<BasicBlock>> caseBodies = new LinkedHashMap<>();
             Set<BasicBlock> defaultBody = new HashSet<>();
 
+            // 根据出边类型收集 case 目标和 default 目标
             for (ControlFlowEdge edge : graph.outgoingOf(block)) {
                 if (edge.kind() == EdgeKind.SWITCH_CASE) {
                     caseBodies.computeIfAbsent(edge.switchKey(), k -> new HashSet<>())
@@ -45,8 +52,7 @@ public final class SwitchAnalyzer {
                 }
             }
 
-            // Expand: for each case target, collect blocks dominated by it
-            // that aren't part of another case
+            // 扩展:对每个 case 目标,收集被其支配且不属于其他 case 的块
             Set<BasicBlock> allCaseHeaders = new HashSet<>();
             caseBodies.values().forEach(allCaseHeaders::addAll);
             allCaseHeaders.addAll(defaultBody);
@@ -60,7 +66,7 @@ public final class SwitchAnalyzer {
             }
 
             boolean isTableSwitch = block.lastInstruction() != null
-                    && block.lastInstruction().opcode() == 170; // TABLESWITCH
+                    && block.lastInstruction().opcode() == 170; // TABLESWITCH 操作码
 
             results.add(new SwitchInfo(block, caseBodies, defaultBody, isTableSwitch));
         }
@@ -69,8 +75,13 @@ public final class SwitchAnalyzer {
     }
 
     /**
-     * Expand a set of entry blocks to include blocks dominated by them,
-     * stopping at other case headers.
+     * 扩展入口块集合,包含被它们支配的块,在遇到其他 case 头时停止.
+     *
+     * @param entries         入口块集合
+     * @param allCaseHeaders  所有 case 头块集合
+     * @param graph           控制流图
+     * @param dom             支配树
+     * @return 扩展后的块集合
      */
     private Set<BasicBlock> expandBody(Set<BasicBlock> entries,
                                        Set<BasicBlock> allCaseHeaders,
@@ -86,7 +97,7 @@ public final class SwitchAnalyzer {
                 if (!visited.add(succ)) {
                     continue;
                 }
-                // Stop at other case headers or exit
+                // 遇到其他 case 头或 exit 块时停止
                 if (succ == graph.exitBlock()) {
                     continue;
                 }
