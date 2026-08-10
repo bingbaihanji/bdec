@@ -2593,28 +2593,77 @@ public final class BlockReducer {
     /**
      * Strip statements from the try body that also appear in the finally body.
      * Uses structural comparison on the Expression objects rather than toString().
+     * Recursively processes nested compound statements (IfStatement, LoopStatement, etc.)
+     * so that duplicated finally code inside if-else branches is also stripped.
      */
     private Statement stripDuplicatedFinally(Statement tryBody, Statement finallyBody) {
         List<Statement> finallyStmts = collectStatements(finallyBody);
         if (finallyStmts.isEmpty()) {
             return tryBody;
         }
+        return stripMatchingFinally(tryBody, finallyStmts);
+    }
 
-        List<Statement> tryStmts = collectStatements(tryBody);
-        List<Statement> filtered = new ArrayList<>();
-        for (Statement s : tryStmts) {
-            if (!matchesAny(s, finallyStmts)) {
-                filtered.add(s);
+    /** Recursively strip statements that match patterns (finally-body statements)
+     *  from compound statements, not just top-level. */
+    private Statement stripMatchingFinally(Statement s, List<Statement> patterns) {
+        if (s == null) {
+            return null;
+        }
+        // If this statement itself matches a pattern, remove it entirely
+        if (matchesAny(s, patterns)) {
+            return null;
+        }
+        // Recursively process BlockStatement
+        if (s instanceof BlockStatement bs) {
+            List<Statement> filtered = new ArrayList<>();
+            for (Statement child : bs.statements()) {
+                Statement stripped = stripMatchingFinally(child, patterns);
+                if (stripped != null) {
+                    filtered.add(stripped);
+                }
             }
+            if (filtered.isEmpty()) {
+                return new BlockStatement(List.of());
+            }
+            if (filtered.size() == 1) {
+                return filtered.getFirst();
+            }
+            return new BlockStatement(filtered);
         }
-
-        if (filtered.isEmpty()) {
-            return new BlockStatement(List.of());
+        // Recursively process IfStatement branches
+        if (s instanceof com.bingbaihanji.bdec.ast.stmt.IfStatement i) {
+            Statement thenStripped = stripMatchingFinally(i.thenBranch(), patterns);
+            Statement elseStripped = i.elseBranch() != null
+                    ? stripMatchingFinally(i.elseBranch(), patterns) : null;
+            return new com.bingbaihanji.bdec.ast.stmt.IfStatement(i.condition(),
+                    thenStripped != null ? thenStripped : new BlockStatement(List.of()),
+                    elseStripped);
         }
-        if (filtered.size() == 1) {
-            return filtered.getFirst();
+        // Recursively process LoopStatement body
+        if (s instanceof com.bingbaihanji.bdec.ast.stmt.LoopStatement l) {
+            Statement bodyStripped = stripMatchingFinally(l.body(), patterns);
+            return new com.bingbaihanji.bdec.ast.stmt.LoopStatement(
+                    l.loopKind(), l.condition(),
+                    bodyStripped != null ? bodyStripped : new BlockStatement(List.of()));
         }
-        return new BlockStatement(filtered);
+        // Recursively process TryStatement body and finally
+        if (s instanceof com.bingbaihanji.bdec.ast.stmt.TryStatement t) {
+            Statement tryStripped = stripMatchingFinally(t.tryBody(), patterns);
+            List<com.bingbaihanji.bdec.ast.stmt.TryStatement.CatchClause> cc = new ArrayList<>();
+            for (var c : t.catchClauses()) {
+                Statement bodyStripped = stripMatchingFinally(c.body(), patterns);
+                cc.add(new com.bingbaihanji.bdec.ast.stmt.TryStatement.CatchClause(
+                        c.exceptionType(), c.varName(),
+                        bodyStripped != null ? bodyStripped : new BlockStatement(List.of())));
+            }
+            Statement finallyStripped = t.finallyBody() != null
+                    ? stripMatchingFinally(t.finallyBody(), patterns) : null;
+            return new com.bingbaihanji.bdec.ast.stmt.TryStatement(
+                    tryStripped != null ? tryStripped : new BlockStatement(List.of()),
+                    cc, finallyStripped);
+        }
+        return s;
     }
 
     /** Translate a single block group to a list of statements. */

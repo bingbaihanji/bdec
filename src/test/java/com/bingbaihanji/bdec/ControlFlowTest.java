@@ -302,6 +302,85 @@ public class ControlFlowTest {
         }
     }
 
+    @Test
+    public void testLockTryFinallySize() throws Exception {
+        // Pattern: lock + try-finally with return (like RingBuffer.size())
+        String source = """
+                package test;
+                import java.util.concurrent.locks.ReentrantLock;
+                public class LockSizeTest {
+                    private final ReentrantLock lock = new ReentrantLock();
+                    private int count;
+                    public int size() {
+                        lock.lock();
+                        try {
+                            return count;
+                        } finally {
+                            lock.unlock();
+                        }
+                    }
+                }
+                """;
+        String out = harness.decompileSource(source, "LockSizeTest");
+        assertCompiles(out, "LockSizeTest");
+    }
+
+    @Test
+    public void testLockTryFinallyOffer() throws Exception {
+        // Pattern: lock + try-finally + if-else with returns (like RingBuffer.offer())
+        // The duplicated finally code in branches MUST be stripped.
+        String source = """
+                package test;
+                import java.util.concurrent.locks.ReentrantLock;
+                public class LockOfferTest {
+                    private final ReentrantLock lock = new ReentrantLock();
+                    private int count;
+                    public boolean offer(int value) {
+                        lock.lock();
+                        try {
+                            if (count < 10) {
+                                count++;
+                                return true;
+                            } else {
+                                return false;
+                            }
+                        } finally {
+                            lock.unlock();
+                        }
+                    }
+                }
+                """;
+        String out = harness.decompileSource(source, "LockOfferTest");
+        DecompileTestHarness.assertNotContains(out, "return lock.unlock()");
+        assertCompiles(out, "LockOfferTest");
+    }
+
+    @Test
+    public void testLockTryFinallyClear() throws Exception {
+        // Pattern: lock + try-finally with void body (like RingBuffer.clear())
+        String source = """
+                package test;
+                import java.util.concurrent.locks.Condition;
+                import java.util.concurrent.locks.ReentrantLock;
+                public class LockClearTest {
+                    private final ReentrantLock lock = new ReentrantLock();
+                    private final Condition notEmpty = lock.newCondition();
+                    private int count;
+                    public void clear() {
+                        lock.lock();
+                        try {
+                            count = 0;
+                            notEmpty.signalAll();
+                        } finally {
+                            lock.unlock();
+                        }
+                    }
+                }
+                """;
+        String out = harness.decompileSource(source, "LockClearTest");
+        assertCompiles(out, "LockClearTest");
+    }
+
     private static void deleteDir(java.io.File dir) {
         java.io.File[] files = dir.listFiles();
         if (files != null) {
