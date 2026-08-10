@@ -103,7 +103,7 @@ public class LambdaRewriter implements RewriteRule {
         for (TypeDeclaration td : unit.types()) {
             types.add(rewriteType(td, bootstrapMethods, cfm, context));
         }
-        return new CompilationUnit(unit.packageName(), unit.imports(), types);
+        return new CompilationUnit(unit.packageName(), unit.imports(), types, unit.innerClassNames());
     }
 
     /** 重写类型声明,过滤掉 lambda 合成方法并重写方法体 */

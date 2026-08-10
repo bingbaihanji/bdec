@@ -232,7 +232,21 @@ public class AstBuilder {
         }
         java.util.Collections.sort(importList);
 
-        return new CompilationUnit(pkg, importList, List.of(td));
+        // 构建内部类友好名称映射:简单内部名称(如 TestClass2$StaticNested) → 友好名称(如 StaticNested).
+        // 仅限成员内部类(不以 $数字 开头),匿名/局部类保留字节码名称以确保类路径解析.
+        java.util.Map<String, String> innerNames = new java.util.HashMap<>();
+        for (var ice : classFile.innerClasses()) {
+            if (ice.simpleName() != null && !ice.simpleName().isEmpty()
+                    && ice.innerClass() != null) {
+                String rawSimple = simpleName(ice.innerClass());
+                // 仅对成员内部类使用友好名称(跳过匿名类如 TestClass2$1 和局部类如 TestClass2$1LocalClass)
+                if (!isAnonymousClassRef(rawSimple) && !rawSimple.equals(ice.simpleName())) {
+                    innerNames.put(rawSimple, ice.simpleName());
+                }
+            }
+        }
+
+        return new CompilationUnit(pkg, importList, List.of(td), innerNames);
     }
 
     /**

@@ -78,7 +78,7 @@ public class EnumSwitchRewriter implements RewriteRule {
             }
         }
 
-        return new CompilationUnit(unit.packageName(), unit.imports(), newTypes);
+        return new CompilationUnit(unit.packageName(), unit.imports(), newTypes, unit.innerClassNames());
     }
 
     /** 递归收集所有类型中类似 SwitchMap 数组的字段名 */

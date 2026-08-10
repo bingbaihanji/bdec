@@ -81,7 +81,7 @@ public class SourceCleanup implements RewriteRule {
         for (TypeDeclaration td : unit.types()) {
             types.add(cleanupType(td));
         }
-        return new CompilationUnit(unit.packageName(), unit.imports(), types);
+        return new CompilationUnit(unit.packageName(), unit.imports(), types, unit.innerClassNames());
     }
 
     /**

@@ -44,7 +44,7 @@ public class TryResourceRewriter implements RewriteRule {
         for (TypeDeclaration td : unit.types()) {
             types.add(rewriteType(td));
         }
-        return new CompilationUnit(unit.packageName(), unit.imports(), types);
+        return new CompilationUnit(unit.packageName(), unit.imports(), types, unit.innerClassNames());
     }
 
     /**
