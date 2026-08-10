@@ -17,6 +17,7 @@ import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
+import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
@@ -115,6 +116,10 @@ public class StringConcatRewriter implements RewriteRule {
         }
         if (s instanceof ThrowStatement ts) {
             return new ThrowStatement(rewriteExpr(ts.expression()));
+        }
+        if (s instanceof VariableDeclaration vd) {
+            return new VariableDeclaration(vd.type(), vd.name(),
+                    vd.initializer() != null ? rewriteExpr(vd.initializer()) : null);
         }
         return s;
     }

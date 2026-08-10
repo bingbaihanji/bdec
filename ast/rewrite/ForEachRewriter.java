@@ -5,15 +5,20 @@ import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
 import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.CastExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -88,7 +93,16 @@ public class ForEachRewriter implements RewriteRule {
      * 将其合并为增强 for-each 循环.
      */
     private Statement detectForEach(BlockStatement bs) {
-        List<Statement> stmts = new ArrayList<>(bs.statements());
+        // 先展开嵌套的 BlockStatement(CFG 分组可能产生不必要的块作用域,
+        // 例如将循环前导语句包装在单独的 { } 块中)
+        List<Statement> stmts = new ArrayList<>();
+        for (Statement s : bs.statements()) {
+            if (s instanceof BlockStatement inner) {
+                stmts.addAll(inner.statements());
+            } else {
+                stmts.add(s);
+            }
+        }
         boolean changed;
         do {
             changed = false;
@@ -131,34 +145,48 @@ public class ForEachRewriter implements RewriteRule {
         return new BlockStatement(stmts);
     }
 
-    /** 匹配:{@code Iterator iter = collection.iterator();} */
+    /** 匹配:{@code Iterator iter = collection.iterator();}
+     *  支持两种形式:ExpressionStatement(AssignExpr) 和 VariableDeclaration. */
     private ForEachCandidate matchIteratorDecl(Statement s) {
+        String varName;
+        Expression iterableExpr;
+
+        // 形式1:VariableDeclaration——BlockReducer 输出
+        //   Iterator var2 = items.iterator()
+        if (s instanceof VariableDeclaration vd
+                && vd.initializer() instanceof InvocationExpr inv
+                && "iterator".equals(inv.methodName())
+                && inv.target() != null) {
+            varName = vd.name();
+            iterableExpr = inv.target();
+            return new ForEachCandidate(varName, iterableExpr);
+        }
+
+        // 形式2:ExpressionStatement(AssignExpr)——旧的模式
         if (!(s instanceof ExpressionStatement es)) {
             return null;
         }
         if (!(es.expression() instanceof AssignExpr assign)) {
             return null;
         }
-        if (!(assign.value() instanceof InvocationExpr inv)) {
+        if (!(assign.value() instanceof InvocationExpr inv2)) {
             return null;
         }
-        if (!"iterator".equals(inv.methodName())) {
+        if (!"iterator".equals(inv2.methodName())) {
             return null;
         }
-        if (inv.target() == null) {
+        if (inv2.target() == null) {
             return null;
         }
 
         // 提取迭代器变量名
-        String varName = null;
         if (assign.target() instanceof VarExpr vx) {
             varName = vx.name();
-        }
-        if (varName == null) {
+        } else {
             return null;
         }
 
-        return new ForEachCandidate(varName, inv.target());
+        return new ForEachCandidate(varName, inv2.target());
     }
 
     /** 匹配:{@code while(iter.hasNext()) { E e = iter.next(); ... }} */
@@ -184,28 +212,59 @@ public class ForEachRewriter implements RewriteRule {
         }
 
         Statement first = bodyStmts.get(0);
-        if (!(first instanceof ExpressionStatement es)) {
-            return null;
+        Expression elementVar;
+
+        // 形式1:VariableDeclaration——如 "String item = (String) iter.next()"
+        if (first instanceof VariableDeclaration vd
+                && vd.initializer() instanceof InvocationExpr inv
+                && "next".equals(inv.methodName())
+                && inv.target() instanceof VarExpr nextVar
+                && candidate.iterVar.equals(nextVar.name())) {
+            elementVar = new VarExpr(vd.name());
         }
-        if (!(es.expression() instanceof AssignExpr assign)) {
-            return null;
-        }
-        if (!(assign.value() instanceof InvocationExpr nextInv)) {
-            return null;
-        }
-        if (!"next".equals(nextInv.methodName())) {
-            return null;
-        }
-        if (!(nextInv.target() instanceof VarExpr nextVar)) {
-            return null;
-        }
-        if (!candidate.iterVar.equals(nextVar.name())) {
-            return null;
+        // 形式2:ExpressionStatement(AssignExpr)——如 "item = iter.next()"
+        else if (first instanceof ExpressionStatement es
+                && es.expression() instanceof AssignExpr assign
+                && assign.value() instanceof InvocationExpr inv2
+                && "next".equals(inv2.methodName())
+                && inv2.target() instanceof VarExpr nextVar2
+                && candidate.iterVar.equals(nextVar2.name())) {
+            elementVar = assign.target();
+        } else {
+            // 形式3:next() 被内联到表达式中——如 "println(iter.next())"
+            // 查找循环体中所有 iterVar.next() 调用并替换为元素变量
+            String elementName = "element";
+            if (!containsNextCall(loop.body(), candidate.iterVar)) {
+                return null;
+            }
+            elementVar = new VarExpr(elementName);
         }
 
-        // 构建新循环体(移除 next() 调用)
+        // 构建新循环体(将 iterVar.next() 调用替换为元素变量引用,
+        // 若首个语句为 next() 赋值则同时移除该语句)
         List<Statement> newBodyStmts = new ArrayList<>(bodyStmts);
-        newBodyStmts.remove(0);
+        // 若首条语句是 next() 赋值,则移除它(已提取为 for-each 元素变量)
+        boolean firstIsNextAssign = (first instanceof VariableDeclaration vd
+                && vd.initializer() instanceof InvocationExpr inv
+                && "next".equals(inv.methodName())
+                && inv.target() instanceof VarExpr nv
+                && candidate.iterVar.equals(nv.name()))
+                || (first instanceof ExpressionStatement es
+                && es.expression() instanceof AssignExpr assign
+                && assign.value() instanceof InvocationExpr inv2
+                && "next".equals(inv2.methodName())
+                && inv2.target() instanceof VarExpr nv2
+                && candidate.iterVar.equals(nv2.name()));
+        if (firstIsNextAssign) {
+            newBodyStmts.remove(0);
+        }
+        // 将剩余语句中的 iterVar.next() 替换为元素变量
+        List<Statement> replacedStmts = new ArrayList<>();
+        for (Statement stmt : newBodyStmts) {
+            replacedStmts.add(replaceNextCalls(stmt, candidate.iterVar,
+                    (VarExpr) elementVar));
+        }
+        newBodyStmts = replacedStmts;
         Statement newBody;
         if (newBodyStmts.isEmpty()) {
             newBody = new BlockStatement(List.of());
@@ -216,7 +275,7 @@ public class ForEachRewriter implements RewriteRule {
         }
 
         return new ForEachCandidate(candidate.iterVar, candidate.iterableExpr,
-                assign.target(), newBody);
+                elementVar, newBody);
     }
 
     /** 提取语句中的子语句列表(若为块语句则展开,否则包装为单元素列表) */
@@ -225,6 +284,118 @@ public class ForEachRewriter implements RewriteRule {
             return new ArrayList<>(bs.statements());
         }
         return new ArrayList<>(List.of(s));
+    }
+
+    /** 检查语句树中是否包含 {@code iterVar.next()} 调用 */
+    private boolean containsNextCall(Statement s, String iterVar) {
+        if (s instanceof ExpressionStatement es) {
+            return containsNextCallInExpr(es.expression(), iterVar);
+        }
+        if (s instanceof BlockStatement bs) {
+            return bs.statements().stream()
+                    .anyMatch(child -> containsNextCall(child, iterVar));
+        }
+        if (s instanceof LoopStatement ls) {
+            return containsNextCall(ls.body(), iterVar);
+        }
+        if (s instanceof IfStatement i) {
+            return containsNextCall(i.thenBranch(), iterVar)
+                    || (i.elseBranch() != null && containsNextCall(i.elseBranch(), iterVar));
+        }
+        return false;
+    }
+
+    /** 在表达式中查找 iterVar.next() */
+    private boolean containsNextCallInExpr(Expression e, String iterVar) {
+        if (e instanceof InvocationExpr inv
+                && "next".equals(inv.methodName())
+                && inv.target() instanceof VarExpr v
+                && iterVar.equals(v.name())) {
+            return true;
+        }
+        if (e instanceof InvocationExpr inv) {
+            if (inv.target() != null && containsNextCallInExpr(inv.target(), iterVar)) {
+                return true;
+            }
+            return inv.arguments().stream()
+                    .anyMatch(a -> containsNextCallInExpr(a, iterVar));
+        }
+        if (e instanceof BinExpr bin) {
+            return containsNextCallInExpr(bin.left(), iterVar)
+                    || containsNextCallInExpr(bin.right(), iterVar);
+        }
+        if (e instanceof UnExpr un) {
+            return containsNextCallInExpr(un.operand(), iterVar);
+        }
+        if (e instanceof CastExpr cast) {
+            return containsNextCallInExpr(cast.operand(), iterVar);
+        }
+        return false;
+    }
+
+    /** 将语句中的 {@code iterVar.next()} 调用替换为 {@code replacement} */
+    private Statement replaceNextCalls(Statement s, String iterVar, VarExpr replacement) {
+        if (s instanceof ExpressionStatement es) {
+            return new ExpressionStatement(
+                    replaceNextInExpr(es.expression(), iterVar, replacement));
+        }
+        if (s instanceof BlockStatement bs) {
+            return new BlockStatement(bs.statements().stream()
+                    .map(child -> replaceNextCalls(child, iterVar, replacement))
+                    .toList());
+        }
+        if (s instanceof ReturnStatement rs) {
+            return new ReturnStatement(rs.value() != null
+                    ? replaceNextInExpr(rs.value(), iterVar, replacement) : null);
+        }
+        if (s instanceof LoopStatement ls) {
+            return new LoopStatement(ls.loopKind(), ls.initExpr(),
+                    ls.condition(), ls.incrExpr(),
+                    replaceNextCalls(ls.body(), iterVar, replacement));
+        }
+        if (s instanceof IfStatement i) {
+            return new IfStatement(
+                    i.condition() != null
+                            ? replaceNextInExpr(i.condition(), iterVar, replacement) : null,
+                    replaceNextCalls(i.thenBranch(), iterVar, replacement),
+                    i.elseBranch() != null
+                            ? replaceNextCalls(i.elseBranch(), iterVar, replacement) : null);
+        }
+        return s;
+    }
+
+    /** 将表达式中的 {@code iterVar.next()} 替换为 {@code replacement} */
+    private Expression replaceNextInExpr(Expression e, String iterVar, VarExpr replacement) {
+        if (e instanceof InvocationExpr inv
+                && "next".equals(inv.methodName())
+                && inv.target() instanceof VarExpr v
+                && iterVar.equals(v.name())) {
+            return replacement;
+        }
+        if (e instanceof InvocationExpr inv) {
+            List<Expression> newArgs = new ArrayList<>();
+            for (Expression arg : inv.arguments()) {
+                newArgs.add(replaceNextInExpr(arg, iterVar, replacement));
+            }
+            return new InvocationExpr(
+                    inv.target() != null
+                            ? replaceNextInExpr(inv.target(), iterVar, replacement) : null,
+                    inv.methodName(), newArgs, inv.returnType());
+        }
+        if (e instanceof BinExpr bin) {
+            return new BinExpr(bin.operator(),
+                    replaceNextInExpr(bin.left(), iterVar, replacement),
+                    replaceNextInExpr(bin.right(), iterVar, replacement));
+        }
+        if (e instanceof UnExpr un) {
+            return new UnExpr(un.operator(),
+                    replaceNextInExpr(un.operand(), iterVar, replacement));
+        }
+        if (e instanceof CastExpr cast) {
+            return new CastExpr(cast.targetType(),
+                    replaceNextInExpr(cast.operand(), iterVar, replacement));
+        }
+        return e;
     }
 
     /**

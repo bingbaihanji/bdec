@@ -103,6 +103,23 @@ public class AstBuilder {
                 collectImport(com.bingbaihanji.bdec.type.JavaType.classType(insn.nameHint()),
                         imports, thisClass);
             }
+            // Iterator模式:当调用iterator()/hasNext()/next()时,添加Iterator导入
+            if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.INVOKE
+                    && insn.nameHint() != null) {
+                String mName = insn.nameHint();
+                if ("iterator".equals(mName) || "hasNext".equals(mName)
+                        || "next".equals(mName)) {
+                    collectImport(com.bingbaihanji.bdec.type.JavaType.classType(
+                            "java/util/Iterator"), imports, thisClass);
+                }
+                // Map.entry() 调用需要 Map.Entry 的导入
+                if ("entry".equals(mName) && insn.resultType() != null
+                        && insn.resultType().internalName() != null
+                        && insn.resultType().internalName().contains("Map$Entry")) {
+                    collectImport(com.bingbaihanji.bdec.type.JavaType.classType(
+                            "java/util/Map$Entry"), imports, thisClass);
+                }
+            }
         }
     }
 
