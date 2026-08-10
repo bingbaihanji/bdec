@@ -110,6 +110,11 @@ public final class BlockReducer {
             return name.startsWith("var") || name.startsWith("tmp") || name.startsWith("?")
                     || "this".equals(name);
         }
+        // Also skip standalone literal expressions — strings, numbers,
+        // booleans are not valid statements by themselves.
+        if (e instanceof LitExpr) {
+            return true;
+        }
         return false;
     }
 
@@ -121,6 +126,18 @@ public final class BlockReducer {
             return true;
         }
         return false;
+    }
+
+    /** Check if an expression is an assignment (or compound assignment).
+     *  Assignments cannot safely be promoted to return exprs — their type
+     *  may not match the method return type. */
+    private static boolean isAssignExpr(Expression e) {
+        return e instanceof com.bingbaihanji.bdec.ast.expr.AssignExpr
+                || e instanceof com.bingbaihanji.bdec.ast.expr.UnExpr
+                && (((com.bingbaihanji.bdec.ast.expr.UnExpr) e).operator()
+                == com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC
+                || ((com.bingbaihanji.bdec.ast.expr.UnExpr) e).operator()
+                == com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC);
     }
 
     /** Check if a statement block is empty or contains only empty blocks. */
@@ -325,8 +342,8 @@ public final class BlockReducer {
             List<Statement> result = new ArrayList<>();
             for (Statement child : bs.statements()) {
                 if (child instanceof ExpressionStatement es) {
-                    if (isVoidExpr(es.expression())) {
-                        result.add(child); // keep void expr as-is
+                    if (isVoidExpr(es.expression()) || isAssignExpr(es.expression())) {
+                        result.add(child); // keep void/assign expr as-is
                     } else {
                         result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
                     }
@@ -345,8 +362,8 @@ public final class BlockReducer {
             return new BlockStatement(result);
         }
         if (s instanceof ExpressionStatement es) {
-            if (isVoidExpr(es.expression())) {
-                return s; // keep void expr as-is
+            if (isVoidExpr(es.expression()) || isAssignExpr(es.expression())) {
+                return s; // keep void/assign expr as-is
             }
             return new ReturnStatement(boolLiteral(es.expression(), isBoolRet));
         }
@@ -742,7 +759,8 @@ public final class BlockReducer {
                 if (s instanceof ExpressionStatement es
                         && es.expression() != null
                         && !isIgnorableExpr(es.expression())
-                        && !isVoidExpr(es.expression())) {
+                        && !isVoidExpr(es.expression())
+                        && !isAssignExpr(es.expression())) {
                     statements.set(i, new ReturnStatement(es.expression()));
                     break;
                 }
@@ -751,7 +769,8 @@ public final class BlockReducer {
                     if (last instanceof ExpressionStatement es
                             && es.expression() != null
                             && !isIgnorableExpr(es.expression())
-                            && !isVoidExpr(es.expression())) {
+                            && !isVoidExpr(es.expression())
+                            && !isAssignExpr(es.expression())) {
                         List<Statement> newStmts = new ArrayList<>(bs.statements());
                         newStmts.set(newStmts.size() - 1,
                                 new ReturnStatement(es.expression()));
