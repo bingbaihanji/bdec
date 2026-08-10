@@ -141,8 +141,12 @@ public class StringConcatRewriter implements RewriteRule {
 
     /** Check if an expression already produces a String-compatible value. */
     private boolean looksLikeString(Expression e) {
-        if (e instanceof LitExpr lit && lit.value() instanceof String) return true;
-        if (e instanceof InvocationExpr inv && "toString".equals(inv.methodName())) return true;
+        if (e instanceof LitExpr lit && lit.value() instanceof String) {
+            return true;
+        }
+        if (e instanceof InvocationExpr inv && "toString".equals(inv.methodName())) {
+            return true;
+        }
         return false;
     }
 
@@ -156,7 +160,9 @@ public class StringConcatRewriter implements RewriteRule {
         if (parts.size() == 1) {
             // Single part: ensure it's String-compatible
             Expression single = parts.get(0);
-            if (looksLikeString(single)) return single;
+            if (looksLikeString(single)) {
+                return single;
+            }
             return new BinExpr(BinaryOperator.ADD,
                     new LitExpr("", JavaType.classType("java/lang/String")), single);
         }

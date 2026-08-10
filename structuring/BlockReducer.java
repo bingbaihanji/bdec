@@ -58,6 +58,11 @@ public final class BlockReducer {
 
     private final boolean isInstanceMethod;
 
+    // Stack of declared variable name sets — one per scope.
+    // We push/pop when entering/leaving branch bodies so that each
+    // branch gets its own variable declarations for temp variables.
+    private final Deque<Set<String>> declaredVarNameStack = new ArrayDeque<>();
+
     // Transient state for NEW+INIT merging (CondenseConstruction pattern)
     private Map<Integer, List<IrInstruction>> currentNewToInit = Map.of();
 
@@ -79,11 +84,6 @@ public final class BlockReducer {
     // Current LinearIr (set at start of reduce(), used during expression
     // translation to check for field/local name conflicts).
     private LinearIr currentIr = null;
-
-    // Stack of declared variable name sets — one per scope.
-    // We push/pop when entering/leaving branch bodies so that each
-    // branch gets its own variable declarations for temp variables.
-    private final Deque<Set<String>> declaredVarNameStack = new ArrayDeque<>();
 
     public BlockReducer() {this(true);}
 
@@ -314,7 +314,9 @@ public final class BlockReducer {
     }
 
     /** Wrap a branch body's ExpressionStatements as ReturnStatements
-     *  (handles orphan CONSTs in branches without their own RETURN). */
+     *  (handles orphan CONSTs in branches without their own RETURN).
+     *  Skips void expressions (e.g., orphan lock.unlock() calls) to avoid
+     *  "void cannot be converted to int" compile errors. */
     private static Statement wrapAsReturn(Statement s, boolean isBoolRet) {
         if (s instanceof BlockStatement bs) {
             if (hasReturnStmt(s)) {
@@ -323,7 +325,11 @@ public final class BlockReducer {
             List<Statement> result = new ArrayList<>();
             for (Statement child : bs.statements()) {
                 if (child instanceof ExpressionStatement es) {
-                    result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
+                    if (isVoidExpr(es.expression())) {
+                        result.add(child); // keep void expr as-is
+                    } else {
+                        result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
+                    }
                 } else if (child instanceof BlockStatement inner) {
                     result.add(wrapAsReturn(inner, isBoolRet));
                 } else {
@@ -339,6 +345,9 @@ public final class BlockReducer {
             return new BlockStatement(result);
         }
         if (s instanceof ExpressionStatement es) {
+            if (isVoidExpr(es.expression())) {
+                return s; // keep void expr as-is
+            }
             return new ReturnStatement(boolLiteral(es.expression(), isBoolRet));
         }
         return s;
@@ -553,7 +562,9 @@ public final class BlockReducer {
             queue.add(hb);
             while (!queue.isEmpty()) {
                 BasicBlock curr = queue.poll();
-                if (!visited.add(curr)) continue;
+                if (!visited.add(curr)) {
+                    continue;
+                }
                 handlerBlocks.add(curr);
                 for (var edge : graph.outgoingOf(curr)) {
                     if (edge.kind() != EdgeKind.EXCEPTION
@@ -1026,6 +1037,34 @@ public final class BlockReducer {
                     flat.addAll(bs.statements());
                 } else {
                     flat.add(s);
+                }
+            }
+            // Post-pass: fix duplicate variable declarations across groups.
+            // When multiple BlockGroups in the same branch each declare the same
+            // variable (e.g., default init then real init), convert the first
+            // occurrence to a plain assignment.
+            Set<String> seenBranchDecls = new HashSet<>();
+            for (int i = 0; i < flat.size(); i++) {
+                if (flat.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
+                    if (!seenBranchDecls.add(vd.name()) && vd.initializer() != null) {
+                        flat.set(i, new com.bingbaihanji.bdec.ast.stmt.ExpressionStatement(
+                                new com.bingbaihanji.bdec.ast.expr.AssignExpr(
+                                        new com.bingbaihanji.bdec.ast.expr.VarExpr(vd.name()),
+                                        vd.initializer())));
+                    }
+                }
+            }
+            // Post-pass: strip unreachable statements after RETURN/THROW
+            for (int i = 0; i < flat.size(); i++) {
+                Statement s = flat.get(i);
+                if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement
+                        || s instanceof com.bingbaihanji.bdec.ast.stmt.ThrowStatement
+                        || s.kind() == com.bingbaihanji.bdec.ast.AstKind.BREAK
+                        || s.kind() == com.bingbaihanji.bdec.ast.AstKind.CONTINUE) {
+                    if (i + 1 < flat.size()) {
+                        flat = new ArrayList<>(flat.subList(0, i + 1));
+                        break;
+                    }
                 }
             }
             if (flat.size() == 1) {
@@ -2427,7 +2466,7 @@ public final class BlockReducer {
      *  Directly translates the collected handler instructions without depending
      *  on BlockGroup/block grouping, which can miss split handler fragments. */
     private Statement translateHandlerWithoutThrow(TryCatchInfo info, LinearIr ir,
-                                                    List<IrInstruction> handlerInsns) {
+                                                   List<IrInstruction> handlerInsns) {
         // Skip the final THROW instruction for finally body
         List<IrInstruction> bodyInsns = handlerInsns;
         if (!bodyInsns.isEmpty() && bodyInsns.getLast().opcode() == IrOpcode.THROW) {
@@ -2459,11 +2498,17 @@ public final class BlockReducer {
         // Translate each instruction that is a statement root or unconsumed
         List<Statement> stmts = new ArrayList<>();
         for (IrInstruction insn : bodyInsns) {
-            if (insn.opcode() == IrOpcode.CONDITION) continue;
-            if (currentStoresToSkip.contains(insn.id())) continue;
+            if (insn.opcode() == IrOpcode.CONDITION) {
+                continue;
+            }
+            if (currentStoresToSkip.contains(insn.id())) {
+                continue;
+            }
             if (isStatementRoot(insn)) {
                 Statement s = translateStmt(insn);
-                if (s != null) stmts.add(s);
+                if (s != null) {
+                    stmts.add(s);
+                }
             } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
                 Expression e = translateExpr(insn);
                 if (e != null && !isIgnorableExpr(e)) {
@@ -2471,8 +2516,12 @@ public final class BlockReducer {
                 }
             }
         }
-        if (stmts.isEmpty()) return new BlockStatement(List.of());
-        if (stmts.size() == 1) return stmts.getFirst();
+        if (stmts.isEmpty()) {
+            return new BlockStatement(List.of());
+        }
+        if (stmts.size() == 1) {
+            return stmts.getFirst();
+        }
         return new BlockStatement(stmts);
     }
 

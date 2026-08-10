@@ -64,7 +64,8 @@ public class BdecEngine implements Decompiler {
                     new TernaryRewriter(), new BoxingRewriter(),
                     new StringSwitchRewriter(),
                     new EnumSwitchRewriter(),
-                    new EnumRewriter()));
+                    new EnumRewriter(),
+                    new SourceCleanup()));
 
     private final SourceEmitter sourceEmitter = new SourceEmitter();
 

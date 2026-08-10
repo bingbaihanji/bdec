@@ -1318,12 +1318,20 @@ public final class IrBuilder {
      *  This prevents slot 0 ('this') from being confused with a temp stored at slot 0. */
     private Variable createWriteVar(List<Variable> variables, int slot, JavaType type) {
         int maxVersion = 0;
+        boolean isParam = false;
         for (Variable v : variables) {
             if (v.slot() == slot) {
                 maxVersion = Math.max(maxVersion, v.version());
+                // Propagate isParameter from version 0 to all new versions.
+                // This prevents BlockReducer from emitting VariableDeclaration
+                // for parameter reassignments (e.g. "int dest = 0" shadowing
+                // the parameter "int[] dest").
+                if (v.isParameter() && v.version() == 0) {
+                    isParam = true;
+                }
             }
         }
-        Variable v = new Variable(slot, maxVersion + 1, type, false, slot);
+        Variable v = new Variable(slot, maxVersion + 1, type, isParam, slot);
         // Carry forward LVT name so new versions retain original parameter names.
         // BUT skip slot 0 in instance methods: "this" is version 0 only;
         // stores to slot 0 are a DIFFERENT variable reusing the slot.

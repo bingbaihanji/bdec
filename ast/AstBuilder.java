@@ -34,6 +34,12 @@ public class AstBuilder {
         return raw;
     }
 
+    /** Extract simple class name from internal name (no inner-class info). */
+    private static String simpleName(String internal) {
+        int idx = internal.lastIndexOf('/');
+        return idx >= 0 ? internal.substring(idx + 1) : internal;
+    }
+
     /** Collect imports from types referenced in method bodies (static calls,
      *  new expressions, etc.) by scanning IR instructions. */
     private void collectBodyImports(StructuredMethod sm, Set<String> imports, String thisClass) {
@@ -64,12 +70,6 @@ public class AstBuilder {
                         imports, thisClass);
             }
         }
-    }
-
-    /** Extract simple class name from internal name (no inner-class info). */
-    private static String simpleName(String internal) {
-        int idx = internal.lastIndexOf('/');
-        return idx >= 0 ? internal.substring(idx + 1) : internal;
     }
 
     // ── helpers ──────────────────────────────────────────────────
