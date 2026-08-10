@@ -139,11 +139,15 @@ public class LambdaRewriter implements RewriteRule {
                                    ClassFileModel cfm,
                                    DecompileContext ctx) {
         // Replace LambdaExpr placeholders with decompiled bodies.
-        if (e instanceof LambdaExpr lambda && !lambda.isMethodRef()
-                && lambda.bodyExpr() instanceof VarExpr ve
-                && ve.name().startsWith("/* lambda")) {
-            return buildLambdaBody(lambda, ve.name(), cfm, ctx);
-        }
+        // Temporarily disabled: need to fix params reconstruction first.
+        // The placeholder has empty params (from INDY operands) but the
+        // decompiled body references the lambda method's params by name.
+        // TODO: reconstruct params from lambda method, not INDY operands.
+        //if (e instanceof LambdaExpr lambda && !lambda.isMethodRef()
+        //        && lambda.bodyExpr() instanceof VarExpr ve
+        //        && ve.name().startsWith("/* lambda")) {
+        //    return buildLambdaBody(lambda, ve.name(), cfm, ctx);
+        //}
 
         if (e instanceof InvocationExpr inv) {
             String name = inv.methodName();
