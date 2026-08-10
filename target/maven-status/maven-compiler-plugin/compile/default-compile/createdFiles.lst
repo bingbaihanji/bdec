@@ -3,6 +3,7 @@ com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter.class
 com\bingbaihanji\bdec\semantic\SemanticReconstructor.class
 com\bingbaihanji\bdec\ast\AstKind.class
 com\bingbaihanji\bdec\ast\rewrite\PatternMatchRewriter.class
+com\bingbaihanji\bdec\ast\rewrite\SourceCleanup.class
 com\bingbaihanji\bdec\emit\StatementEmitter$1.class
 com\bingbaihanji\bdec\structuring\BranchAnalyzer.class
 com\bingbaihanji\bdec\ast\stmt\LabeledStmt.class
@@ -132,6 +133,7 @@ com\bingbaihanji\bdec\DecompileContext.class
 com\bingbaihanji\bdec\ast\expr\VarExpr.class
 com\bingbaihanji\bdec\ast\expr\UnaryOperator.class
 com\bingbaihanji\bdec\ast\rewrite\ForEachRewriter$ForEachCandidate.class
+com\bingbaihanji\bdec\ast\rewrite\SourceCleanup$1.class
 com\bingbaihanji\bdec\type\JavaType$1.class
 com\bingbaihanji\bdec\ast\rewrite\BoxingRewriter.class
 com\bingbaihanji\bdec\structuring\SwitchInfo.class

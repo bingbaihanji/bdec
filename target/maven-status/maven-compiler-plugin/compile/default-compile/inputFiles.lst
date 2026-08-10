@@ -31,6 +31,7 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\re
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\RecordRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\RewriteRule.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\SealedClassRewriter.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\SourceCleanup.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\StringConcatRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\StringSwitchRewriter.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\main\java\com\bingbaihanji\bdec\ast\rewrite\SwitchExprRewriter.java

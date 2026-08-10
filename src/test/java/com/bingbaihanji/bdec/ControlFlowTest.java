@@ -208,4 +208,111 @@ public class ControlFlowTest {
         // Should NOT use lambda arrow notation for method references
         DecompileTestHarness.assertNotContains(out, "->");
     }
+
+    @Test
+    public void testVoidMethodNotReturned() throws Exception {
+        // Fix: void method calls should NOT be wrapped in return statements
+        // when the other branch has a return (wrapAsReturn fix).
+        String source = """
+                package test;
+                import java.util.concurrent.locks.ReentrantLock;
+                public class VoidReturnTest {
+                    private final ReentrantLock lock = new ReentrantLock();
+                    public int test(boolean flag) {
+                        if (flag) {
+                            lock.lock();
+                            try {
+                                return 42;
+                            } finally {
+                                lock.unlock();
+                            }
+                        }
+                        return 0;
+                    }
+                }
+                """;
+        String out = harness.decompileSource(source, "VoidReturnTest");
+        DecompileTestHarness.assertContains(out, "class VoidReturnTest", "lock", "return");
+        // Should NOT wrap void lock.lock() in a return statement
+        DecompileTestHarness.assertNotContains(out, "return lock.lock()");
+        DecompileTestHarness.assertNotContains(out, "return lock.unlock()");
+        // Try to compile the decompiled output
+        assertCompiles(out, "VoidReturnTest");
+    }
+
+    @Test
+    public void testDuplicateVarDeclMerged() throws Exception {
+        // Fix: duplicate variable declarations in the same branch
+        // should be converted to assignments (translateBranchBody fix).
+        String source = """
+                package test;
+                public class DupVarTest {
+                    public int test(int[] dest) {
+                        if (dest.length != 0) {
+                            int transferCount = 0;
+                            transferCount = Math.min(10, dest.length);
+                            return transferCount;
+                        }
+                        return 0;
+                    }
+                }
+                """;
+        String out = harness.decompileSource(source, "DupVarTest");
+        // Should compile clean
+        assertCompiles(out, "DupVarTest");
+    }
+
+    /** Verify that decompiled Java source compiles with javac. */
+    private static void assertCompiles(String source, String className) {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            return; // skip if no compiler available
+        }
+        java.io.File tmpDir = null;
+        try {
+            java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("bdec-compile-");
+            tmpDir = dir.toFile();
+            java.io.File srcFile = new java.io.File(dir.toFile(), className + ".java");
+            java.nio.file.Files.writeString(srcFile.toPath(), source,
+                    java.nio.charset.StandardCharsets.UTF_8);
+            // Capture stderr to get compile errors
+            java.io.ByteArrayOutputStream errStream = new java.io.ByteArrayOutputStream();
+            int result = compiler.run(null, null, errStream,
+                    "-d", tmpDir.getAbsolutePath(),
+                    srcFile.getAbsolutePath());
+            if (result != 0) {
+                // Print source and errors for debugging
+                System.err.println("=== Failed to compile decompiled output: " + className + " ===");
+                System.err.println(source);
+                System.err.println("=== Compile errors ===");
+                System.err.println(errStream.toString());
+                System.err.println("=== End ===");
+                throw new AssertionError("Decompiled output for " + className
+                        + " failed to compile (exit code " + result + "): "
+                        + errStream.toString());
+            }
+        } catch (AssertionError e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Compilation check failed for " + className, e);
+        } finally {
+            if (tmpDir != null) {
+                deleteDir(tmpDir);
+            }
+        }
+    }
+
+    private static void deleteDir(java.io.File dir) {
+        java.io.File[] files = dir.listFiles();
+        if (files != null) {
+            for (java.io.File f : files) {
+                if (f.isDirectory()) {
+                    deleteDir(f);
+                } else {
+                    f.delete();
+                }
+            }
+        }
+        dir.delete();
+    }
 }
