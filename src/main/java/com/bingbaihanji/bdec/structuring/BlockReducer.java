@@ -340,18 +340,29 @@ public final class BlockReducer {
                 return s; // already has RETURN
             }
             List<Statement> result = new ArrayList<>();
+            boolean addedReturn = false;
             for (Statement child : bs.statements()) {
                 if (child instanceof ExpressionStatement es) {
                     if (isVoidExpr(es.expression()) || isAssignExpr(es.expression())) {
                         result.add(child); // keep void/assign expr as-is
                     } else {
                         result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
+                        addedReturn = true;
                     }
                 } else if (child instanceof BlockStatement inner) {
-                    result.add(wrapAsReturn(inner, isBoolRet));
+                    Statement wrapped = wrapAsReturn(inner, isBoolRet);
+                    result.add(wrapped);
+                    if (hasReturnStmt(wrapped)) addedReturn = true;
                 } else {
                     result.add(child);
+                    if (child instanceof ReturnStatement) addedReturn = true;
                 }
+            }
+            // If no return was added, append a synthetic one so the method compiles
+            if (!addedReturn) {
+                result.add(new ReturnStatement(isBoolRet
+                        ? new com.bingbaihanji.bdec.ast.expr.LitExpr(false, JavaType.BOOLEAN)
+                        : new com.bingbaihanji.bdec.ast.expr.LitExpr(null, JavaType.classType("java/lang/Object"))));
             }
             if (result.isEmpty()) {
                 return new BlockStatement(List.of());
@@ -363,7 +374,12 @@ public final class BlockReducer {
         }
         if (s instanceof ExpressionStatement es) {
             if (isVoidExpr(es.expression()) || isAssignExpr(es.expression())) {
-                return s; // keep void/assign expr as-is
+                // For assign exprs, add a synthetic null return after to satisfy the compiler
+                return new BlockStatement(List.of(
+                        s,
+                        new ReturnStatement(isBoolRet
+                                ? new com.bingbaihanji.bdec.ast.expr.LitExpr(false, JavaType.BOOLEAN)
+                                : new com.bingbaihanji.bdec.ast.expr.LitExpr(null, JavaType.classType("java/lang/Object")))));
             }
             return new ReturnStatement(boolLiteral(es.expression(), isBoolRet));
         }
@@ -1482,6 +1498,13 @@ public final class BlockReducer {
                 continue;
             }
 
+            // Skip synthetic $assertionsDisabled field stores — these are
+            // JVM assertion artifacts that don't exist in source code.
+            if (insn.opcode() == IrOpcode.FIELD_STORE
+                    && "$assertionsDisabled".equals(insn.nameHint())) {
+                continue;
+            }
+
             // Skip INIT calls already merged into NEW
             if (currentInitToSkip.contains(insn.id())) {
                 continue;
@@ -1924,10 +1947,9 @@ public final class BlockReducer {
                     // Detect boolean variable compared to 0:
                     //   boolean == 0 → !boolean,  boolean != 0 → boolean
                     // This handles if(flag) vs if(!flag) from bytecode IFEQ/IFNE.
-                    boolean leftIsBoolVar = leftOp instanceof Variable v
-                            && v.type().kind() == com.bingbaihanji.bdec.type.TypeKind.BOOLEAN;
-                    boolean rightIsBoolVar = rightOp instanceof Variable v
-                            && v.type().kind() == com.bingbaihanji.bdec.type.TypeKind.BOOLEAN;
+                    // Also handles boolean-returning method calls (desiredAssertionStatus, etc.)
+                    boolean leftIsBool = isBooleanValue(leftOp);
+                    boolean rightIsBool = isBooleanValue(rightOp);
                     boolean rightIsZero = rightOp instanceof ConstantValue cv
                             && cv.value() instanceof Integer i && i == 0;
                     boolean leftIsZero = leftOp instanceof ConstantValue cv
@@ -1935,7 +1957,7 @@ public final class BlockReducer {
 
                     BinaryOperator cmpOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
 
-                    if (leftIsBoolVar && rightIsZero) {
+                    if (leftIsBool && rightIsZero) {
                         Expression varExpr = valueToExpr(leftOp);
                         if (cmpOp == BinaryOperator.EQ) {
                             // boolean == 0 → !boolean (IFEQ)
@@ -1945,7 +1967,7 @@ public final class BlockReducer {
                             yield varExpr;
                         }
                     }
-                    if (rightIsBoolVar && leftIsZero) {
+                    if (rightIsBool && leftIsZero) {
                         Expression varExpr = valueToExpr(rightOp);
                         if (cmpOp == BinaryOperator.EQ) {
                             yield new UnExpr(UnaryOperator.NOT, varExpr);
@@ -2295,6 +2317,11 @@ public final class BlockReducer {
     private Expression constToExpr(IrInstruction insn) {
         if (!insn.operands().isEmpty() && insn.operands().getFirst() instanceof ConstantValue cv) {
             Object v = cv.value();
+            // Class literal constant (from LDC): emit as ClassName.class
+            if (v instanceof String s && isClassType(cv.type())) {
+                String simpleName = simplifyClassName(s);
+                return new FieldAccessExpr(new VarExpr(simpleName), "class");
+            }
             if (v instanceof String s) {
                 return new LitExpr(s, JavaType.classType("java/lang/String"));
             }
@@ -2314,6 +2341,12 @@ public final class BlockReducer {
         return new VarExpr("/* const */");
     }
 
+    /** Check if a type represents java.lang.Class. */
+    private static boolean isClassType(com.bingbaihanji.bdec.type.JavaType type) {
+        return type != null && type.kind() == TypeKind.CLASS
+                && "java/lang/Class".equals(type.internalName());
+    }
+
     /** Check if a local variable has the same name as the given field,
      *  which would create ambiguity when the "this." prefix is stripped. */
     private boolean localVarShadowsField(String fieldName) {
@@ -2323,6 +2356,34 @@ public final class BlockReducer {
         for (Variable v : currentIr.variables()) {
             String name = v.name();
             if (name != null && name.equals(fieldName) && !(v.slot() == 0 && v.version() == 0)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Check if a Value represents a boolean value (variable, method return, etc.).
+     *  This enables proper `if(flag)` vs `if(!flag)` emission instead of
+     *  `if(flag != 0)` which produces type-mismatch errors for boolean expressions. */
+    private static boolean isBooleanValue(Value v) {
+        if (v instanceof Variable var) {
+            return var.type().kind() == TypeKind.BOOLEAN;
+        }
+        if (v instanceof InstructionRef ref) {
+            IrInstruction def = ref.instruction();
+            // Check if the defining instruction produces a boolean result
+            if (def.resultType() != null
+                    && def.resultType().kind() == TypeKind.BOOLEAN) {
+                return true;
+            }
+            // INVOKE with boolean return type
+            if (def.opcode() == IrOpcode.INVOKE && def.resultType() != null
+                    && def.resultType().kind() == TypeKind.BOOLEAN) {
+                return true;
+            }
+            // CONDITION or COMPARE produces boolean
+            if (def.opcode() == IrOpcode.CONDITION
+                    || def.opcode() == IrOpcode.COMPARE) {
                 return true;
             }
         }
@@ -2458,7 +2519,9 @@ public final class BlockReducer {
                     break;
                 }
             }
-            if (hasMonitorEnter) break;
+            if (hasMonitorEnter) {
+                break;
+            }
         }
         if (!hasMonitorEnter) {
             return false;
