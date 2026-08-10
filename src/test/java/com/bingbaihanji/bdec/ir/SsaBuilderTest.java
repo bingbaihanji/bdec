@@ -12,7 +12,10 @@ import org.junit.Test;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Tests for SSA construction and related optimization passes.
@@ -20,7 +23,9 @@ import static org.junit.Assert.*;
 public class SsaBuilderTest {
 
     private final IrBuilder irBuilder = new IrBuilder();
+
     private final CfgBuilder cfgBuilder = new CfgBuilder();
+
     private final SsaBuilder ssaBuilder = new SsaBuilder();
 
     @Test

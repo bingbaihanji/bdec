@@ -1,8 +1,8 @@
 package com.bingbaihanji.bdec;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.After;
 
 import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
@@ -11,8 +11,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Round-trip tests for the bytecode test module (com.bytecode.test).
@@ -26,10 +24,26 @@ import java.util.List;
 public class BytecodeTestRoundTripTest {
 
     private static final String TEST_SRC_DIR = "src/test/java/com/bytecode/test";
+
     private static final String TEST_PKG = "com.bytecode.test";
 
     private DecompileTestHarness harness;
+
     private Path tempDir;
+
+    private static void deleteRecursively(File dir) {
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                if (f.isDirectory()) {
+                    deleteRecursively(f);
+                } else {
+                    f.delete();
+                }
+            }
+        }
+        dir.delete();
+    }
 
     @Before
     public void setUp() throws Exception {
@@ -37,14 +51,14 @@ public class BytecodeTestRoundTripTest {
         tempDir = Files.createTempDirectory("bdec-bytetest-");
     }
 
+    // === Helper: decompile a pre-compiled .class and recompile ===
+
     @After
     public void tearDown() {
         if (tempDir != null) {
             deleteRecursively(tempDir.toFile());
         }
     }
-
-    // === Helper: decompile a pre-compiled .class and recompile ===
 
     private String decompileAndRecompile(String className) throws Exception {
         Path classFile = Paths.get("target/test-classes/" + TEST_PKG.replace('.', '/'), className + ".class");
@@ -91,17 +105,6 @@ public class BytecodeTestRoundTripTest {
         } catch (Exception e) {
             return "ERROR: " + e.getMessage();
         }
-    }
-
-    private static void deleteRecursively(File dir) {
-        File[] files = dir.listFiles();
-        if (files != null) {
-            for (File f : files) {
-                if (f.isDirectory()) deleteRecursively(f);
-                else f.delete();
-            }
-        }
-        dir.delete();
     }
 
     // === Round-trip tests for each class ===

@@ -4,7 +4,6 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
 import com.bingbaihanji.bdec.ast.expr.AssignExpr;
 import com.bingbaihanji.bdec.ast.expr.BinExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
@@ -14,6 +13,7 @@ import com.bingbaihanji.bdec.ast.expr.LitExpr;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
@@ -39,6 +39,25 @@ import java.util.Set;
  */
 public class SourceCleanup implements RewriteRule {
 
+    /** Collect all field names from a type declaration to prevent shadowing. */
+    private static Set<String> collectFieldNames(TypeDeclaration td) {
+        Set<String> names = new HashSet<>();
+        for (AstNode m : td.children()) {
+            if (m instanceof FieldDeclaration fd && fd.name() != null) {
+                names.add(fd.name());
+            }
+        }
+        return names;
+    }
+
+    /** Check if a name looks like a class name (starts with uppercase).
+     *  Static method targets like "Math" or "String" should not be
+     *  auto-declared as local variables. */
+    private static boolean looksLikeClassName(String name) {
+        return name != null && !name.isEmpty()
+                && Character.isUpperCase(name.charAt(0));
+    }
+
     @Override
     public String name() {return "source-cleanup";}
 
@@ -49,17 +68,6 @@ public class SourceCleanup implements RewriteRule {
             types.add(cleanupType(td));
         }
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
-    }
-
-    /** Collect all field names from a type declaration to prevent shadowing. */
-    private static Set<String> collectFieldNames(TypeDeclaration td) {
-        Set<String> names = new HashSet<>();
-        for (AstNode m : td.children()) {
-            if (m instanceof FieldDeclaration fd && fd.name() != null) {
-                names.add(fd.name());
-            }
-        }
-        return names;
     }
 
     private TypeDeclaration cleanupType(TypeDeclaration td) {
@@ -83,7 +91,7 @@ public class SourceCleanup implements RewriteRule {
     }
 
     private Statement fix(Statement s, boolean nonVoid, JavaType retType,
-                           Set<String> fieldNames, Set<String> paramNames) {
+                          Set<String> fieldNames, Set<String> paramNames) {
         if (s == null) {
             return null;
         }
@@ -234,17 +242,9 @@ public class SourceCleanup implements RewriteRule {
     }
 
     private boolean isBuiltin(String name) {
-        return name.equals("null") || name.equals("this")
-                || name.equals("true") || name.equals("false")
-                || name.equals("super");
-    }
-
-    /** Check if a name looks like a class name (starts with uppercase).
-     *  Static method targets like "Math" or "String" should not be
-     *  auto-declared as local variables. */
-    private static boolean looksLikeClassName(String name) {
-        return name != null && !name.isEmpty()
-                && Character.isUpperCase(name.charAt(0));
+        return "null".equals(name) || "this".equals(name)
+                || "true".equals(name) || "false".equals(name)
+                || "super".equals(name);
     }
 
     private Expression defaultVal(JavaType t) {

@@ -5,8 +5,11 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /** M2: Complex lock/try-finally patterns matching RingBuffer structure. */
 public class LockTryFinallySample {
+
     private final ReentrantLock lock = new ReentrantLock();
+
     private final Condition notEmpty = lock.newCondition();
+
     private int count;
 
     // Pattern: lock + try-finally with return

@@ -67,10 +67,22 @@ public class StringConcatRewriter implements RewriteRule {
     private Statement rewriteStatement(Statement s) {
         if (s instanceof BlockStatement bs) {
             return new BlockStatement(bs.statements().stream()
-                    .map(this::rewriteStatement).toList());
+                    .map(this::rewriteStatement)
+                    .filter(st -> st != null)
+                    .toList());
         }
         if (s instanceof ExpressionStatement es) {
-            return new ExpressionStatement(rewriteExpr(es.expression()));
+            Expression orig = es.expression();
+            Expression rewritten = rewriteExpr(orig);
+            // A standalone makeConcatWithConstants call is never a valid
+            // Java statement — it's an orphan from broken CFG structuring
+            // (e.g., pattern-matching switch). Filter it out so the
+            // resulting BinExpr doesn't cause a compile error.
+            if (orig != rewritten && rewritten instanceof BinExpr
+                    && isFromIndyConcat(orig)) {
+                return null;
+            }
+            return new ExpressionStatement(rewritten);
         }
         if (s instanceof ReturnStatement rs) {
             return new ReturnStatement(rs.value() != null ? rewriteExpr(rs.value()) : null);
@@ -137,6 +149,13 @@ public class StringConcatRewriter implements RewriteRule {
             return null; // not a StringBuilder pattern
         }
         return buildConcatExpr(parts);
+    }
+
+    /** Check if an expression is an invokedynamic makeConcatWithConstants call. */
+    private static boolean isFromIndyConcat(Expression e) {
+        return e instanceof InvocationExpr inv
+                && "makeConcatWithConstants".equals(inv.methodName())
+                && inv.target() == null;
     }
 
     /** Check if an expression already produces a String-compatible value. */

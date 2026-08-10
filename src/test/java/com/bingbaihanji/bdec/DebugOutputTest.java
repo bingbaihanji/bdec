@@ -1,17 +1,16 @@
 package com.bingbaihanji.bdec;
 
 import com.bingbaihanji.bdec.bytecode.parser.ClassFileReader;
-import com.bingbaihanji.bdec.bytecode.model.*;
-import com.bingbaihanji.bdec.cfg.*;
 import org.junit.Test;
 
 import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
-import java.util.List;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public class DebugOutputTest {
+
     @Test
     public void printTryFinallyOutput() throws Exception {
         DecompileTestHarness h = new DecompileTestHarness();
@@ -26,20 +25,20 @@ public class DebugOutputTest {
         Path tmpDir = Files.createTempDirectory("bdec-debug-");
         Path srcFile = tmpDir.resolve("TryFinallySample.java");
         String source = """
-            package test;
-            import java.util.concurrent.locks.ReentrantLock;
-            public class TryFinallySample {
-                private final ReentrantLock lock = new ReentrantLock();
-                public int test() {
-                    lock.lock();
-                    try {
-                        return 42;
-                    } finally {
-                        lock.unlock();
-                    }
-                }
-            }
-            """;
+                        package test;
+                        import java.util.concurrent.locks.ReentrantLock;
+                        public class TryFinallySample {
+                            private final ReentrantLock lock = new ReentrantLock();
+                            public int test() {
+                                lock.lock();
+                                try {
+                                    return 42;
+                                } finally {
+                                    lock.unlock();
+                                }
+                            }
+                        }
+                        """;
         Files.writeString(srcFile, source, StandardCharsets.UTF_8);
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         compiler.run(null, null, null, "-g", "-d", tmpDir.toString(), srcFile.toString());
@@ -52,7 +51,9 @@ public class DebugOutputTest {
 
         for (var method : cm.methods()) {
             System.out.println("Method: " + method.name());
-            if (method.instructions() == null) continue;
+            if (method.instructions() == null) {
+                continue;
+            }
             System.out.println("  Instructions:");
             for (var insn : method.instructions()) {
                 System.out.printf("    %d: %s%n", insn.offset(), insn.mnemonic());

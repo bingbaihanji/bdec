@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.bingbaihanji.bdec.ControlFlowTest" time="1.333" tests="23" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.bingbaihanji.bdec.ControlFlowTest" time="1.155" tests="23" errors="0" skipped="0" failures="2">
   <properties>
     <property name="java.specification.version" value="25"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -15,9 +15,8 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="CN"/>
     <property name="sun.boot.library.path" value="D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin"/>
-    <property name="sun.java.command" value="C:\Users\bingb\AppData\Local\Temp\surefire12685026478979215742\surefirebooter-20260810105947440_3.jar C:\Users\bingb\AppData\Local\Temp\surefire12685026478979215742 2026-08-10T10-59-47_303-jvmRun1 surefire-20260810105947440_1tmp surefire_0-20260810105947440_2tmp"/>
+    <property name="sun.java.command" value="C:\Users\bingb\AppData\Local\Temp\surefire8589779655887594389\surefirebooter-20260810152237456_3.jar C:\Users\bingb\AppData\Local\Temp\surefire8589779655887594389 2026-08-10T15-22-37_333-jvmRun1 surefire-20260810152237456_1tmp surefire_0-20260810152237456_2tmp"/>
     <property name="jdk.debug" value="release"/>
-    <property name="test" value="BytecodeTestRoundTripTest,ControlFlowTest"/>
     <property name="surefire.test.class.path" value="D:\bingbaihanji\fxdecomplie\bdec\bdec\target\test-classes;D:\bingbaihanji\fxdecomplie\bdec\bdec\target\classes;D:\develop\maven\apache-maven-3.9.9\repository\junit\junit\4.13.2\junit-4.13.2.jar;D:\develop\maven\apache-maven-3.9.9\repository\org\hamcrest\hamcrest-core\1.3\hamcrest-core-1.3.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
     <property name="user.home" value="C:\Users\bingb"/>
@@ -31,7 +30,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\bingb\AppData\Local\Temp\surefire12685026478979215742\surefirebooter-20260810105947440_3.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\bingb\AppData\Local\Temp\surefire8589779655887594389\surefirebooter-20260810152237456_3.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="25.0.3+12-LTS"/>
@@ -50,10 +49,9 @@
     <property name="user.dir" value="D:\bingbaihanji\fxdecomplie\bdec\bdec"/>
     <property name="os.arch" value="amd64"/>
     <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
-    <property name="failIfNoTests" value="false"/>
     <property name="sun.os.patch.level" value=""/>
     <property name="native.encoding" value="GBK"/>
-    <property name="java.library.path" value="D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin;C:\WINDOWS\Sun\Java\bin;C:\WINDOWS\system32;C:\WINDOWS;C:\Users\bingb\bin;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\local\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\bin;C:\Users\bingb\bin;D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin;D:\application\PowerShell-7.6.1;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0;D:\develop\jdk\jdk25\openjdk25+37-bellsoft\bin;C:\Program Files\Git\cmd;D:\Windows Kits\10\Windows Performance Toolkit;D:\develop\maven\apache-maven-3.9.9\bin;D:\develop\mysql\mysql-8.4.4-winx64\bin;D:\application\PowerShell-7.6.1;D:\bingbaihanji\path\ldd\ldd\mingw64\bin;D:\cygwin64\bin;D:\bingbaihanji\path\busybox\bin;D:\develop\nodejs\node-v22.15.0-win-x64;D:\develop\gcc\mingw64\bin;D:\bingbaihanji\path\vim\vim\vim91;D:\develop\cmake\cmake-4.0.2-windows-x86_64\bin;D:\develop\opencv\opencv4.11\build\x64\vc16\bin;D:\develop\opencv\opencv4.11\build\x64\vc16\lib;D:\develop\apache\gradle\gradle-8.14.3\bin;C:\Program Files\dotnet;D:\c++Lib\open3d-devel-windows-amd64-0.19.0\bin;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;D:\Android-develop\Android-sdk\build-tools\36.0.0;D:\Android-develop\Android-sdk\platform-tools;D:\home\javacv;C:\WINDOWS\System32\OpenSSH;D:\develop\Flutter\flutter_windows_3.35.7\bin;D:\develop\DartSDK\Dart\dart-sdk\bin;D:\Qt\6.9.3\msvc2022_64\bin;D:\application\WezTerm-windows;D:\develop\IDE\IntelliJ_IDEA\idea-2026.1\bin;D:\develop\jdk\jdk21\bellsoft-liberica-vm-full-openjdk21-23.1.11\bin;C:\Users\bingb\.kimi-code\bin;C:\Users\bingb\AppData\Local\Programs\oh-my-posh\bin;C:\Users\bingb\.local\bin;D:\develop\python\Python313\Scripts;D:\develop\python\Python313;D:\develop\python\Python314\Scripts;D:\develop\python\Python314;C:\Users\bingb\AppData\Local\Microsoft\WindowsApps;C:\Users\bingb\.dotnet\tools;D:\application\cursor\resources\app\bin;D:\application\WezTerm-windows-20240203-110809-5046fc22;C:\Users\bingb\AppData\Local\Programs\Ollama;C:\Users\bingb\AppData\Local\Microsoft\WinGet\Links;D:\develop\apache\gradle\gradle-9.5.1\bin;C:\Program Files\Git\usr\bin\vendor_perl;C:\Program Files\Git\usr\bin\core_perl;C:\Users\bingb\.claude\plugins\cache\karpathy-skills\andrej-karpathy-skills\1.0.0\bin;C:\Users\bingb\.claude\plugins\cache\superpowers-marketplace\superpowers\5.1.0\bin;."/>
+    <property name="java.library.path" value="D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin;C:\WINDOWS\Sun\Java\bin;C:\WINDOWS\system32;C:\WINDOWS;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\bin;C:\Users\bingb\bin;D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin;D:\application\PowerShell-7.6.1;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0;D:\develop\jdk\jdk25\openjdk25+37-bellsoft\bin;C:\Program Files\Git\cmd;D:\Windows Kits\10\Windows Performance Toolkit;D:\develop\maven\apache-maven-3.9.9\bin;D:\develop\mysql\mysql-8.4.4-winx64\bin;D:\application\PowerShell-7.6.1;D:\bingbaihanji\path\ldd\ldd\mingw64\bin;D:\cygwin64\bin;D:\bingbaihanji\path\busybox\bin;D:\develop\nodejs\node-v22.15.0-win-x64;D:\develop\gcc\mingw64\bin;D:\bingbaihanji\path\vim\vim\vim91;D:\develop\cmake\cmake-4.0.2-windows-x86_64\bin;D:\develop\opencv\opencv4.11\build\x64\vc16\bin;D:\develop\opencv\opencv4.11\build\x64\vc16\lib;D:\develop\apache\gradle\gradle-8.14.3\bin;C:\Program Files\dotnet;D:\c++Lib\open3d-devel-windows-amd64-0.19.0\bin;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;D:\Android-develop\Android-sdk\build-tools\36.0.0;D:\Android-develop\Android-sdk\platform-tools;D:\home\javacv;C:\WINDOWS\System32\OpenSSH;D:\develop\Flutter\flutter_windows_3.35.7\bin;D:\develop\DartSDK\Dart\dart-sdk\bin;D:\Qt\6.9.3\msvc2022_64\bin;D:\application\WezTerm-windows;D:\develop\IDE\IntelliJ_IDEA\idea-2026.1\bin;D:\develop\jdk\jdk21\bellsoft-liberica-vm-full-openjdk21-23.1.11\bin;C:\Users\bingb\.kimi-code\bin;C:\Users\bingb\AppData\Local\Programs\oh-my-posh\bin;C:\Users\bingb\.local\bin;D:\develop\python\Python313\Scripts;D:\develop\python\Python313;D:\develop\python\Python314\Scripts;D:\develop\python\Python314;C:\Users\bingb\AppData\Local\Microsoft\WindowsApps;C:\Users\bingb\.dotnet\tools;D:\application\cursor\resources\app\bin;D:\application\WezTerm-windows-20240203-110809-5046fc22;C:\Users\bingb\AppData\Local\Programs\Ollama;C:\Users\bingb\AppData\Local\Microsoft\WinGet\Links;D:\develop\apache\gradle\gradle-9.5.1\bin;."/>
     <property name="java.vm.info" value="mixed mode, sharing"/>
     <property name="stderr.encoding" value="GBK"/>
     <property name="java.vendor" value="BellSoft"/>
@@ -62,27 +60,95 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="69.0"/>
   </properties>
-  <testcase name="testEnumSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.125"/>
-  <testcase name="testDecompileBasicClass" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.058"/>
-  <testcase name="testConditionNotInverted" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.05"/>
-  <testcase name="testInstanceOfExpr" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.044"/>
-  <testcase name="testTryCatchBasic" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.046"/>
-  <testcase name="testWhileLoop" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.048"/>
-  <testcase name="testBooleanMethod" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.042"/>
-  <testcase name="testTryFinally" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.052"/>
-  <testcase name="testArrayAccess" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.046"/>
-  <testcase name="testMethodRef" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.056"/>
-  <testcase name="testVoidMethodNotReturned" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.092"/>
-  <testcase name="testNewInstanceWithArgs" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.052"/>
-  <testcase name="testLockTryFinallyClear" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.097"/>
-  <testcase name="testLockTryFinallyOffer" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.073"/>
-  <testcase name="testStringSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.049"/>
-  <testcase name="testDuplicateVarDeclMerged" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.077"/>
-  <testcase name="testLockTryFinallySize" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.087"/>
-  <testcase name="testDoWhile" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.04"/>
-  <testcase name="testIfElse" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.034"/>
-  <testcase name="testLambda" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.047"/>
-  <testcase name="testSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.038"/>
-  <testcase name="testBooleanArgFolding" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.035"/>
-  <testcase name="testStaticMethodCall" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.035"/>
+  <testcase name="testEnumSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.092"/>
+  <testcase name="testDecompileBasicClass" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.041"/>
+  <testcase name="testConditionNotInverted" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.04"/>
+  <testcase name="testInstanceOfExpr" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.043"/>
+  <testcase name="testTryCatchBasic" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.04"/>
+  <testcase name="testWhileLoop" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.04"/>
+  <testcase name="testBooleanMethod" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.038"/>
+  <testcase name="testTryFinally" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.045"/>
+  <testcase name="testArrayAccess" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.04"/>
+  <testcase name="testMethodRef" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.055">
+    <failure message="Expected output to contain: return" type="java.lang.AssertionError"><![CDATA[java.lang.AssertionError: Expected output to contain: return
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.bingbaihanji.bdec.DecompileTestHarness.assertContains(DecompileTestHarness.java:37)
+	at com.bingbaihanji.bdec.ControlFlowTest.testMethodRef(ControlFlowTest.java:259)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+]]></failure>
+  </testcase>
+  <testcase name="testVoidMethodNotReturned" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.079"/>
+  <testcase name="testNewInstanceWithArgs" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.041"/>
+  <testcase name="testLockTryFinallyClear" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.082"/>
+  <testcase name="testLockTryFinallyOffer" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.079"/>
+  <testcase name="testStringSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.046"/>
+  <testcase name="testDuplicateVarDeclMerged" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.066"/>
+  <testcase name="testLockTryFinallySize" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.071"/>
+  <testcase name="testDoWhile" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.037"/>
+  <testcase name="testIfElse" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.031"/>
+  <testcase name="testLambda" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.045">
+    <failure message="Expected output to contain: -&gt;" type="java.lang.AssertionError"><![CDATA[java.lang.AssertionError: Expected output to contain: ->
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.bingbaihanji.bdec.DecompileTestHarness.assertContains(DecompileTestHarness.java:37)
+	at com.bingbaihanji.bdec.ControlFlowTest.testLambda(ControlFlowTest.java:248)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+]]></failure>
+  </testcase>
+  <testcase name="testSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.035"/>
+  <testcase name="testBooleanArgFolding" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.031"/>
+  <testcase name="testStaticMethodCall" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.033"/>
 </testsuite>

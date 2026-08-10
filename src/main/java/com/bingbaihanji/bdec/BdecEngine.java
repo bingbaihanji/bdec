@@ -92,11 +92,11 @@ public class BdecEngine implements Decompiler {
                             + classFile.methods().size() + " methods, "
                             + classFile.fields().size() + " fields"));
 
-            // Enrich context with parsed bootstrap methods (needed by LambdaRewriter)
-            if (!classFile.bootstrapMethods().isEmpty()) {
-                context = new DecompileContext(context.config(), context::loadClassBytes,
-                        classFile.bootstrapMethods());
-            }
+            // Enrich context with parsed class file model and bootstrap methods.
+            // These are needed by RewriteRules (LambdaRewriter, MethodRefRewriter,
+            // EnumRewriter) for bytecode-level analysis.
+            context = new DecompileContext(context.config(), context::loadClassBytes,
+                    classFile.bootstrapMethods(), classFile);
 
             // Phase 2-4: Per-method decompilation
             List<StructuredMethod> structuredMethods = new ArrayList<>();

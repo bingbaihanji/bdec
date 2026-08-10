@@ -148,7 +148,7 @@ public final class StringConcatRecognizer {
 
     private boolean isStringType(JavaType type) {
         return type.internalName() != null
-                && type.internalName().equals("java/lang/String");
+                && "java/lang/String".equals(type.internalName());
     }
 
     private boolean isStringExpr(Expression e) {

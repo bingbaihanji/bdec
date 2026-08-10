@@ -4,12 +4,10 @@ import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertFalse;
@@ -31,6 +29,31 @@ public class DecompileTestHarness {
 
     public DecompileTestHarness(BdecConfig config) {
         this.config = config;
+    }
+
+    /** Assert output contains ALL of the given patterns. */
+    public static void assertContains(String output, String... patterns) {
+        for (String pattern : patterns) {
+            assertTrue("Expected output to contain: " + pattern,
+                    output.contains(pattern));
+        }
+    }
+
+    /** Assert output does NOT contain ANY of the given patterns. */
+    public static void assertNotContains(String output, String... patterns) {
+        for (String pattern : patterns) {
+            assertFalse("Expected output NOT to contain: " + pattern,
+                    output.contains(pattern));
+        }
+    }
+
+    /** Assert output contains all patterns (case-insensitive). */
+    public static void assertContainsIgnoreCase(String output, String... patterns) {
+        String lower = output.toLowerCase();
+        for (String pattern : patterns) {
+            assertTrue("Expected output to contain (case-insensitive): " + pattern,
+                    lower.contains(pattern.toLowerCase()));
+        }
     }
 
     /**
@@ -97,31 +120,6 @@ public class DecompileTestHarness {
         }
     }
 
-    /** Assert output contains ALL of the given patterns. */
-    public static void assertContains(String output, String... patterns) {
-        for (String pattern : patterns) {
-            assertTrue("Expected output to contain: " + pattern,
-                    output.contains(pattern));
-        }
-    }
-
-    /** Assert output does NOT contain ANY of the given patterns. */
-    public static void assertNotContains(String output, String... patterns) {
-        for (String pattern : patterns) {
-            assertFalse("Expected output NOT to contain: " + pattern,
-                    output.contains(pattern));
-        }
-    }
-
-    /** Assert output contains all patterns (case-insensitive). */
-    public static void assertContainsIgnoreCase(String output, String... patterns) {
-        String lower = output.toLowerCase();
-        for (String pattern : patterns) {
-            assertTrue("Expected output to contain (case-insensitive): " + pattern,
-                    lower.contains(pattern.toLowerCase()));
-        }
-    }
-
     private Path findResource(String resourcePath) {
         // Try classpath first (Maven copies src/test/resources to classpath root)
         try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
@@ -143,7 +141,9 @@ public class DecompileTestHarness {
 
     private String extractSimpleName(String path) {
         String name = path.contains("/") ? path.substring(path.lastIndexOf('/') + 1) : path;
-        if (name.endsWith(".java")) name = name.substring(0, name.length() - 5);
+        if (name.endsWith(".java")) {
+            name = name.substring(0, name.length() - 5);
+        }
         return name;
     }
 

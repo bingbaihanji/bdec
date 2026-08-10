@@ -1,18 +1,31 @@
 package com.bingbaihanji.bdec.cfg;
 
 import com.bingbaihanji.bdec.bytecode.model.Instruction;
-import com.bingbaihanji.bdec.bytecode.model.MethodModel;
-import com.bingbaihanji.bdec.type.JavaType;
 import org.junit.Test;
 
-import java.util.*;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Tests for dominator tree computation, dominance queries, and dominance frontiers.
  */
 public class DominatorTreeTest {
+
+    /** Find a block by numeric id from the test CFG. */
+    private static BasicBlock findBlock(ControlFlowGraph cfg, int id) {
+        for (BasicBlock b : cfg.blocks()) {
+            if (b.id() == id) {
+                return b;
+            }
+        }
+        throw new AssertionError("Block " + id + " not found");
+    }
 
     /** Build a simple diamond CFG: entry → header → (left/right) → merge → exit */
     private ControlFlowGraph buildDiamond() {
@@ -168,13 +181,5 @@ public class DominatorTreeTest {
             assertTrue("exit should post-dominate B" + b.id(),
                     pdt.postDominates(cfg.exitBlock(), b));
         }
-    }
-
-    /** Find a block by numeric id from the test CFG. */
-    private static BasicBlock findBlock(ControlFlowGraph cfg, int id) {
-        for (BasicBlock b : cfg.blocks()) {
-            if (b.id() == id) return b;
-        }
-        throw new AssertionError("Block " + id + " not found");
     }
 }
