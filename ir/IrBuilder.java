@@ -1426,7 +1426,7 @@ public final class IrBuilder {
                     ConstantPoolParser.utf8(pool, s.stringIndex()),
                     JavaType.classType("java/lang/String"));
             case ConstantPoolEntry.CpClass c -> new ConstantValue(
-                    ConstantPoolParser.className(pool, c.nameIndex()),
+                    ConstantPoolParser.utf8(pool, c.nameIndex()),
                     JavaType.classType("java/lang/Class"));
             default -> new ConstantValue("<cp:" + entry.tag() + ">", JavaType.classType("java/lang/Object"));
         };

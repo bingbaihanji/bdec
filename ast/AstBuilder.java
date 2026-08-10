@@ -96,6 +96,11 @@ public class AstBuilder {
                     displayType = parsed;
                 }
             }
+            // Synthetic assertion field — give it a default value since we
+            // strip its static-initializer assignment (it's a JVM artifact).
+            if (init == null && "$assertionsDisabled".equals(field.name())) {
+                init = new com.bingbaihanji.bdec.ast.expr.LitExpr(false, JavaType.BOOLEAN);
+            }
             FieldDeclaration fd = new FieldDeclaration(
                     field.accessFlags(), field.name(), displayType, init);
             members.add(fd);
