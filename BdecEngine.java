@@ -102,6 +102,8 @@ public class BdecEngine implements Decompiler {
             List<StructuredMethod> structuredMethods = new ArrayList<>();
             for (MethodModel method : classFile.methods()) {
                 if (method.isAbstract() || method.isNative()) {
+                    // Preserve abstract/native method declarations (no body, no IR)
+                    structuredMethods.add(new StructuredMethod(method, null, null));
                     continue;
                 }
                 if (method.instructions() == null || method.instructions().isEmpty()) {

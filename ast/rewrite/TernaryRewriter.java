@@ -48,7 +48,7 @@ public class TernaryRewriter implements RewriteRule {
         List<AstNode> rewrittenMembers = new ArrayList<>();
         for (AstNode member : td.children()) {
             if (member instanceof MethodDeclaration md) {
-                Statement newBody = rewriteStatement(md.body());
+                Statement newBody = md.body() != null ? rewriteStatement(md.body()) : null;
                 rewrittenMembers.add(new MethodDeclaration(
                         md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(), newBody));

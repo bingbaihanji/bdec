@@ -20,8 +20,9 @@ public class SourceEmitter {
         // Register a line-mapping hook: when the writer advances to a new line
         // the caller can associate bytecode offsets via the IndentWriter.
         // Phase 2b: populate from bytecode offset tracking during emission.
+        boolean isInterface = !unit.types().isEmpty() && unit.types().getFirst().isInterface();
         StatementEmitter stmts = new StatementEmitter(w, exprs, unit.types().isEmpty()
-                ? "Unknown" : unit.types().getFirst().simpleName());
+                ? "Unknown" : unit.types().getFirst().simpleName(), isInterface);
 
         // Package
         if (unit.packageName() != null && !unit.packageName().isEmpty()) {
@@ -52,15 +53,16 @@ public class SourceEmitter {
 
     private void emitType(TypeDeclaration type, IndentWriter w, StatementEmitter stmts) {
         // Access modifiers
-        emitClassModifiers(type.accessFlags(), w);
+        emitClassModifiers(type.accessFlags(), type.isInterface(), w);
 
         w.token(type.kindName()).space().write(type.simpleName());
 
-        // Emit type parameters for generic classes
+        // Emit type parameters for generic classes, or record components for records
         if (!type.typeParameters().isEmpty()) {
-            w.write("<");
+            boolean isRecord = "record".equals(type.kindName());
+            w.write(isRecord ? "(" : "<");
             w.write(String.join(", ", type.typeParameters()));
-            w.write(">");
+            w.write(isRecord ? ")" : ">");
         }
 
         // Super class
@@ -89,7 +91,7 @@ public class SourceEmitter {
         w.write("}").newLine();
     }
 
-    private void emitClassModifiers(int flags, IndentWriter w) {
+    private void emitClassModifiers(int flags, boolean isInterface, IndentWriter w) {
         if ((flags & 0x0001) != 0) {
             w.token("public").space();
         } else if ((flags & 0x0002) != 0) {
@@ -97,7 +99,8 @@ public class SourceEmitter {
         } else if ((flags & 0x0004) != 0) {
             w.token("protected").space();
         }
-        if ((flags & 0x0400) != 0) {
+        // Interfaces are implicitly abstract — don't emit the redundant keyword
+        if ((flags & 0x0400) != 0 && !isInterface) {
             w.token("abstract").space();
         }
         if ((flags & 0x0010) != 0) {

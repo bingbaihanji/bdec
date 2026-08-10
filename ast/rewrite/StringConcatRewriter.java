@@ -55,7 +55,7 @@ public class StringConcatRewriter implements RewriteRule {
             if (m instanceof MethodDeclaration md) {
                 members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(),
-                        rewriteStatement(md.body())));
+                        md.body() != null ? rewriteStatement(md.body()) : null));
             } else {
                 members.add(m);
             }

@@ -28,10 +28,19 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
 
     private final String className;
 
-    public StatementEmitter(IndentWriter w, ExpressionEmitter exprs, String className) {
+    /** Whether the enclosing type is an interface (for emitting {@code default} methods). */
+    private final boolean isInterface;
+
+    public StatementEmitter(IndentWriter w, ExpressionEmitter exprs, String className, boolean isInterface) {
         this.w = w;
         this.exprs = exprs;
         this.className = className;
+        this.isInterface = isInterface;
+    }
+
+    /** Backward-compatible constructor — assumes non-interface. */
+    public StatementEmitter(IndentWriter w, ExpressionEmitter exprs, String className) {
+        this(w, exprs, className, false);
     }
 
     /** Resolve a type name using imports (delegates to ExpressionEmitter). */
@@ -430,6 +439,10 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             w.token("private").space();
         } else if ((flags & 0x0004) != 0) {
             w.token("protected").space();
+        }
+        // Interface non-abstract, non-static, non-private methods need "default" keyword
+        if (isInterface && (flags & 0x0400) == 0 && (flags & 0x0008) == 0 && (flags & 0x0002) == 0) {
+            w.token("default").space();
         }
         if ((flags & 0x0008) != 0) {
             w.token("static").space();

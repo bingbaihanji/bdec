@@ -751,6 +751,19 @@ public final class IrBuilder {
                 fieldType, offset, blockId, fieldName);
         instructions.add(fi);
         fi.setResultValue(new InstructionRef(fi, fi.resultType()));
+
+        // For static field access (GETSTATIC), tag with declaring class
+        // so that BlockReducer emits System.out instead of just out.
+        if (op == Opcode.GETSTATIC) {
+            String declaringClass = resolveFieldDeclaringClass(insn, cp);
+            if (declaringClass != null) {
+                fi.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
+                        com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS,
+                        com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS,
+                        declaringClass));
+            }
+        }
+
         stack.push(new InstructionRef(fi, fi.resultType()));
     }
 
@@ -810,6 +823,30 @@ public final class IrBuilder {
             if (natIdx > 0 && natIdx < cp.length
                     && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
                 return ConstantPoolParser.utf8(cp, nat.nameIndex());
+            }
+        } catch (Exception ignored) {
+            // fall through to null
+        }
+        return null;
+    }
+
+    /** Resolve the declaring class name for a field-ref instruction (used for GETSTATIC). */
+    private String resolveFieldDeclaringClass(Instruction insn, ConstantPoolEntry[] cp) {
+        if (insn.rawOperands().isEmpty()) {
+            return null;
+        }
+        int cpIdx = insn.rawOperands().get(0);
+        if (cpIdx <= 0 || cpIdx >= cp.length) {
+            return null;
+        }
+        try {
+            ConstantPoolEntry entry = cp[cpIdx];
+            int classIdx = switch (entry) {
+                case ConstantPoolEntry.CpFieldRef fr -> fr.classIndex();
+                default -> -1;
+            };
+            if (classIdx > 0 && classIdx < cp.length) {
+                return ConstantPoolParser.className(cp, classIdx);
             }
         } catch (Exception ignored) {
             // fall through to null

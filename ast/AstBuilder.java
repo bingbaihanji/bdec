@@ -43,6 +43,9 @@ public class AstBuilder {
     /** Collect imports from types referenced in method bodies (static calls,
      *  new expressions, etc.) by scanning IR instructions. */
     private void collectBodyImports(StructuredMethod sm, Set<String> imports, String thisClass) {
+        if (sm.ir() == null || sm.ir().instructions() == null) {
+            return; // abstract/native methods have no IR
+        }
         for (var insn : sm.ir().instructions()) {
             // Static calls: DECLARING_CLASS annotation
             for (var ann : insn.annotations()) {
@@ -166,8 +169,11 @@ public class AstBuilder {
         List<String> importList = new ArrayList<>();
         String pkg = packageName(classFile.internalName());
         for (String imp : imports) {
-            if (imp.startsWith("java.lang.")) {
-                continue; // auto-imported
+            // Only skip types directly in java.lang package, not subpackages
+            // (e.g., java.lang.annotation.Annotation needs an explicit import)
+            if (imp.startsWith("java.lang.")
+                    && imp.indexOf('.', "java.lang.".length()) < 0) {
+                continue; // java.lang.* is auto-imported
             }
             if (!imp.contains(".")) {
                 continue;

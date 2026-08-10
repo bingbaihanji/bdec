@@ -75,7 +75,7 @@ public class StringSwitchRewriter implements RewriteRule {
                 members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(),
                         md.typeParameters(),
-                        rewriteBlock(md.body())));
+                        md.body() != null ? rewriteBlock(md.body()) : null));
             } else {
                 members.add(m);
             }

@@ -49,7 +49,7 @@ public class SwitchExprRewriter implements RewriteRule {
                 members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(),
                         md.typeParameters(),
-                        rewriteStatement(md.body())));
+                        md.body() != null ? rewriteStatement(md.body()) : null));
             } else {
                 members.add(m);
             }
