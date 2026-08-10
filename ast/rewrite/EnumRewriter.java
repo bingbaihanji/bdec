@@ -4,6 +4,7 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
@@ -14,8 +15,19 @@ import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.Instruction;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
+import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
+import com.bingbaihanji.bdec.bytecode.parser.ClassFileReader;
 import com.bingbaihanji.bdec.bytecode.parser.ConstantPoolParser;
+import com.bingbaihanji.bdec.cfg.CfgBuilder;
+import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
+import com.bingbaihanji.bdec.ir.IrBuilder;
+import com.bingbaihanji.bdec.ir.LinearIr;
+import com.bingbaihanji.bdec.semantic.SemanticReconstructor;
+import com.bingbaihanji.bdec.structuring.ControlFlowStructurer;
+import com.bingbaihanji.bdec.structuring.StructuredMethod;
+import com.bingbaihanji.bdec.type.JavaType;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -71,6 +83,9 @@ public class EnumRewriter implements RewriteRule {
         // Extract enum constant constructor args from <clinit> bytecode.
         Map<String, String> constArgs = extractConstantArgs(td, ctx);
 
+        // Check if this enum has abstract methods (needs anonymous class bodies).
+        boolean hasAbstract = hasAbstractMethods(td);
+
         // Separate enum constant fields from other members
         List<String> enumConstants = new ArrayList<>();
         List<AstNode> regularMembers = new ArrayList<>();
@@ -82,7 +97,14 @@ public class EnumRewriter implements RewriteRule {
                 }
                 if (isEnumConstantField(fd, td.simpleName())) {
                     String args = constArgs.getOrDefault(fd.name(), "");
-                    enumConstants.add(fd.name() + args);
+                    String body = "";
+                    if (hasAbstract) {
+                        // Try to load inner class for this enum constant's
+                        // anonymous class body (e.g., EnumDemo$1 for ordinal 0).
+                        body = buildAnonymousClassBody(fd.name(), args,
+                                td.simpleName(), enumConstants.size(), ctx);
+                    }
+                    enumConstants.add(fd.name() + args + body);
                     continue;
                 }
             }
@@ -104,7 +126,8 @@ public class EnumRewriter implements RewriteRule {
         // Emit enum constants as a special field marker.
         List<AstNode> members = new ArrayList<>();
         if (!enumConstants.isEmpty()) {
-            String constList = String.join(", ", enumConstants) + ";";
+            String constList = String.join(",\n    ", enumConstants)
+                    + (enumConstants.size() == 1 ? ";" : "\n    ;");
             members.add(new FieldDeclaration(0, "$enumConstants$",
                     com.bingbaihanji.bdec.type.JavaType.VOID,
                     new com.bingbaihanji.bdec.ast.expr.VarExpr(constList)));
@@ -348,5 +371,157 @@ public class EnumRewriter implements RewriteRule {
             return new BlockStatement(List.of());
         }
         return new BlockStatement(filtered);
+    }
+
+    // ── Anonymous class body support ─────────────────────────────────
+
+    /** Check if the enum has abstract methods that need anonymous class
+     *  bodies on enum constants. */
+    private static boolean hasAbstractMethods(TypeDeclaration td) {
+        for (AstNode m : td.children()) {
+            if (m instanceof MethodDeclaration md
+                    && (md.accessFlags() & 0x0400) != 0) { // ACC_ABSTRACT
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Build anonymous class body source text for an enum constant
+     *  by loading and decompiling its inner class
+     *  (e.g., {@code EnumDemo$1} for ordinal 0). */
+    private String buildAnonymousClassBody(String constName, String args,
+                                            String enumName, int ordinal,
+                                            DecompileContext ctx) {
+        String innerName = enumName + "$" + (ordinal + 1);
+
+        // Build full internal name from the enum's package
+        ClassFileModel cfm = ctx.classFile();
+        String pkg = cfm != null ? packageOf(cfm.internalName()) : "";
+        String internalName = pkg.isEmpty() ? innerName : pkg + "/" + innerName;
+
+        byte[] bytes = ctx.loadClassBytes(internalName);
+        if (bytes == null) {
+            return "";
+        }
+
+        try {
+            ClassFileModel inner = new ClassFileReader().read(internalName, bytes);
+            String bodies = decompileInnerClassMethods(inner, ctx);
+            return bodies;
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private static String packageOf(String internalName) {
+        int idx = internalName.lastIndexOf('/');
+        return idx >= 0 ? internalName.substring(0, idx) : "";
+    }
+
+    /** Decompile the non-constructor methods of an inner enum constant
+     *  class and return their source text. */
+    private static String decompileInnerClassMethods(ClassFileModel inner,
+                                                      DecompileContext ctx) {
+        CfgBuilder cfgBuilder = new CfgBuilder();
+        IrBuilder irBuilder = new IrBuilder();
+        SemanticReconstructor sr = new SemanticReconstructor();
+        ControlFlowStructurer structurer = new ControlFlowStructurer();
+
+        List<String> methodSources = new ArrayList<>();
+        for (MethodModel method : inner.methods()) {
+            if ("<init>".equals(method.name())) {
+                continue;
+            }
+            if ("<clinit>".equals(method.name())) {
+                continue;
+            }
+            if (method.isAbstract() || method.isNative()) {
+                continue;
+            }
+
+            try {
+                ControlFlowGraph cfg = cfgBuilder.build(method);
+                LinearIr ir = irBuilder.build(cfg, method,
+                        inner.constantPool(), inner.bootstrapMethods());
+                ir = sr.reconstruct(ir, method, cfg, inner);
+                StructuredMethod sm = structurer.structure(ir, ctx);
+
+                if (sm.body() == null) {
+                    continue;
+                }
+
+                // Build parameter names and types from the method model.
+                String[] paramNames = buildParamNames(method);
+                JavaType[] paramTypes = method.parameterTypes();
+
+                MethodDeclaration md = new MethodDeclaration(
+                        method.accessFlags(),
+                        method.name(),
+                        method.returnType(),
+                        paramNames,
+                        paramTypes,
+                        List.of(),
+                        sm.body()
+                );
+
+                // Emit the single method to a source string.
+                String src = emitSingleMethod(md);
+                if (src != null && !src.isEmpty()) {
+                    methodSources.add(src);
+                }
+            } catch (Exception e) {
+                // Method decompilation failed — skip this method.
+            }
+        }
+
+        if (methodSources.isEmpty()) {
+            return "";
+        }
+
+        // Build the anonymous class body: { method1 method2 ... }
+        StringBuilder sb = new StringBuilder();
+        sb.append(" {\n");
+        for (String ms : methodSources) {
+            for (String line : ms.split("\n")) {
+                sb.append("        ").append(line).append("\n");
+            }
+        }
+        sb.append("    }");
+        return sb.toString();
+    }
+
+    /** Build parameter names from the method model's local variable table
+     *  or fall back to synthetic names. */
+    private static String[] buildParamNames(MethodModel method) {
+        int count = method.parameterTypes() != null
+                ? method.parameterTypes().length : 0;
+        String[] names = new String[count];
+        Map<Integer, String> lvt = method.localVarNames();
+        // Parameters occupy slots starting from 0 (or 1 for instance methods).
+        int slot = method.isStatic() ? 0 : 1;
+        for (int i = 0; i < count; i++) {
+            String name = lvt != null ? lvt.get(slot) : null;
+            names[i] = (name != null) ? name : ("param" + i);
+            JavaType pt = method.parameterTypes() != null
+                    && i < method.parameterTypes().length
+                    ? method.parameterTypes()[i] : JavaType.classType("java/lang/Object");
+            slot += pt.slotCount();
+        }
+        return names;
+    }
+
+    /** Emit a single MethodDeclaration to a source string using
+     *  StatementEmitter with a temporary IndentWriter. */
+    private static String emitSingleMethod(MethodDeclaration md) {
+        com.bingbaihanji.bdec.emit.IndentWriter w =
+                new com.bingbaihanji.bdec.emit.IndentWriter(4);
+        com.bingbaihanji.bdec.emit.ExpressionEmitter exprs =
+                new com.bingbaihanji.bdec.emit.ExpressionEmitter(w, List.of());
+        com.bingbaihanji.bdec.emit.StatementEmitter stmts =
+                new com.bingbaihanji.bdec.emit.StatementEmitter(w, exprs,
+                        "Enum", false);
+        stmts.emit(md);
+        return w.toString().trim();
     }
 }

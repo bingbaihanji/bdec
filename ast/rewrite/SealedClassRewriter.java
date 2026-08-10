@@ -73,7 +73,7 @@ public class SealedClassRewriter implements RewriteRule {
                 td.interfaceNames(), td.typeParameters(), td.children());
     }
 
-    /** Load the superclass and check if it's sealed using JVM reflection. */
+    /** Load the superclass and check if it's sealed. */
     private boolean isSuperclassSealed(String internalName, DecompileContext context) {
         try {
             // First try the context's class loader
@@ -86,7 +86,10 @@ public class SealedClassRewriter implements RewriteRule {
             }
             var reader = new com.bingbaihanji.bdec.bytecode.parser.ClassFileReader();
             var model = reader.read(internalName, bytes);
-            return (model.accessFlags() & ACC_SEALED) != 0;
+            // Java 17-21 preview: ACC_SEALED flag (0x1000)
+            // Java 22+: PermittedSubclasses attribute (no class flag)
+            return (model.accessFlags() & ACC_SEALED) != 0
+                    || !model.permittedSubclasses().isEmpty();
         } catch (Exception e) {
             return false;
         }
