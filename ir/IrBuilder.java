@@ -21,36 +21,52 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Stack simulation engine — converts bytecode (stack-based) to LinearIr (register-based).
+ * IR构建器——将栈式字节码转换为寄存器式IR的栈模拟引擎.
+ * <p>
+ * 每条JVM指令通过模拟其在操作数栈和局部变量表上的效果来处理.
+ * 主方法{@link #simulateBlock}的switch语句将各指令分发到对应类别的处理函数.
+ * 元数据(原始字节码操作码,字段名/方法名)保留在{@link IrInstruction}中,
+ * 以便下游pass能生成正确的运算符和名称.
+ * </p>
  *
- * Each JVM instruction is processed by simulating its effect on an operand stack
- * and local variable array. The main {@link #simulateBlock} switch dispatches to
- * category-specific handler methods.
- *
- * Metadata (original bytecode opcode, field/method names) is preserved in
- * {@link IrInstruction} so downstream passes can emit correct operators and names.
+ * <h3>处理架构</h3>
+ * <ul>
+ *   <li>{@link #handleConstant} — 常量加载(iconst_0,ldc等)</li>
+ *   <li>{@link #handleLoad} / {@link #handleStore} — 局部变量读写</li>
+ *   <li>{@link #handleArithmetic} / {@link #handleNegate} — 算术运算</li>
+ *   <li>{@link #handleComparison} / {@link #handleCondition} — 比较与分支</li>
+ *   <li>{@link #handleFieldLoad} / {@link #handleFieldStore} — 字段访问</li>
+ *   <li>{@link #handleInvoke} / {@link #handleInvokeDynamic} — 方法调用</li>
+ *   <li>{@link #handleNew} / {@link #handleNewArray} — 对象与数组创建</li>
+ *   <li>{@link #handleConversion} / {@link #handleCheckCast} — 类型转换</li>
+ * </ul>
  */
 public final class IrBuilder {
 
+    /** 下一条指令的ID计数器 */
     private int nextInsnId = 0;
 
+    /** 下一个变量的ID计数器 */
     private int nextVarId = 0;
 
-    /** Current method's LVT names (slot → name), set during simulateBlock. */
+    /** 当前方法的局部变量表名称(槽位 → 名称),在 simulateBlock 时设置. */
     private java.util.Map<Integer, String> currentLvtNames = java.util.Collections.emptyMap();
 
-    /** Bootstrap methods from the class file, needed for invokedynamic resolution. */
+    /** 来自类文件的引导方法列表,用于 invokedynamic 的解析. */
     private List<BootstrapMethodEntry> currentBootstrapMethods = java.util.Collections.emptyList();
 
-    /** Check if a value is category 2 (long or double, occupies two JVM stack slots). */
+    /**
+     * 判断一个值是否为类别2类型(long或double,在JVM操作数栈中占用两个槽位).
+     */
     private static boolean isCategory2(Value v) {
         return v.type() != null && (v.type().kind() == TypeKind.LONG
                 || v.type().kind() == TypeKind.DOUBLE);
     }
 
-    // ─── Block ordering ───────────────────────────────────────────────
-
-    /** Follow InstructionRef chains to find the underlying ConstantValue. */
+    /**
+     * 沿InstructionRef链追溯底层常量值.
+     * 如果值链末端是CONST指令,则提取其ConstantValue操作数.
+     */
     private static ConstantValue unwrapConstant(Value v) {
         if (v instanceof ConstantValue cv) {
             return cv;
@@ -67,10 +83,18 @@ public final class IrBuilder {
         return null;
     }
 
-    // ─── Predecessor merge ────────────────────────────────────────────
+    // ── 基本块排序 ──────────────────────────────────────────────────
+
+    // ── 前驱合并 ────────────────────────────────────────────────────
 
     /**
-     * Build LinearIr from CFG by symbolic execution of each basic block.
+     * 通过对每个基本块进行符号执行,从控制流图构建线性IR.
+     *
+     * @param cfg              控制流图
+     * @param method           方法模型
+     * @param constantPool     常量池
+     * @param bootstrapMethods 引导方法列表
+     * @return 构建完成的线性IR
      */
     public LinearIr build(ControlFlowGraph cfg, MethodModel method,
                           ConstantPoolEntry[] constantPool,
@@ -88,16 +112,15 @@ public final class IrBuilder {
             maxLocals = method.isStatic() ? 0 : 1;
         }
 
-        // Pre-seed initial FrameState with parameter variables that have the
-        // CORRECT Java types from the method descriptor. This is critical for
-        // boolean parameters: the JVM uses int (ILOAD/ISTORE), but the actual
-        // Java type is boolean. Without this, downstream passes can't distinguish
-        // "boolean flag == 0" (→ !flag) from "int x == 0".
+        // 使用具有正确Java类型的参数变量预填充初始FrameState.
+        // 这对于boolean参数至关重要:JVM使用int类型(ILOAD/ISTORE),
+        // 但实际Java类型是boolean.没有这些信息,下游pass无法区分
+        // "boolean flag == 0"(→ !flag)和 "int x == 0".
         FrameState initialFrame = FrameState.withLocals(maxLocals);
         Value[] initLocals = initialFrame.locals();
         int slot = 0;
         if (!method.isStatic()) {
-            // slot 0 = 'this'
+            // 槽位0 = 'this'
             JavaType thisType = com.bingbaihanji.bdec.type.JavaType.classType(
                     "java/lang/Object");
             Variable thisVar = new Variable(slot, 0, thisType, false, slot);
@@ -110,7 +133,7 @@ public final class IrBuilder {
             for (JavaType pt : method.parameterTypes()) {
                 if (slot < maxLocals) {
                     Variable pv = new Variable(slot, 0, pt, true, slot);
-                    // Apply LVT name if available
+                    // 如果有局部变量表名称则使用
                     String lvtName = method.localVarNames().get(slot);
                     if (lvtName != null) {
                         pv.setName(lvtName);
@@ -118,7 +141,7 @@ public final class IrBuilder {
                     variables.add(pv);
                     initLocals[slot] = pv;
                     slot++;
-                    // Long and double take two JVM slots
+                    // long和double在JVM中占用两个槽位
                     if (pt.kind() == com.bingbaihanji.bdec.type.TypeKind.LONG
                             || pt.kind() == com.bingbaihanji.bdec.type.TypeKind.DOUBLE) {
                         slot++;
@@ -140,19 +163,21 @@ public final class IrBuilder {
         return new LinearIr(method, cfg, allInstructions, variables);
     }
 
-    // ─── Main block simulation ────────────────────────────────────────
+    // ── 主模拟 — 模拟一个基本块 ───────────────────────────────────────
 
-    /** Return blocks in an order where each block's predecessors are processed
-     *  before it (when possible). Uses a worklist that only emits a block when
-     *  all its predecessors have been processed, falling back to DFS for
-     *  irreducible loops. This enables correct PHI creation at merge points. */
+    /**
+     * 返回基本块的排序列表,使每个块的前驱尽可能在其之前处理.
+     * 使用工作列表算法:仅当某块的所有前驱均已处理时才发射该块,
+     * 对于不可归约循环(irreducible loops)回退到DFS遍历.
+     * 这种方式确保了在汇合点能够正确创建PHI节点.
+     */
     private List<BasicBlock> orderBlocks(ControlFlowGraph cfg) {
         List<BasicBlock> result = new ArrayList<>();
         Set<BasicBlock> emitted = new HashSet<>();
         Set<BasicBlock> inQueue = new HashSet<>();
         Deque<BasicBlock> queue = new ArrayDeque<>();
 
-        // Start with entry's successors (entry itself isn't simulated)
+        // 从入口块的后继开始(入口块本身不需要模拟)
         for (BasicBlock succ : cfg.successorsOf(cfg.entryBlock())) {
             if (succ != cfg.exitBlock()) {
                 queue.add(succ);
@@ -160,7 +185,7 @@ public final class IrBuilder {
             }
         }
 
-        int maxIter = cfg.blockCount() * 4; // safety limit for irreducible loops
+        int maxIter = cfg.blockCount() * 4; // 不可归约循环的安全上限
         while (!queue.isEmpty() && maxIter-- > 0) {
             BasicBlock b = queue.poll();
             inQueue.remove(b);
@@ -168,8 +193,8 @@ public final class IrBuilder {
                 continue;
             }
 
-            // Can we emit this block? Only if all predecessors are emitted
-            // (or are entry/exit), OR if we've waited too long (fallback).
+            // 可发射该块的条件:所有前驱均已发射(或者是入口/出口块),
+            // 或等待次数过多时使用回退策略
             boolean allPredsReady = true;
             for (BasicBlock pred : cfg.predecessorsOf(b)) {
                 if (pred != cfg.entryBlock() && pred != cfg.exitBlock()
@@ -182,7 +207,7 @@ public final class IrBuilder {
             if (allPredsReady) {
                 emitted.add(b);
                 result.add(b);
-                // Enqueue successors
+                // 将后继加入队列
                 for (BasicBlock succ : cfg.successorsOf(b)) {
                     if (succ != cfg.exitBlock() && !emitted.contains(succ)
                             && !inQueue.contains(succ)) {
@@ -191,14 +216,14 @@ public final class IrBuilder {
                     }
                 }
             } else {
-                // Put back at end — try again after predecessors are processed
+                // 重新放回队尾——等前驱处理完后重试
                 queue.add(b);
                 inQueue.add(b);
             }
         }
 
-        // Fallback: any unprocessed blocks (irreducible loops) — use DFS
-        if (emitted.size() < cfg.blockCount() - 2) { // minus entry+exit
+        // 回退:任何仍未处理的基本块(不可归约循环中的块)——使用DFS
+        if (emitted.size() < cfg.blockCount() - 2) { // 减去入口+出口
             for (BasicBlock b : cfg.blocks()) {
                 if (b != cfg.entryBlock() && b != cfg.exitBlock()
                         && !emitted.contains(b)) {
@@ -212,19 +237,27 @@ public final class IrBuilder {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  Handler methods — one per opcode category
+    //  按操作码类别的处理函数
     // ═══════════════════════════════════════════════════════════════════
 
-    // ── Stack manipulation ───────────────────────────────────────
+    // ── 栈操作 ─────────────────────────────────────────────────────
 
     /**
-     * Merge states from all predecessors of a block.
+     * 合并一个基本块所有前驱的帧状态.
      *
-     * For variable slots: picks the latest variable version across all
-     * predecessor states so that stores from any path are visible.
-     * For the operand stack: JVM verification guarantees it's empty at
-     * merge points (exception handlers are the exception — they have
-     * exactly one element, the thrown exception).
+     * <p><b>变量槽位合并</b>:从所有前驱状态中选取每个槽位的最新版本,
+     * 确保通过任意路径的store操作在主路径中可见.</p>
+     *
+     * <p><b>操作数栈合并</b>:JVM验证保证在汇合点操作数栈为空
+     * (异常处理器例外,其栈上有且仅有一个元素——抛出的异常).
+     * 当多个前驱在栈上推送了相同深度的值时,创建stack-PHI节点.</p>
+     *
+     * @param block        目标基本块
+     * @param outputs      各基本块执行后的帧状态映射
+     * @param cfg          控制流图
+     * @param instructions 正在构建的IR指令列表
+     * @param variables    变量列表
+     * @return 合并后的帧状态,如果无前驱状态则返回 {@code null}
      */
     private FrameState mergePredecessorStates(BasicBlock block,
                                               Map<BasicBlock, FrameState> outputs,
@@ -239,7 +272,7 @@ public final class IrBuilder {
             return outputs.get(preds.get(0));
         }
 
-        // Collect all predecessor states
+        // 收集所有前驱状态
         List<FrameState> predStates = new ArrayList<>();
         for (BasicBlock pred : preds) {
             FrameState state = outputs.get(pred);
@@ -254,15 +287,14 @@ public final class IrBuilder {
             return predStates.get(0).copy();
         }
 
-        // Determine max locals size across all predecessors
+        // 确定所有前驱中的最大局部变量槽位数
         int maxLocals = 0;
         for (FrameState s : predStates) {
             maxLocals = Math.max(maxLocals, s.locals().length);
         }
 
-        // Merge locals: for each slot, pick the version with the highest version
-        // number from all predecessors — this ensures stores from any path
-        // contribute their latest variable version.
+        // 合并局部变量:对每个槽位选所有前驱中版本号最大的变量
+        // 这确保通过任意路径的store操作贡献其最新变量版本
         Value[] mergedLocals = new Value[maxLocals];
         for (int slot = 0; slot < maxLocals; slot++) {
             Variable best = null;
@@ -276,9 +308,8 @@ public final class IrBuilder {
             mergedLocals[slot] = best;
         }
 
-        // Merge stack: detect if any predecessor is an exception edge.
-        // Exception handlers have stack=[thrown_exception]; normal merges
-        // have an empty stack (per JVM verification).
+        // 合并操作数栈:检测是否有前驱是异常边.
+        // 异常处理器的栈 = [thrown_exception];普通汇合点栈为空(JVM验证保证).
         boolean hasExceptionEdge = false;
         for (BasicBlock pred : preds) {
             for (var edge : cfg.incomingOf(block)) {
@@ -295,11 +326,11 @@ public final class IrBuilder {
 
         Deque<Value> mergedStack;
         if (hasExceptionEdge && !predStates.get(0).stack().isEmpty()) {
-            // Exception handler: keep the exception reference on stack
+            // 异常处理器:保留异常引用在栈上
             mergedStack = new ArrayDeque<>(predStates.get(0).stack());
         } else if (!hasExceptionEdge && predStates.size() >= 2) {
-            // Normal merge with multiple predecessors: check if all preds
-            // push the same number of values. If so, create PHI nodes.
+            // 多前驱普通汇合:检查所有前驱推送的值深度是否相同.
+            // 若相同则创建stack-PHI节点.
             boolean allSameDepth = true;
             int depth = predStates.get(0).stack().size();
             for (FrameState ps : predStates) {
@@ -309,9 +340,9 @@ public final class IrBuilder {
                 }
             }
             if (allSameDepth && depth > 0) {
-                // Create PHI for each stack slot
+                // 为每个栈槽位创建PHI
                 Deque<Value> phiStack = new ArrayDeque<>();
-                // Build the stack from bottom to top using lists
+                // 从底到顶构建栈
                 List<List<Value>> slotValues = new ArrayList<>();
                 for (int i = 0; i < depth; i++) {
                     slotValues.add(new ArrayList<>());
@@ -336,7 +367,7 @@ public final class IrBuilder {
                 mergedStack = new ArrayDeque<>();
             }
         } else {
-            // Normal merge point: stack must be empty per JVM verification
+            // 正常汇合点:根据JVM验证,栈必须为空
             mergedStack = new ArrayDeque<>();
         }
 
@@ -344,9 +375,8 @@ public final class IrBuilder {
     }
 
     /**
-     * Symbolically execute one basic block. Each opcode dispatches to a
-     * category-specific handler that preserves bytecode metadata for downstream
-     * operator and name resolution.
+     * 对一个基本块进行符号执行.每条操作码分发到对应类别的处理函数,
+     * 处理函数会保留字节码元数据,供下游进行运算符和名称解析.
      */
     private FrameState simulateBlock(BasicBlock block, FrameState entry,
                                      List<IrInstruction> instructions,
@@ -369,22 +399,22 @@ public final class IrBuilder {
                 continue;
             }
 
-            // ── Dispatch to category handlers ─────────────────────────
+            // ── 按类别分发到处理函数 ──────────────
             switch (op) {
-                // Stack manipulation
+                // 栈操作
                 case NOP -> {
                 }
                 case POP, POP2 -> handlePop(op, stack);
                 case DUP, DUP_X1, DUP_X2, DUP2, SWAP -> handleDup(op, stack);
 
-                // Constants
+                // 常量
                 case ACONST_NULL, ICONST_M1, ICONST_0, ICONST_1, ICONST_2,
                      ICONST_3, ICONST_4, ICONST_5, LCONST_0, LCONST_1,
                      FCONST_0, FCONST_1, FCONST_2, DCONST_0, DCONST_1,
                      BIPUSH, SIPUSH -> handleConstant(op, insn, stack, instructions, offset, blockId);
                 case LDC, LDC_W, LDC2_W -> handleLdc(insn, stack, cp, instructions, offset, blockId);
 
-                // Loads
+                // 加载
                 case ILOAD, ILOAD_0, ILOAD_1, ILOAD_2, ILOAD_3,
                      LLOAD, LLOAD_0, LLOAD_1, LLOAD_2, LLOAD_3,
                      FLOAD, FLOAD_0, FLOAD_1, FLOAD_2, FLOAD_3,
@@ -392,7 +422,7 @@ public final class IrBuilder {
                      ALOAD, ALOAD_0, ALOAD_1, ALOAD_2, ALOAD_3 ->
                         handleLoad(op, insn, stack, locals, variables, instructions, offset, blockId);
 
-                // Stores
+                // 存储
                 case ISTORE, ISTORE_0, ISTORE_1, ISTORE_2, ISTORE_3,
                      LSTORE, LSTORE_0, LSTORE_1, LSTORE_2, LSTORE_3,
                      FSTORE, FSTORE_0, FSTORE_1, FSTORE_2, FSTORE_3,
@@ -400,10 +430,10 @@ public final class IrBuilder {
                      ASTORE, ASTORE_0, ASTORE_1, ASTORE_2, ASTORE_3 ->
                         handleStore(op, insn, stack, locals, variables, instructions, offset, blockId);
 
-                // IINC
+                // 整型递增
                 case IINC -> handleIinc(insn, variables, instructions, offset, blockId, locals);
 
-                // Arithmetic (int)
+                // 算术运算(int)
                 case IADD, ISUB, IMUL, IDIV, IREM, ISHL, ISHR, IUSHR, IAND, IOR, IXOR ->
                         handleArithmetic(op, stack, instructions, JavaType.INT, offset, blockId);
                 case LADD, LSUB, LMUL, LDIV, LREM, LSHL, LSHR, LUSHR, LAND, LOR, LXOR ->
@@ -414,29 +444,29 @@ public final class IrBuilder {
                         handleArithmetic(op, stack, instructions, JavaType.DOUBLE, offset, blockId);
                 case INEG, LNEG, FNEG, DNEG -> handleNegate(op, stack, instructions, offset, blockId);
 
-                // Comparisons — pass op so the bytecode can be stored for operator inference
+                // 比较 —— 传入op以保留字节码用于运算符推断
                 case LCMP, FCMPL, FCMPG, DCMPL, DCMPG -> handleComparison(op, stack, instructions, offset, blockId);
 
-                // Returns
+                // 返回
                 case RETURN -> instructions.add(IrInstruction.returnInsn(nextId(), null, offset, blockId));
                 case IRETURN, LRETURN, FRETURN, DRETURN, ARETURN ->
                         instructions.add(IrInstruction.returnInsn(nextId(), stack.pop(), offset, blockId));
 
-                // Fields — pass insn+cp for name resolution
+                // 字段 —— 传入 insn+cp 用于名称解析
                 case GETSTATIC, GETFIELD -> handleFieldLoad(op, insn, stack, instructions, cp, offset, blockId);
                 case PUTSTATIC, PUTFIELD -> handleFieldStore(op, insn, stack, instructions, cp, offset, blockId);
 
-                // Invoke
+                // 方法调用
                 case INVOKEVIRTUAL, INVOKESPECIAL, INVOKESTATIC, INVOKEINTERFACE ->
                         handleInvoke(op, insn, stack, instructions, cp, offset, blockId);
                 case INVOKEDYNAMIC -> handleInvokeDynamic(insn, stack, instructions, cp, offset, blockId);
 
-                // Object / Array
+                // 对象 / 数组
                 case NEW -> handleNew(insn, stack, instructions, cp, offset, blockId);
                 case NEWARRAY -> handleNewPrimitiveArray(insn, stack, instructions, offset, blockId);
                 case ANEWARRAY -> handleNewArray(op, insn, stack, instructions, cp, offset, blockId);
                 case ARRAYLENGTH -> handleArrayLength(stack, instructions, offset, blockId);
-                // Array element load: pop index, pop array → push element
+                // 数组元素加载:弹出索引,弹出数组 → 压入元素
                 case IALOAD, BALOAD, CALOAD, SALOAD ->
                         handleArrayLoad(stack, instructions, JavaType.INT, offset, blockId, op.code());
                 case LALOAD -> handleArrayLoad(stack, instructions, JavaType.LONG, offset, blockId, op.code());
@@ -444,7 +474,7 @@ public final class IrBuilder {
                 case DALOAD -> handleArrayLoad(stack, instructions, JavaType.DOUBLE, offset, blockId, op.code());
                 case AALOAD -> handleArrayLoad(stack, instructions,
                         JavaType.classType("java/lang/Object"), offset, blockId, op.code());
-                // Array element store: pop value, pop index, pop array
+                // 数组元素存储:弹出值,弹出索引,弹出数组
                 case IASTORE, BASTORE, CASTORE, SASTORE ->
                         handleArrayStore(stack, instructions, JavaType.INT, offset, blockId, op.code());
                 case LASTORE -> handleArrayStore(stack, instructions, JavaType.LONG, offset, blockId, op.code());
@@ -453,15 +483,15 @@ public final class IrBuilder {
                 case AASTORE -> handleArrayStore(stack, instructions,
                         JavaType.classType("java/lang/Object"), offset, blockId, op.code());
 
-                // Type
+                // 类型检测/转换
                 case CHECKCAST -> handleCheckCast(op, insn, stack, instructions, cp, offset, blockId);
                 case INSTANCEOF -> handleInstanceOf(op, insn, stack, instructions, cp, offset, blockId);
 
-                // Conversions — pass op.code() for cast type inference
+                // 类型转换 —— 传入 op.code() 用于转换类型推断
                 case I2L, I2F, I2D, L2I, L2F, L2D, F2I, F2L, F2D,
                      D2I, D2L, D2F, I2B, I2C, I2S -> handleConversion(op, stack, instructions, offset, blockId);
 
-                // Monitor — emit IR instructions so SynchronizedRecognizer can detect them
+                // 监视器 —— 发射IR指令以便SynchronizedRecognizer能检测到
                 case MONITORENTER -> {
                     Value obj = stack.isEmpty() ? ConstantValue.NULL : stack.pop();
                     instructions.add(new IrInstruction(nextId(), IrOpcode.MONITOR_ENTER,
@@ -473,19 +503,19 @@ public final class IrBuilder {
                             JavaType.VOID, List.of(obj), offset, blockId, op.code(), null));
                 }
 
-                // Branches — pass op for comparison operator inference
+                // 分支 —— 传入 op 用于比较运算符推断
                 case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE,
                      IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE,
                      IF_ICMPGT, IF_ICMPLE, IF_ACMPEQ, IF_ACMPNE ->
                         handleCondition(op, stack, instructions, offset, blockId);
                 case IFNULL, IFNONNULL -> handleNullCheck(op, stack, instructions, offset, blockId);
                 case GOTO, GOTO_W -> {
-                } // CFG handles these
+                } // 控制流图处理这些
                 case MULTIANEWARRAY -> handleMultiNewArray(insn, stack, instructions, offset, blockId);
                 case ATHROW -> instructions.add(new IrInstruction(nextId(), IrOpcode.THROW,
                         JavaType.VOID, List.of(stack.pop()), offset, blockId, op.code(), null));
 
-                // Switch — pop key, CFG handles targets
+                // Switch —— 弹出key,控制流图处理目标
                 case TABLESWITCH, LOOKUPSWITCH -> {
                     if (!stack.isEmpty()) {
                         Value key = stack.pop();
@@ -495,13 +525,16 @@ public final class IrBuilder {
                 }
 
                 default -> {
-                } // skip unknown opcodes
+                } // 跳过未知操作码
             }
         }
 
         return new FrameState(stack, locals);
     }
 
+    /**
+     * 处理POP/POP2操作码,从操作数栈弹出值.
+     */
     private void handlePop(Opcode op, Deque<Value> stack) {
         if (stack.isEmpty()) {
             return;
@@ -512,8 +545,11 @@ public final class IrBuilder {
         }
     }
 
-    // ── Constants ─────────────────────────────────────────────────
+    // ── 常量 ───────────────────────────────────────────────────────
 
+    /**
+     * 处理DUP系列操作码,复制或交换操作数栈上的值.
+     */
     private void handleDup(Opcode op, Deque<Value> stack) {
         switch (op) {
             case DUP -> {
@@ -549,11 +585,11 @@ public final class IrBuilder {
                 }
                 Value v1 = stack.pop();
                 if (isCategory2(v1)) {
-                    // Top value is long/double (category 2) — duplicate just it
+                    // 栈顶值为long/double(类别2)——只复制该项
                     stack.push(v1);
                     stack.push(v1);
                 } else if (!stack.isEmpty()) {
-                    // Top two values are both category 1 — duplicate both
+                    // 栈顶两个值均为类别1——复制两个
                     Value v2 = stack.pop();
                     stack.push(v2);
                     stack.push(v1);
@@ -575,6 +611,10 @@ public final class IrBuilder {
         }
     }
 
+    /**
+     * 处理各种iconst/lconst/fconst/dconst和bipush/sipush常量加载.
+     * 发射CONST IR指令使值能跨基本块边界通过InstructionRef链引用.
+     */
     private void handleConstant(Opcode op, Instruction insn, Deque<Value> stack,
                                 List<IrInstruction> instructions, int offset, int blockId) {
         ConstantValue cv = switch (op) {
@@ -600,8 +640,7 @@ public final class IrBuilder {
             default -> null;
         };
         if (cv != null) {
-            // Emit CONST IR instruction so the value is referenceable
-            // across block boundaries via InstructionRef chains.
+            // 发射CONST IR指令使值能通过InstructionRef链跨基本块边界引用
             IrInstruction constInsn = new IrInstruction(nextId(), IrOpcode.CONST,
                     cv.type(), List.of(cv), offset, blockId);
             instructions.add(constInsn);
@@ -610,15 +649,19 @@ public final class IrBuilder {
         }
     }
 
-    // ── Loads ────────────────────────────────────────────────────
+    // ── 加载 ──────────────────────────────────────────────────────
 
+    /**
+     * 处理LDC/LDC_W/LDC2_W常量池加载指令.
+     * 发射CONST IR指令使值能通过InstructionRef链引用.
+     */
     private void handleLdc(Instruction insn, Deque<Value> stack, ConstantPoolEntry[] cp,
                            List<IrInstruction> instructions, int offset, int blockId) {
         int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
         ConstantValue cv = cpIdx > 0 && cpIdx < cp.length
                 ? cpValue(cp[cpIdx], cp)
                 : new ConstantValue("?", JavaType.classType("java/lang/Object"));
-        // Emit CONST IR instruction so the value is referenceable
+        // 发射CONST IR指令使值能通过InstructionRef链引用
         IrInstruction constInsn = new IrInstruction(nextId(), IrOpcode.CONST,
                 cv.type(), List.of(cv), offset, blockId);
         instructions.add(constInsn);
@@ -626,6 +669,10 @@ public final class IrBuilder {
         stack.push(new InstructionRef(constInsn, cv.type()));
     }
 
+    /**
+     * 处理局部变量加载指令(ILOAD,ALOAD等).
+     * 确保变量携带其局部变量表名称,即使来自前驱帧状态的变量也如此.
+     */
     private void handleLoad(Opcode op, Instruction insn, Deque<Value> stack,
                             Value[] locals, List<Variable> variables,
                             List<IrInstruction> instructions, int offset, int blockId) {
@@ -635,8 +682,7 @@ public final class IrBuilder {
         if (v == null) {
             v = lookupReadVar(variables, idx, type);
         }
-        // Ensure the variable has its LVT name even if it came from a predecessor's
-        // frame state (where createWriteVar may have missed it for non-zero versions)
+        // 确保变量携带其局部变量表名称(即使来自前驱帧状态)
         if (v instanceof Variable var && currentLvtNames.containsKey(idx)
                 && (var.name() == null || var.name().startsWith("var"))) {
             var.setName(currentLvtNames.get(idx));
@@ -645,8 +691,11 @@ public final class IrBuilder {
         stack.push(v);
     }
 
-    // ── Stores ───────────────────────────────────────────────────
+    // ── 存储 ──────────────────────────────────────────────────────
 
+    /**
+     * 根据加载操作码确定对应类型.
+     */
     private JavaType loadType(Opcode op) {
         return switch (op) {
             case ILOAD, ILOAD_0, ILOAD_1, ILOAD_2, ILOAD_3 -> JavaType.INT;
@@ -657,8 +706,14 @@ public final class IrBuilder {
         };
     }
 
-    // ── IINC ─────────────────────────────────────────────────────
+    // ── IINC ──────────────────────────────────────────────────────
 
+    /**
+     * 处理局部变量存储指令(ISTORE,ASTORE等).
+     * 每次存储都创建一个新版本变量,防止槽位混淆(如"this"与重用槽位的临时变量).
+     * 将新变量写入locals数组,确保后续LOAD指令找到Variable而非原始InstructionRef,
+     * 从而防止错误的表达式展开.
+     */
     private void handleStore(Opcode op, Instruction insn, Deque<Value> stack,
                              Value[] locals, List<Variable> variables,
                              List<IrInstruction> instructions, int offset, int blockId) {
@@ -667,26 +722,31 @@ public final class IrBuilder {
         }
         int idx = varIndex(insn, op);
         Value val = stack.pop();
-        // Create a NEW version for each store — prevents "this" slot confusion
+        // 每次存储都创建一个新版本——防止"this"槽位混淆
         Variable var = createWriteVar(variables, idx, val.type());
-        // Store the NEW Variable in locals so subsequent LOADs find a Variable,
-        // NOT the raw InstructionRef. This prevents expression expansion:
-        // "n = cap - 1 | cap - 1 >>> 1" → "n = n | n >>> 1"
+        // 将新Variable存入locals数组确保后续LOAD找到Variable而非原始InstructionRef.
+        // 这能防止错误的表达式展开,例如:
+        // "n = cap - 1 | cap - 1 >>> 1" → "n = n | n >>> 1"(错误!)
         locals[idx] = var;
         instructions.add(IrInstruction.store(nextId(), var, val, offset, blockId));
     }
 
-    // ── Arithmetic ───────────────────────────────────────────────
+    // ── 算术 ─────────────────────────────────────────────────────
 
+    /**
+     * 处理IINC(整型递增)指令.
+     * 读取当前值并写入新值——为写入创建新版本变量,
+     * 并更新locals数组以确保同一块内后续LOAD看到新版本.
+     */
     private void handleIinc(Instruction insn, List<Variable> variables,
                             List<IrInstruction> instructions, int offset, int blockId,
                             Value[] locals) {
         int idx = varIndex(insn, Opcode.IINC);
         int incr = insn.rawOperands().size() > 1 ? insn.rawOperands().get(1) : 0;
-        // IINC reads current value and writes new value — create a new version
+        // IINC读取当前值并写入新值——创建新版本变量
         Variable readVar = lookupReadVar(variables, idx, JavaType.INT);
         Variable writeVar = createWriteVar(variables, idx, JavaType.INT);
-        // Update locals so subsequent LOADs in the same block see the new version
+        // 更新locals数组以便同一块内后续LOAD看到新版本
         if (idx < locals.length) {
             locals[idx] = writeVar;
         }
@@ -695,6 +755,10 @@ public final class IrBuilder {
                 offset, blockId));
     }
 
+    /**
+     * 处理算术二元运算(IADD,ISUB等).
+     * 弹出右操作数和左操作数(栈顶为右),创建BINARY IR指令并压回结果.
+     */
     private void handleArithmetic(Opcode op, Deque<Value> stack,
                                   List<IrInstruction> instructions,
                                   JavaType type, int offset, int blockId) {
@@ -710,8 +774,11 @@ public final class IrBuilder {
         stack.push(new InstructionRef(bin, type));
     }
 
-    // ── Comparisons ──────────────────────────────────────────────
+    // ── 比较 ──────────────────────────────────────────────────────
 
+    /**
+     * 处理取负操作(INEG,LNEG等一元运算).
+     */
     private void handleNegate(Opcode op, Deque<Value> stack,
                               List<IrInstruction> instructions, int offset, int blockId) {
         if (stack.isEmpty()) {
@@ -725,8 +792,12 @@ public final class IrBuilder {
         stack.push(new InstructionRef(un, v.type()));
     }
 
-    // ── Fields ───────────────────────────────────────────────────
+    // ── 字段 ─────────────────────────────────────────────────────
 
+    /**
+     * 处理比较操作(lcmp,fcmpl,fcmpg,dcmpl,dcmpg).
+     * 创建COMPARE IR指令,结果类型为int.
+     */
     private void handleComparison(Opcode op, Deque<Value> stack,
                                   List<IrInstruction> instructions, int offset, int blockId) {
         if (stack.size() < 2) {
@@ -741,6 +812,11 @@ public final class IrBuilder {
         stack.push(new InstructionRef(cmp, JavaType.INT));
     }
 
+    /**
+     * 处理字段加载(GETFIELD/GETSTATIC).
+     * 解析字段名和类型,创建FIELD_LOAD IR指令.
+     * 对于GETSTATIC,标记声明类信息以便BlockReducer输出完整限定名.
+     */
     private void handleFieldLoad(Opcode op, Instruction insn, Deque<Value> stack,
                                  List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                  int offset, int blockId) {
@@ -752,8 +828,8 @@ public final class IrBuilder {
         instructions.add(fi);
         fi.setResultValue(new InstructionRef(fi, fi.resultType()));
 
-        // For static field access (GETSTATIC), tag with declaring class
-        // so that BlockReducer emits System.out instead of just out.
+        // 对于静态字段访问(GETSTATIC),标记声明类信息,
+        // 以便BlockReducer输出System.out而非仅out
         if (op == Opcode.GETSTATIC) {
             String declaringClass = resolveFieldDeclaringClass(insn, cp);
             if (declaringClass != null) {
@@ -767,6 +843,10 @@ public final class IrBuilder {
         stack.push(new InstructionRef(fi, fi.resultType()));
     }
 
+    /**
+     * 处理字段存储(PUTFIELD/PUTSTATIC).
+     * 解析字段名,创建FIELD_STORE IR指令.
+     */
     private void handleFieldStore(Opcode op, Instruction insn, Deque<Value> stack,
                                   List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                   int offset, int blockId) {
@@ -779,7 +859,9 @@ public final class IrBuilder {
         instructions.add(IrInstruction.fieldStore(nextId(), obj, val, offset, blockId, fieldName));
     }
 
-    /** Resolve a field type from the constant pool via a field-ref instruction. */
+    /**
+     * 通过字段引用指令从常量池解析字段类型.
+     */
     private JavaType resolveFieldType(Instruction insn, ConstantPoolEntry[] cp) {
         if (insn.rawOperands().isEmpty()) {
             return JavaType.classType("java/lang/Object");
@@ -800,12 +882,14 @@ public final class IrBuilder {
                 return com.bingbaihanji.bdec.type.TypeResolver.parseFieldType(desc);
             }
         } catch (Exception ignored) {
-            // fall through
+            // 解析失败则返回默认类型
         }
         return JavaType.classType("java/lang/Object");
     }
 
-    /** Resolve a field name from the constant pool via a field-ref instruction. */
+    /**
+     * 通过字段引用指令从常量池解析字段名.
+     */
     private String resolveFieldName(Instruction insn, ConstantPoolEntry[] cp) {
         if (insn.rawOperands().isEmpty()) {
             return null;
@@ -825,12 +909,14 @@ public final class IrBuilder {
                 return ConstantPoolParser.utf8(cp, nat.nameIndex());
             }
         } catch (Exception ignored) {
-            // fall through to null
+            // 解析失败则返回 null
         }
         return null;
     }
 
-    /** Resolve the declaring class name for a field-ref instruction (used for GETSTATIC). */
+    /**
+     * 解析字段引用指令的声明类名(用于GETSTATIC指令).
+     */
     private String resolveFieldDeclaringClass(Instruction insn, ConstantPoolEntry[] cp) {
         if (insn.rawOperands().isEmpty()) {
             return null;
@@ -849,14 +935,16 @@ public final class IrBuilder {
                 return ConstantPoolParser.className(cp, classIdx);
             }
         } catch (Exception ignored) {
-            // fall through to null
+            // 解析失败则返回 null
         }
         return null;
     }
 
-    // ── Invoke ───────────────────────────────────────────────────
+    // ── 方法调用 ───────────────────────────────────────────────────
 
-    /** Resolve a method name from the constant pool via a method-ref instruction. */
+    /**
+     * 通过方法引用指令从常量池解析方法名.
+     */
     private String resolveMethodName(Instruction insn, ConstantPoolEntry[] cp) {
         if (insn.rawOperands().isEmpty()) {
             return null;
@@ -877,13 +965,18 @@ public final class IrBuilder {
                 return ConstantPoolParser.utf8(cp, nat.nameIndex());
             }
         } catch (Exception ignored) {
-            // fall through to null
+            // 解析失败则返回 null
         }
         return null;
     }
 
-    // ── InvokeDynamic ────────────────────────────────────────────
+    // ── InvokeDynamic ─────────────────────────────────────────────
 
+    /**
+     * 处理常规方法调用(INVOKEVIRTUAL/INVOKESPECIAL/INVOKESTATIC/INVOKEINTERFACE).
+     * 从常量池解析参数类型和返回类型,按逆序弹出实参,弹出接收者对象,
+     * 创建INVOKE IR指令.对boolean参数折叠0/1常量,对静态调用标记声明类.
+     */
     private void handleInvoke(Opcode op, Instruction insn, Deque<Value> stack,
                               List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                               int offset, int blockId) {
@@ -891,8 +984,8 @@ public final class IrBuilder {
         int argCount = 0;
         JavaType returnType = JavaType.classType("java/lang/Object");
         String methodName = null;
-        String declaringClass = null; // for constructor delegation target
-        com.bingbaihanji.bdec.type.JavaType[] paramTypes = null; // for boolean folding
+        String declaringClass = null; // 用于构造函数委托目标
+        com.bingbaihanji.bdec.type.JavaType[] paramTypes = null; // 用于boolean折叠
 
         if (cpIdx > 0 && cpIdx < cp.length) {
             try {
@@ -923,23 +1016,23 @@ public final class IrBuilder {
                     returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(desc);
                 }
             } catch (Exception ignored) {
-                // keep defaults
+                // 保持默认值
             }
         }
 
-        // Pop args in reverse order
+        // 按逆序弹出实参
         List<Value> args = new ArrayList<>();
         for (int a = 0; a < argCount && !stack.isEmpty(); a++) {
             args.addFirst(stack.pop());
         }
-        // Capture receiver (for non-static calls) — preserves target for method calls
+        // 捕获接收者(对于非静态调用)——保留方法调用的目标对象
         Value receiver = null;
         if (op != Opcode.INVOKESTATIC && !stack.isEmpty()) {
             receiver = stack.pop();
         }
 
-        // Fold boolean constants: 0→false, 1→true when parameter is boolean.
-        // Follow InstructionRef chains since constants are now emitted as CONST IR.
+        // 折叠boolean常量:当参数为boolean时,将0/1转为false/true.
+        // 由于常量现在以CONST IR的形式发射,需沿InstructionRef链追溯.
         if (paramTypes != null) {
             for (int p = 0; p < paramTypes.length && p < args.size(); p++) {
                 if (paramTypes[p].kind() == TypeKind.BOOLEAN) {
@@ -956,7 +1049,7 @@ public final class IrBuilder {
                 offset, blockId, methodName);
         instructions.add(inv);
 
-        // Tag static calls with declaring class (for Arrays.fill() vs fill())
+        // 对静态调用标记声明类(用于Arrays.fill() vs fill()的区分)
         if (op == Opcode.INVOKESTATIC && declaringClass != null) {
             inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
                     com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS,
@@ -964,7 +1057,7 @@ public final class IrBuilder {
                     declaringClass));
         }
 
-        // Tag constructor delegation calls with target class info
+        // 标记构造函数委托调用,附带目标类信息
         if ("<init>".equals(methodName)) {
             if (declaringClass != null) {
                 inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
@@ -983,8 +1076,13 @@ public final class IrBuilder {
         }
     }
 
-    // ── Object / Array ───────────────────────────────────────────
+    // ── 对象 / 数组 ───────────────────────────────────────────────
 
+    /**
+     * 处理INVOKEDYNAMIC指令.
+     * 解析引导方法信息,创建INVOKE IR指令,并标记INDY语义注解.
+     * 引导方法参数用于下游pass检测lambda表达式和方法引用.
+     */
     private void handleInvokeDynamic(Instruction insn, Deque<Value> stack,
                                      List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                      int offset, int blockId) {
@@ -1011,11 +1109,11 @@ public final class IrBuilder {
                     }
                 }
             } catch (Exception ignored) {
-                // keep defaults
+                // 保持默认值
             }
         }
 
-        // Pop arguments
+        // 弹出实参
         List<Value> args = new ArrayList<>();
         for (int a = 0; a < argCount && !stack.isEmpty(); a++) {
             args.addFirst(stack.pop());
@@ -1024,7 +1122,7 @@ public final class IrBuilder {
         IrInstruction inv = IrInstruction.invoke(nextId(), null, args, returnType,
                 offset, blockId, methodName);
 
-        // Resolve bootstrap method info for downstream detection of lambda vs method ref.
+        // 解析引导方法信息,供下游检测lambda vs 方法引用
         java.util.Map<String, Object> annotProps = new java.util.LinkedHashMap<>();
         annotProps.put("bootstrapIdx", bootstrapIdx);
         annotProps.put("indyName", methodName);
@@ -1036,7 +1134,7 @@ public final class IrBuilder {
                 BootstrapMethodEntry bsm = currentBootstrapMethods.get(bootstrapIdx);
                 resolveBootstrapMethod(bsm, cp, annotProps);
             } catch (Exception ignored) {
-                // bootstrap resolution is best-effort
+                // 引导方法解析为尽力而为
             }
         }
 
@@ -1049,9 +1147,10 @@ public final class IrBuilder {
         }
     }
 
-    /** Resolve bootstrap method arguments to extract the implementation method handle.
-     *  For LambdaMetafactory patterns, argument[1] is the MethodHandle for the
-     *  lambda body / method reference target. */
+    /**
+     * 解析引导方法参数,提取实现方法句柄.
+     * 对于LambdaMetafactory模式,argument[1]为lambda体/方法引用目标的方法句柄.
+     */
     private void resolveBootstrapMethod(BootstrapMethodEntry bsm, ConstantPoolEntry[] cp,
                                         java.util.Map<String, Object> annotProps) {
         java.util.List<Integer> arguments = bsm.arguments();
@@ -1059,7 +1158,7 @@ public final class IrBuilder {
             return;
         }
 
-        // Argument 1 is the implementation method handle
+        // 参数1为实现方法句柄
         int implHandleIdx = arguments.get(1);
         if (implHandleIdx <= 0 || implHandleIdx >= cp.length) {
             return;
@@ -1103,10 +1202,14 @@ public final class IrBuilder {
         }
     }
 
+    /**
+     * 处理NEW对象创建指令.
+     * 从常量池解析类名,创建NEW IR指令.
+     */
     private void handleNew(Instruction insn, Deque<Value> stack,
                            List<IrInstruction> instructions,
                            ConstantPoolEntry[] cp, int offset, int blockId) {
-        // Resolve the class type from the constant pool
+        // 从常量池解析类类型
         String className = "java/lang/Object";
         int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
         if (cpIdx > 0 && cpIdx < cp.length) {
@@ -1122,9 +1225,11 @@ public final class IrBuilder {
         stack.push(new InstructionRef(n, n.resultType()));
     }
 
-    /** NEWARRAY: create primitive array (new int[10], new byte[20], etc.).
-     *  Operand byte: array type code (4=boolean, 5=char, 6=float, 7=double,
-     *  8=byte, 9=short, 10=int, 11=long). */
+    /**
+     * 处理NEWARRAY基本类型数组创建指令(new int[10],new byte[20]等).
+     * 操作数字节表示数组类型代码(4=boolean, 5=char, 6=float, 7=double,
+     * 8=byte, 9=short, 10=int, 11=long).
+     */
     private void handleNewPrimitiveArray(Instruction insn, Deque<Value> stack,
                                          List<IrInstruction> instructions,
                                          int offset, int blockId) {
@@ -1147,7 +1252,9 @@ public final class IrBuilder {
         stack.push(new InstructionRef(na, na.resultType()));
     }
 
-    /** ANEWARRAY: create reference-type array (new String[10]). */
+    /**
+     * 处理ANEWARRAY引用类型数组创建指令(new String[10]).
+     */
     private void handleNewArray(Opcode op, Instruction insn, Deque<Value> stack,
                                 List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                 int offset, int blockId) {
@@ -1160,15 +1267,18 @@ public final class IrBuilder {
         stack.push(new InstructionRef(na, na.resultType()));
     }
 
+    /**
+     * 处理MULTIANEWARRAY多维数组创建指令.
+     */
     private void handleMultiNewArray(Instruction insn, Deque<Value> stack,
                                      List<IrInstruction> instructions,
                                      int offset, int blockId) {
-        // MULTIANEWARRAY: operands = [cp_index, dimensions]
+        // MULTIANEWARRAY操作数格式:[cp_index, dimensions]
         int dims = 1;
         if (insn.rawOperands().size() > 1) {
             dims = insn.rawOperands().get(1);
         }
-        // Pop dimension sizes from stack
+        // 从栈中弹出各维度大小
         List<Value> sizes = new ArrayList<>();
         for (int d = 0; d < dims && !stack.isEmpty(); d++) {
             sizes.addFirst(stack.pop());
@@ -1180,8 +1290,12 @@ public final class IrBuilder {
         stack.push(new InstructionRef(na, na.resultType()));
     }
 
-    // ── Array element load/store ──────────────────────────────────
+    // ── 数组元素加载/存储 ────────────────────────────────────────
 
+    /**
+     * 处理数组元素加载(IALOAD,AALOAD等).
+     * 弹出索引和数组引用,创建ARRAY_LOAD IR指令.
+     */
     private void handleArrayLoad(Deque<Value> stack, List<IrInstruction> instructions,
                                  JavaType elementType, int offset, int blockId, int opcode) {
         if (stack.size() < 2) {
@@ -1196,6 +1310,10 @@ public final class IrBuilder {
         stack.push(new InstructionRef(al, elementType));
     }
 
+    /**
+     * 处理数组元素存储(IASTORE,AASTORE等).
+     * 弹出值,索引和数组引用,创建ARRAY_STORE IR指令.
+     */
     private void handleArrayStore(Deque<Value> stack, List<IrInstruction> instructions,
                                   JavaType elementType, int offset, int blockId, int opcode) {
         if (stack.size() < 3) {
@@ -1209,8 +1327,11 @@ public final class IrBuilder {
         instructions.add(ast);
     }
 
-    // ── Type / Cast ──────────────────────────────────────────────
+    // ── 类型 / 转换 ───────────────────────────────────────────────
 
+    /**
+     * 处理ARRAYLENGTH数组长度获取指令.
+     */
     private void handleArrayLength(Deque<Value> stack, List<IrInstruction> instructions,
                                    int offset, int blockId) {
         if (stack.isEmpty()) {
@@ -1224,6 +1345,9 @@ public final class IrBuilder {
         stack.push(new InstructionRef(al, JavaType.INT));
     }
 
+    /**
+     * 处理CHECKCAST类型检查转换指令.
+     */
     private void handleCheckCast(Opcode op, Instruction insn, Deque<Value> stack,
                                  List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                  int offset, int blockId) {
@@ -1231,7 +1355,7 @@ public final class IrBuilder {
             return;
         }
         Value v = stack.pop();
-        // Resolve target type from constant pool
+        // 从常量池解析目标类型
         JavaType targetType = resolveClassType(insn, cp);
         IrInstruction c = IrInstruction.cast(nextId(), v, targetType, offset, blockId, op.code());
         instructions.add(c);
@@ -1239,15 +1363,18 @@ public final class IrBuilder {
         stack.push(new InstructionRef(c, c.resultType()));
     }
 
+    /**
+     * 处理INSTANCEOF类型检测指令.
+     * nameHint携带目标类内部名,供BlockReducer使用.
+     */
     private void handleInstanceOf(Opcode op, Instruction insn, Deque<Value> stack,
                                   List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                   int offset, int blockId) {
         if (stack.isEmpty()) {
             return;
         }
-        Value obj = stack.pop(); // preserve the object as an operand
+        Value obj = stack.pop(); // 保留对象作为操作数
         JavaType targetType = resolveClassType(insn, cp);
-        // nameHint carries the target class internal name for BlockReducer.
         IrInstruction io = new IrInstruction(nextId(), IrOpcode.INSTANCE_OF,
                 JavaType.INT, List.of(obj), offset, blockId, op.code(), targetType.internalName());
         io.setResultValue(new InstructionRef(io, JavaType.INT));
@@ -1255,7 +1382,9 @@ public final class IrBuilder {
         stack.push(new InstructionRef(io, JavaType.INT));
     }
 
-    /** Resolve a class type from a CP-referencing instruction (checkcast, instanceof, anewarray). */
+    /**
+     * 从引用常量池的指令(checkcast,instanceof,anewarray)中解析类类型.
+     */
     private JavaType resolveClassType(Instruction insn, ConstantPoolEntry[] cp) {
         int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
         if (cpIdx > 0 && cpIdx < cp.length) {
@@ -1267,8 +1396,11 @@ public final class IrBuilder {
         return JavaType.classType("java/lang/Object");
     }
 
-    // ── Branches ─────────────────────────────────────────────────
+    // ── 分支 ──────────────────────────────────────────────────────
 
+    /**
+     * 处理类型转换指令(I2L,F2I等).
+     */
     private void handleConversion(Opcode op, Deque<Value> stack,
                                   List<IrInstruction> instructions, int offset, int blockId) {
         if (stack.isEmpty()) {
@@ -1282,26 +1414,29 @@ public final class IrBuilder {
         stack.push(new InstructionRef(conv, to));
     }
 
+    /**
+     * 处理条件分支指令(if系列).
+     * 区分零值比较(IFEQ..IFLE:单操作数与0比较)
+     * 和整数比较(IF_ICMPxx:双操作数比较).
+     * 对于IFxx系列,栈上有且仅有一个值,将其作为左操作数与0比较.
+     * 这样IFEQ生成的比较就正确地表现为 "capacity > 0".
+     */
     private void handleCondition(Opcode op, Deque<Value> stack,
                                  List<IrInstruction> instructions, int offset, int blockId) {
-        // Distinguish zero-comparisons (IFEQ..IFLE: one operand vs 0)
-        // from int-comparisons (IF_ICMPxx: two operands).
-        // For IFxx, the stack has ONE value and we compare it against 0.
-        // Make the stack value the LEFT operand so "capacity > 0" reads correctly.
         boolean isIfCmp = switch (op) {
             case IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE,
                  IF_ACMPEQ, IF_ACMPNE -> true;
             default -> false;
         };
         if (isIfCmp) {
-            // Two-operand pop order: right first, then left (standard JVM semantics)
+            // 双操作数弹出:先右后左(标准JVM语义)
             Value right = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
             Value left = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
             instructions.add(new IrInstruction(nextId(), IrOpcode.CONDITION,
                     JavaType.INT, List.of(left, right), offset, blockId, op.code(), null));
         } else {
-            // IFxx — one operand: the stack value is the value being compared against 0
-            // Put value as LEFT, 0 as RIGHT so e.g. IFGT produces "capacity > 0"
+            // IFxx —— 单操作数:栈上的值与0比较.
+            // 将值放在左边,0放在右边,使IFGT等产生正确的 "capacity > 0" 语义
             Value val = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
             instructions.add(new IrInstruction(nextId(), IrOpcode.CONDITION,
                     JavaType.INT, List.of(val, new ConstantValue(0, JavaType.INT)),
@@ -1310,9 +1445,12 @@ public final class IrBuilder {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  Shared helpers
+    //  共享辅助方法
     // ═══════════════════════════════════════════════════════════════════
 
+    /**
+     * 处理空值检查指令(IFNULL/IFNONNULL).
+     */
     private void handleNullCheck(Opcode op, Deque<Value> stack, List<IrInstruction> instructions,
                                  int offset, int blockId) {
         Value ref = !stack.isEmpty() ? stack.pop() : ConstantValue.NULL;
@@ -1320,17 +1458,21 @@ public final class IrBuilder {
                 JavaType.INT, List.of(ref, ConstantValue.NULL), offset, blockId, op.code(), null));
     }
 
+    /** 获取下一条指令的唯一ID. */
     private int nextId() {return nextInsnId++;}
 
+    /**
+     * 获取指令操作的变量索引.
+     * 优先使用指令级别varIndex(由WIDE或显式操作数解码设置),
+     * 其次使用操作码隐式索引(例如 iload_0 -> 0),最后使用首个原始操作数.
+     */
     private int varIndex(Instruction insn, Opcode op) {
-        // Prefer instruction-level varIndex (set by WIDE or explicit operand decoding).
-        // Fall back to opcode implicit (e.g. iload_0 → 0), then first raw operand.
         if (insn.varIndex() >= 0 && insn.opcode() == op.code()) {
             return insn.varIndex();
         }
-        // Only use implicitVarIndex for opcodes WITHOUT explicit operands
-        // (e.g., ILOAD_0 → 0, ISTORE_3 → 3). For explicit-index opcodes
-        // (ILOAD with operand byte), implicitVarIndex is 0 which is wrong.
+        // 仅对无显式操作数的操作码使用隐式变量索引
+        // (例如 ILOAD_0 -> 0, ISTORE_3 -> 3).
+        // 对于带显式索引的操作码(如含操作数字节的ILOAD),implicitVarIndex为0但这是错误的.
         if (op.implicitVarIndex() >= 0 && op.operandBytes() == 0) {
             return op.implicitVarIndex();
         }
@@ -1340,6 +1482,9 @@ public final class IrBuilder {
         return 0;
     }
 
+    /**
+     * 获取或创建指定槽位和类型的变量(版本0).
+     */
     private Variable getOrCreateVar(List<Variable> variables, int slot, JavaType type, boolean isParam) {
         for (Variable v : variables) {
             if (v.slot() == slot && v.version() == 0) {
@@ -1351,27 +1496,29 @@ public final class IrBuilder {
         return v;
     }
 
-    /** Create a NEW variable version for a STORE (slot is being written to).
-     *  This prevents slot 0 ('this') from being confused with a temp stored at slot 0. */
+    /**
+     * 为STORE操作创建一个新版本的变量(槽位正在被写入).
+     * 这防止槽位0('this')与存储到槽位0的临时变量相混淆.
+     * 同时将isParameter标志从版本0传播到所有新版本,防止BlockReducer
+     * 为参数重赋值(如"int dest = 0"遮盖了参数"int[] dest")生成VariableDeclaration.
+     */
     private Variable createWriteVar(List<Variable> variables, int slot, JavaType type) {
         int maxVersion = 0;
         boolean isParam = false;
         for (Variable v : variables) {
             if (v.slot() == slot) {
                 maxVersion = Math.max(maxVersion, v.version());
-                // Propagate isParameter from version 0 to all new versions.
-                // This prevents BlockReducer from emitting VariableDeclaration
-                // for parameter reassignments (e.g. "int dest = 0" shadowing
-                // the parameter "int[] dest").
+                // 将isParameter从版本0传播到所有新版本.
+                // 这防止BlockReducer为参数重赋值生成VariableDeclaration.
                 if (v.isParameter() && v.version() == 0) {
                     isParam = true;
                 }
             }
         }
         Variable v = new Variable(slot, maxVersion + 1, type, isParam, slot);
-        // Carry forward LVT name so new versions retain original parameter names.
-        // BUT skip slot 0 in instance methods: "this" is version 0 only;
-        // stores to slot 0 are a DIFFERENT variable reusing the slot.
+        // 向前传播局部变量表名称以便新版本保留原始参数名.
+        // 但是跳过实例方法中的槽位0:'this'仅版本0有效;
+        // 对槽位0的写入是一个重用该槽位的不同变量.
         if (currentLvtNames.containsKey(slot)
                 && !(slot == 0 && maxVersion > 0)) {
             v.setName(currentLvtNames.get(slot));
@@ -1380,7 +1527,10 @@ public final class IrBuilder {
         return v;
     }
 
-    /** Find the latest version of a variable at the given slot (for LOAD). */
+    /**
+     * 获取指定槽位最新版本的变量(用于LOAD指令).
+     * 如果尚无该槽位的变量,则创建版本0的新变量,并应用局部变量表名称.
+     */
     private Variable lookupReadVar(List<Variable> variables, int slot, JavaType type) {
         Variable latest = null;
         for (Variable v : variables) {
@@ -1391,7 +1541,7 @@ public final class IrBuilder {
         if (latest != null) {
             return latest;
         }
-        // First access: create version 0, apply LVT name if available
+        // 首次访问:创建版本0,如有局部变量表名称则应用
         Variable v = new Variable(slot, 0, type, false, slot);
         if (currentLvtNames.containsKey(slot)) {
             v.setName(currentLvtNames.get(slot));
@@ -1400,6 +1550,9 @@ public final class IrBuilder {
         return v;
     }
 
+    /**
+     * 将值转换为Variable,如果不是Variable则创建新变量.
+     */
     @SuppressWarnings("unused")
     private Variable asVar(Value v, List<Variable> variables, int slot) {
         if (v instanceof Variable var) {
@@ -1408,6 +1561,9 @@ public final class IrBuilder {
         return getOrCreateVar(variables, slot, v.type(), false);
     }
 
+    /**
+     * 发射LOAD IR指令(如果值是Variable类型).
+     */
     private void emitLoad(Value v, List<IrInstruction> instructions, int offset, int blockId) {
         if (v instanceof Variable var) {
             IrInstruction load = IrInstruction.load(nextId(), var, offset, blockId);
@@ -1416,6 +1572,9 @@ public final class IrBuilder {
         }
     }
 
+    /**
+     * 将常量池条目转换为对应的ConstantValue.
+     */
     private ConstantValue cpValue(ConstantPoolEntry entry, ConstantPoolEntry[] pool) {
         return switch (entry) {
             case ConstantPoolEntry.CpInteger i -> new ConstantValue(i.value(), JavaType.INT);
@@ -1432,6 +1591,9 @@ public final class IrBuilder {
         };
     }
 
+    /**
+     * 根据类型转换操作码确定目标类型.
+     */
     private JavaType targetType(Opcode op) {
         return switch (op) {
             case I2L -> JavaType.LONG;

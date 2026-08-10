@@ -20,10 +20,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Detects {@code instanceof} + explicit cast patterns and converts
- * them to Java 16+ pattern matching {@code instanceof}.
+ * 模式匹配重写器,检测 {@code instanceof} + 显式强制类型转换模式,
+ * 将其合并为 Java 16+ 的模式匹配 {@code instanceof} 语法.
  *
- * <p>Pattern:
+ * <p>可识别的模式:
  * <pre>
  *   if (obj instanceof String) {
  *       String s = (String) obj;
@@ -35,7 +35,7 @@ import java.util.List;
  *   }
  * </pre>
  *
- * <p>Inspired by CFR's {@code InstanceOfExpressionDefining}.
+ * <p>设计参考 CFR 的 {@code InstanceOfExpressionDefining}.
  */
 public class PatternMatchRewriter implements RewriteRule {
 
@@ -51,6 +51,7 @@ public class PatternMatchRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /** 递归重写类型声明中的每个方法体 */
     private TypeDeclaration rewriteType(TypeDeclaration td) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
@@ -66,6 +67,7 @@ public class PatternMatchRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
+    /** 递归重写语句,检测并合并 instanceof + 强制转型模式 */
     private Statement rewriteStatement(Statement s) {
         if (s instanceof BlockStatement bs) {
             List<Statement> rewritten = new ArrayList<>();
@@ -83,8 +85,8 @@ public class PatternMatchRewriter implements RewriteRule {
     }
 
     /**
-     * Detect: {@code if(obj instanceof Type) { Type v = (Type)obj; ... }}
-     * and collapse to: {@code if(obj instanceof Type v) { ... }}
+     * 检测模式:{@code if(obj instanceof Type) { Type v = (Type)obj; ... }}
+     * 合并为:{@code if(obj instanceof Type v) { ... }}
      */
     private Statement detectPatternMatch(BlockStatement bs) {
         List<Statement> stmts = new ArrayList<>(bs.statements());
@@ -94,10 +96,10 @@ public class PatternMatchRewriter implements RewriteRule {
                 continue;
             }
             if (ifStmt.elseBranch() != null) {
-                continue; // only simple if-then
+                continue; // 仅处理纯 if-then 结构(无 else 分支)
             }
 
-            // Check condition: obj instanceof Type
+            // 检查条件:obj instanceof Type
             if (!(ifStmt.condition() instanceof BinExpr be)) {
                 continue;
             }
@@ -109,7 +111,7 @@ public class PatternMatchRewriter implements RewriteRule {
             }
             Expression testedObj = be.left();
 
-            // Check then-body: first statement is Type v = (Type)obj;
+            // 检查 then 分支体:首条语句为 Type v = (Type)obj;
             List<Statement> thenStmts = getBodyStatements(ifStmt.thenBranch());
             if (thenStmts.isEmpty()) {
                 continue;
@@ -121,11 +123,11 @@ public class PatternMatchRewriter implements RewriteRule {
                 continue;
             }
 
-            // Build new condition: obj instanceof Type varName
+            // 构建新条件表达式:obj instanceof Type varName
             Expression newCondition = new BinExpr(BinaryOperator.INSTANCEOF,
                     testedObj, new VarExpr(typeExpr.name() + " " + varName));
 
-            // Build new then-body (minus the cast declaration)
+            // 构建新 then 分支体(移除强制转型声明语句)
             List<Statement> newThen = new ArrayList<>(thenStmts);
             newThen.remove(0);
             Statement newThenBody = newThen.size() == 1 ? newThen.get(0)
@@ -137,6 +139,11 @@ public class PatternMatchRewriter implements RewriteRule {
         return bs;
     }
 
+    /**
+     * 提取变量声明:验证语句是否为 {@code Type name = (Type) obj;} 形式.
+     *
+     * @return 若匹配成功则返回变量名,否则返回 null
+     */
     private String extractVarDecl(Statement s, String typeName, Expression testedObj) {
         if (!(s instanceof ExpressionStatement es)) {
             return null;
@@ -147,11 +154,11 @@ public class PatternMatchRewriter implements RewriteRule {
         if (!(assign.target() instanceof VarExpr var)) {
             return null;
         }
-        // Check RHS is a cast: (Type) obj
+        // 检查右值是否为强制类型转换:(Type) obj
         if (!(assign.value() instanceof CastExpr cast)) {
             return null;
         }
-        // Check the cast target matches
+        // 检查强制转型的目标类型是否匹配
         String castType = cast.targetType().internalName();
         if (castType == null) {
             return null;
@@ -161,11 +168,11 @@ public class PatternMatchRewriter implements RewriteRule {
         if (!shortType.equals(typeName)) {
             return null;
         }
-        // Check the cast expression matches the tested object
-        // (Heuristic: both are VarExpr with same name or similar)
+        // 检查强制转型的表达式是否与 instanceof 的被测试对象匹配
         return var.name();
     }
 
+    /** 提取语句中的子语句列表(若为块语句则展开,否则包装为单元素列表) */
     private List<Statement> getBodyStatements(Statement s) {
         if (s instanceof BlockStatement bs) {
             return new ArrayList<>(bs.statements());

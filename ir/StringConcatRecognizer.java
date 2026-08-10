@@ -18,20 +18,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Recognizes StringBuilder/StringBuffer append patterns and converts
- * them to simple string concatenation expressions.
- *
- * Pattern: new StringBuilder().append(a).append(b).toString()
- *       → a + b
- *
- * Also detects:
- * - Boxing: Integer.valueOf(x) → (Integer)x (or just x if auto-boxing)
- * - Unboxing: x.intValue() → x (auto-unboxing)
+ * 字符串拼接与装箱/拆箱识别器.
+ * <p>
+ * 识别并转换以下模式:
+ * </p>
+ * <ul>
+ *   <li><b>字符串拼接</b>:{@code new StringBuilder().append(a).append(b).toString()} 转换为 {@code a + b}</li>
+ *   <li><b>装箱</b>:{@code Integer.valueOf(x)} 转换为 {@code x}(自动装箱)</li>
+ *   <li><b>拆箱</b>:{@code x.intValue()} 转换为 {@code x}(自动拆箱)</li>
+ * </ul>
  */
 public final class StringConcatRecognizer {
 
     /**
-     * Process a block and simplify string builder patterns.
+     * 处理一个块语句,简化字符串拼接器模式和装箱/拆箱操作.
+     *
+     * @param block 原始块语句
+     * @return 识别后的块语句
      */
     public BlockStatement recognize(BlockStatement block) {
         List<Statement> stmts = new ArrayList<>(block.statements());
@@ -61,14 +64,15 @@ public final class StringConcatRecognizer {
         return new BlockStatement(result);
     }
 
-    /** Simplify an expression by removing boxing/unboxing and recognizing
-     * string builder patterns. */
+    /**
+     * 简化表达式,移除装箱/拆箱操作并识别字符串拼接器模式.
+     */
     private Expression simplifyExpression(Expression e) {
         if (e == null) {
             return null;
         }
 
-        // StringBuilder.append(expr) → keep, collect for pattern
+        // StringBuilder.append(expr) → 保留,后续模式匹配用
         if (e instanceof InvocationExpr inv) {
             Expression simplified = simplifyInvocation(inv);
             if (simplified != e) {
@@ -94,23 +98,25 @@ public final class StringConcatRecognizer {
         return e;
     }
 
-    /** Simplify common invocation patterns (boxing, unboxing, string builder). */
+    /**
+     * 简化常见的方法调用模式(装箱,拆箱,字符串拼接器).
+     */
     private Expression simplifyInvocation(InvocationExpr inv) {
         String name = inv.methodName();
 
-        // Boxing: Integer.valueOf(expr) → expr (auto-boxing)
+        // 装箱:Integer.valueOf(expr) → expr(自动装箱)
         if (isBoxingCall(name) && inv.arguments().size() == 1
                 && inv.target() == null) {
             return inv.arguments().getFirst();
         }
 
-        // Unboxing: expr.intValue() → expr (auto-unboxing)
+        // 拆箱:expr.intValue() → expr(自动拆箱)
         if (isUnboxingCall(name) && inv.arguments().isEmpty()
                 && inv.target() != null) {
             return inv.target();
         }
 
-        // String.valueOf(expr) → "" + expr (for non-string types)
+        // String.valueOf(expr) → "" + expr(针对非字符串类型)
         if ("valueOf".equals(name) && inv.arguments().size() == 1
                 && inv.target() == null
                 && isStringType(inv.returnType())) {
@@ -124,6 +130,9 @@ public final class StringConcatRecognizer {
         return inv;
     }
 
+    /**
+     * 递归识别语句中的字符串拼接和装箱/拆箱模式.
+     */
     private Statement recognizeStatement(Statement s) {
         if (s instanceof BlockStatement bs) {
             return recognize(bs);
@@ -134,10 +143,16 @@ public final class StringConcatRecognizer {
         return s;
     }
 
+    /**
+     * 判断方法名是否为装箱调用(如 Integer.valueOf).
+     */
     private boolean isBoxingCall(String methodName) {
         return "valueOf".equals(methodName);
     }
 
+    /**
+     * 判断方法名是否为拆箱调用(如 intValue,longValue等).
+     */
     private boolean isUnboxingCall(String methodName) {
         return switch (methodName) {
             case "intValue", "longValue", "floatValue", "doubleValue",
@@ -146,11 +161,17 @@ public final class StringConcatRecognizer {
         };
     }
 
+    /**
+     * 判断类型是否为 java/lang/String.
+     */
     private boolean isStringType(JavaType type) {
         return type.internalName() != null
                 && "java/lang/String".equals(type.internalName());
     }
 
+    /**
+     * 判断表达式是否为字符串类型表达式(字面量,字符串拼接或返回String的方法调用).
+     */
     private boolean isStringExpr(Expression e) {
         if (e instanceof LitExpr lit && lit.value() instanceof String) {
             return true;

@@ -10,27 +10,35 @@ import com.bingbaihanji.bdec.ir.Value;
 import com.bingbaihanji.bdec.type.TypeKind;
 
 /**
- * Folds integer constants (0, 1) into boolean {@code false/true}
- * when the surrounding context has a boolean type.
+ * 类型感知常量折叠器.
  *
- * Inspired by CFR's {@code ComparisonOperation.isBooleanComparison()}
- * and Procyon's {@code TypeAnalysis.verifyResults()} boolean constant folding.
+ * <p>当上下文为布尔类型时,将整型常量(0,1)折叠为 {@code false/true}.
+ * 仅在无歧义的布尔上下文(布尔返回类型的方法)中进行折叠,
+ * 不折叠所有 0/1 常量——普通整型运算结果必须保持为 int 类型.
+ *
+ * <p>设计参考了 CFR 的 {@code ComparisonOperation.isBooleanComparison()}
+ * 和 Procyon 的 {@code TypeAnalysis.verifyResults()} 布尔常量折叠.
  */
 public final class TypeAwareConstantFolder {
 
-    /** Follow InstructionRef chains (including PHI nodes) to find ConstantValue. */
+    /**
+     * 沿 InstructionRef 链(包括 PHI 节点)追踪,寻找 ConstantValue.
+     *
+     * @param v 起始值
+     * @return 找到的常量值,如果无法追踪到常量则返回 null
+     */
     private static ConstantValue unwrapConstant(Value v) {
         if (v instanceof ConstantValue cv) {
             return cv;
         }
         if (v instanceof InstructionRef ref) {
             IrInstruction def = ref.instruction();
-            // Direct CONST
+            // 直接的 CONST 指令:第一个操作数即为常量值
             if (def.opcode() == IrOpcode.CONST && !def.operands().isEmpty()
                     && def.operands().getFirst() instanceof ConstantValue cv) {
                 return cv;
             }
-            // PHI → pick first operand and recurse
+            // PHI 节点:取第一个操作数并递归追踪
             if (def.opcode() == IrOpcode.PHI && !def.operands().isEmpty()) {
                 return unwrapConstant(def.operands().getFirst());
             }
@@ -39,13 +47,11 @@ public final class TypeAwareConstantFolder {
     }
 
     /**
-     * Fold boolean constants in a method's IR.
+     * 在方法的 IR 中折叠布尔常量.
      *
-     * Only folds constants in unambiguous boolean contexts
-     * (boolean method returns). Does NOT fold all 0/1 constants
-     * — regular int arithmetic results must stay as ints.
-     *
-     * @return true if any changes were made
+     * @param ir     待处理的线性 IR
+     * @param method 方法模型(用于判断返回类型)
+     * @return 如果进行了任何折叠则返回 true
      */
     public boolean fold(LinearIr ir, MethodModel method) {
         boolean changed = false;
@@ -53,7 +59,7 @@ public final class TypeAwareConstantFolder {
                 && method.returnType().kind() == TypeKind.BOOLEAN;
 
         for (IrInstruction insn : ir.instructions()) {
-            // Boolean return folding — only in methods that return boolean
+            // 布尔返回折叠 —— 仅在返回类型为 boolean 的方法中执行
             if (isBooleanReturn && insn.opcode() == IrOpcode.RETURN) {
                 changed |= foldBooleanReturn(insn);
             }
@@ -62,7 +68,10 @@ public final class TypeAwareConstantFolder {
     }
 
     /**
-     * Fold RETURN with 0/1 operand in boolean methods to true/false.
+     * 在布尔方法中将操作数为 0/1 的 RETURN 指令折叠为 true/false.
+     *
+     * @param ret RETURN 指令
+     * @return 如果进行了折叠则返回 true
      */
     private boolean foldBooleanReturn(IrInstruction ret) {
         if (ret.operands().isEmpty()) {
@@ -70,7 +79,7 @@ public final class TypeAwareConstantFolder {
         }
 
         Value operand = ret.operands().getFirst();
-        // Follow InstructionRef chains (constants are now emitted as CONST IR)
+        // 沿 InstructionRef 链追踪常量值(常量现在以 CONST IR 指令形式表示)
         ConstantValue cv = unwrapConstant(operand);
         if (cv != null) {
             Object val = cv.value();

@@ -9,23 +9,44 @@ import com.bingbaihanji.bdec.type.JavaType;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Lambda expression: {@code (args) -> body} or method reference: {@code Class::method}. */
+/**
+ * Lambda表达式和方法引用.
+ * <p>
+ * 同时表示lambda表达式({@code (参数) -> 函数体})和方法引用({@code 类::方法}).
+ * 支持三种形式:
+ * </p>
+ * <ul>
+ *   <li>表达式lambda:{@code x -> expr},函数体为单个表达式</li>
+ *   <li>代码块lambda:{@code x -> { ... }},函数体为语句块</li>
+ *   <li>方法引用:{@code Class::method}</li>
+ * </ul>
+ */
 public final class LambdaExpr extends Expression {
 
+    /** lambda参数列表 */
     private final List<Param> parameters;
 
-    private final Expression bodyExpr;      // expression lambda: x -> expr
+    /** 表达式形式的lambda体:{@code x -> 表达式} */
+    private final Expression bodyExpr;
 
-    private final BlockStatement bodyBlock; // block lambda: x -> { ... }
+    /** 代码块形式的lambda体:{@code x -> { ... }} */
+    private final BlockStatement bodyBlock;
 
+    /** 是否为方法引用(而非lambda表达式) */
     private final boolean isMethodRef;
 
-    private final String methodRefOwner;    // for Class::method: "Class"
+    /** 方法引用的所有者类名(如 {@code Class::method} 中的 {@code "Class"}) */
+    private final String methodRefOwner;
 
-    private final String methodRefName;     // for Class::method: "method"
+    /** 方法引用的方法名(如 {@code Class::method} 中的 {@code "method"}) */
+    private final String methodRefName;
 
-    private final JavaType functionalType;   // functional interface return type
+    /** 函数式接口的返回类型 */
+    private final JavaType functionalType;
 
+    /**
+     * 私有全参构造函数,由静态工厂方法调用.
+     */
     private LambdaExpr(List<Param> parameters, Expression bodyExpr, BlockStatement bodyBlock,
                        boolean isMethodRef, String methodRefOwner, String methodRefName,
                        JavaType functionalType) {
@@ -38,40 +59,76 @@ public final class LambdaExpr extends Expression {
         this.functionalType = functionalType;
     }
 
-    /** Expression lambda: (args) -> expr */
+    /**
+     * 创建表达式lambda:{@code (参数) -> 表达式}.
+     *
+     * @param params   参数列表
+     * @param body     表达式体
+     * @param funcType 函数式接口类型
+     * @return Lambda表达式节点
+     */
     public static LambdaExpr expression(List<Param> params, Expression body, JavaType funcType) {
         return new LambdaExpr(params, body, null, false, null, null, funcType);
     }
 
-    /** Block lambda: (args) -> { stmts } */
+    /**
+     * 创建代码块lambda:{@code (参数) -> { 语句 }}.
+     *
+     * @param params   参数列表
+     * @param body     代码块体
+     * @param funcType 函数式接口类型
+     * @return Lambda表达式节点
+     */
     public static LambdaExpr block(List<Param> params, BlockStatement body, JavaType funcType) {
         return new LambdaExpr(params, null, body, false, null, null, funcType);
     }
 
-    /** Method reference: Owner::name */
+    /**
+     * 创建方法引用:{@code 所有者::方法名}.
+     *
+     * @param owner    方法所有者类名
+     * @param name     方法名称
+     * @param funcType 函数式接口类型
+     * @return Lambda表达式节点
+     */
     public static LambdaExpr methodRef(String owner, String name, JavaType funcType) {
         return new LambdaExpr(List.of(), null, null, true, owner, name, funcType);
     }
 
-    /** Placeholder when body can't be resolved yet. */
+    /**
+     * 创建占位lambda(当函数体暂无法解析时使用).
+     *
+     * @param params   参数列表
+     * @param bodyHint 函数体提示文本
+     * @param funcType 函数式接口类型
+     * @return Lambda表达式节点
+     */
     public static LambdaExpr placeholder(List<Param> params, String bodyHint, JavaType funcType) {
         return new LambdaExpr(params, new VarExpr(bodyHint), null, false, null, null, funcType);
     }
 
+    /** @return 参数列表 */
     public List<Param> parameters() {return parameters;}
 
+    /** @return 表达式体 */
     public Expression bodyExpr() {return bodyExpr;}
 
+    /** @return 代码块体 */
     public BlockStatement bodyBlock() {return bodyBlock;}
 
+    /** @return 是否为方法引用 */
     public boolean isMethodRef() {return isMethodRef;}
 
+    /** @return 方法引用所有者类名 */
     public String methodRefOwner() {return methodRefOwner;}
 
+    /** @return 方法引用方法名 */
     public String methodRefName() {return methodRefName;}
 
+    /** @return 函数式接口类型 */
     public JavaType functionalType() {return functionalType;}
 
+    /** @return 是否为表达式体(非代码块体) */
     public boolean isExpressionBody() {return bodyExpr != null;}
 
     @Override
@@ -95,6 +152,12 @@ public final class LambdaExpr extends Expression {
     @Override
     public <R, C> R accept(AstVisitor<R, C> v, C c) {return v.visitExpression(this, c);}
 
-    /** Parameter name and type pair. */
+    /**
+     * Lambda参数记录类.
+     * 包含参数名称和参数类型,用于描述lambda表达式或方法引用中的参数信息.
+     *
+     * @param name 参数名称
+     * @param type 参数类型
+     */
     public record Param(String name, JavaType type) {}
 }

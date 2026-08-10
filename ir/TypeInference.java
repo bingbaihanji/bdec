@@ -11,19 +11,23 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Type inference pass for SSA-form IR.
- *
- * Propagates types through the IR using a worklist algorithm.
- * Seeds types from constants, field accesses, and method calls,
- * then propagates through assignments, PHI nodes, and arithmetic.
- *
- * Uses a def-use chain index for O(1) consumer lookups instead of
- * O(n²) scanning.
+ * SSA形式IR的类型推断器.
+ * <p>
+ * 使用工作列表算法在IR中传播类型信息.
+ * 从常量,字段访问和方法调用等已知类型源播种初始类型,
+ * 然后通过赋值,phi节点和算术运算传播类型.
+ * 使用定值-使用链索引实现O(1)的消费者查找,替代O(n^2)的线性扫描.
+ * </p>
  */
 public final class TypeInference {
 
-    private final Map<Integer, JavaType> types = new HashMap<>(); // instruction id → type
+    /** 指令ID到推断类型的映射 */
+    private final Map<Integer, JavaType> types = new HashMap<>();
 
+    /**
+     * 返回数值类型的宽度等级,用于确定两个数值类型的最小上界.
+     * 等级越高表示类型宽度越大(如 double > float > long > int > short > byte).
+     */
     private static int rank(JavaType t) {
         return switch (t.kind()) {
             case BYTE -> 0;
@@ -38,16 +42,19 @@ public final class TypeInference {
     }
 
     /**
-     * Run type inference on an SSA IR, returning a map from instruction ID to inferred type.
+     * 对SSA形式的IR执行类型推断.
+     *
+     * @param ssa SSA形式的中间表示
+     * @return 指令ID到推断类型的映射
      */
     public Map<Integer, JavaType> infer(SsaForm ssa) {
         types.clear();
         Deque<IrInstruction> worklist = new ArrayDeque<>();
 
-        // Build def-use chain: for each instruction, find consumers of its result
+        // 构建定值-使用链:为每条指令找出其结果的消费者
         Map<Integer, List<IrInstruction>> consumers = buildDefUse(ssa.instructions());
 
-        // Seed: assign initial types from known sources
+        // 播种:从已知类型源赋予初始类型
         for (IrInstruction insn : ssa.instructions()) {
             JavaType seed = seedType(insn);
             if (seed != null) {
@@ -56,7 +63,7 @@ public final class TypeInference {
             }
         }
 
-        // Propagate
+        // 传播类型直到不动点
         while (!worklist.isEmpty()) {
             IrInstruction insn = worklist.poll();
             JavaType currentType = types.get(insn.id());
@@ -64,7 +71,7 @@ public final class TypeInference {
                 continue;
             }
 
-            // Propagate to consumers of this instruction
+            // 将类型传播给该指令的所有消费者
             List<IrInstruction> users = consumers.getOrDefault(insn.id(), List.of());
             for (IrInstruction user : users) {
                 JavaType propagated = propagate(insn.opcode(), currentType, user.opcode());
@@ -83,7 +90,7 @@ public final class TypeInference {
     }
 
     /**
-     * Build a map from instruction ID → list of instructions that use its result.
+     * 构建指令ID到使用其结果的指令列表的映射(定值-使用链).
      */
     private Map<Integer, List<IrInstruction>> buildDefUse(List<IrInstruction> instructions) {
         Map<Integer, List<IrInstruction>> consumers = new HashMap<>();
@@ -98,7 +105,10 @@ public final class TypeInference {
         return consumers;
     }
 
-    /** Determine the initial type for an instruction. */
+    /**
+     * 确定指令的初始(播种)类型.
+     * 常量从其值获取类型,字段加载和方法调用返回声明的返回类型等.
+     */
     private JavaType seedType(IrInstruction insn) {
         return switch (insn.opcode()) {
             case CONST -> {
@@ -114,13 +124,16 @@ public final class TypeInference {
             case INSTANCE_OF -> JavaType.INT;
             case COMPARE -> JavaType.INT;
             case BINARY -> insn.resultType();
-            case CAST -> insn.resultType(); // trust the explicit cast
-            case PHI -> null; // will be inferred from predecessors
+            case CAST -> insn.resultType(); // 相信显式类型转换的结果类型
+            case PHI -> null; // phi节点类型将通过前驱节点推断
             default -> null;
         };
     }
 
-    /** Propagate type through an operation. */
+    /**
+     * 通过操作传播类型.
+     * 根据消费者操作码决定从生产者类型推导出何种结果类型.
+     */
     private JavaType propagate(IrOpcode producerOp, JavaType producerType, IrOpcode consumerOp) {
         return switch (consumerOp) {
             case STORE, RETURN -> producerType;
@@ -143,7 +156,11 @@ public final class TypeInference {
         };
     }
 
-    /** Merge two types (least upper bound). */
+    /**
+     * 合并两个类型(计算最小上界).
+     * 如果a和b相同则返回a;若两者均为数值类型则取较宽的那个;
+     * 若两者均为引用类型则返回 java/lang/Object.
+     */
     private JavaType merge(JavaType a, JavaType b) {
         if (a.equals(b)) {
             return a;
@@ -157,6 +174,9 @@ public final class TypeInference {
         return a;
     }
 
+    /**
+     * 判断类型是否为数值类型.
+     */
     private boolean isNumeric(JavaType t) {
         return switch (t.kind()) {
             case BYTE, SHORT, CHAR, INT, LONG, FLOAT, DOUBLE -> true;
@@ -164,6 +184,9 @@ public final class TypeInference {
         };
     }
 
+    /**
+     * 返回两个数值类型中较宽的那个.
+     */
     private JavaType wider(JavaType a, JavaType b) {
         return rank(a) >= rank(b) ? a : b;
     }

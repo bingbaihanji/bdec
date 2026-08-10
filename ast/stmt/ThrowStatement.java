@@ -7,15 +7,27 @@ import com.bingbaihanji.bdec.ast.expr.Expression;
 
 import java.util.List;
 
-/** AST node for {@code throw expr;} statements. */
+/**
+ * throw 语句节点,表示 Java 中的异常抛出语句.
+ *
+ * <p>对应 Java 语法中的 {@code throw expr;} 结构.
+ * expression 字段表示被抛出的异常对象表达式.
+ */
 public final class ThrowStatement extends Statement {
 
+    /** 被抛出的异常表达式 */
     private final Expression expression;
 
+    /**
+     * 构造一个 throw 语句.
+     *
+     * @param expression 被抛出的异常表达式
+     */
     public ThrowStatement(Expression expression) {
         this.expression = expression;
     }
 
+    /** @return 被抛出的异常表达式 */
     public Expression expression() {return expression;}
 
     @Override

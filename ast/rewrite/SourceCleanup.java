@@ -31,15 +31,25 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Minimal safety-net rewriter. Only fixes patterns that cause compile errors:
- * (1) void method calls wrapped in return statements
- * (2) undeclared exception variables in throw statements
- * (3) duplicate variable declarations in the same block
- * (4) undeclared local variables (auto-declare with safe defaults, no field shadowing)
+ * 源码清理重写器,作为最小安全网修复反编译产生的编译错误.
+ * <p>
+ * 仅修复会导致编译错误的模式,包括:
+ * </p>
+ * <ol>
+ *   <li>包装在 return 语句中的 void 方法调用 —— 拆分为独立调用加默认值返回</li>
+ *   <li>throw 语句中未声明的异常变量 —— 自动声明为 Throwable 类型</li>
+ *   <li>同一作用域内的重复变量声明 —— 转换为赋值语句</li>
+ *   <li>未声明的局部变量 —— 使用安全的默认值自动声明,避免字段遮蔽</li>
+ * </ol>
  */
 public class SourceCleanup implements RewriteRule {
 
-    /** Collect all field names from a type declaration to prevent shadowing. */
+    /**
+     * 收集类型声明中的所有字段名称,用于防止变量自动声明时发生字段遮蔽.
+     *
+     * @param td 待收集的类型声明
+     * @return 字段名称集合
+     */
     private static Set<String> collectFieldNames(TypeDeclaration td) {
         Set<String> names = new HashSet<>();
         for (AstNode m : td.children()) {
@@ -50,9 +60,13 @@ public class SourceCleanup implements RewriteRule {
         return names;
     }
 
-    /** Check if a name looks like a class name (starts with uppercase).
-     *  Static method targets like "Math" or "String" should not be
-     *  auto-declared as local variables. */
+    /**
+     * 检查名称是否看起来像类名(以大写字母开头).
+     * 像 "Math" 或 "String" 这样的静态方法目标不应被自动声明为局部变量.
+     *
+     * @param name 待检查的名称
+     * @return 若以大写字母开头返回 {@code true}
+     */
     private static boolean looksLikeClassName(String name) {
         return name != null && !name.isEmpty()
                 && Character.isUpperCase(name.charAt(0));
@@ -70,6 +84,12 @@ public class SourceCleanup implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /**
+     * 清理单个类型声明中的所有方法体,修复常见的编译错误模式.
+     *
+     * @param td 待清理的类型声明
+     * @return 清理后的类型声明
+     */
     private TypeDeclaration cleanupType(TypeDeclaration td) {
         Set<String> fieldNames = collectFieldNames(td);
         List<AstNode> members = new ArrayList<>();
@@ -90,12 +110,22 @@ public class SourceCleanup implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
+    /**
+     * 递归修复语句中的编译错误模式.
+     *
+     * @param s         待修复的语句
+     * @param nonVoid   方法是否有非 void 返回类型
+     * @param retType   方法的返回类型
+     * @param fieldNames 当前类的字段名集合,用于避免字段遮蔽
+     * @param paramNames 方法参数名集合,用于避免重复声明
+     * @return 修复后的语句
+     */
     private Statement fix(Statement s, boolean nonVoid, JavaType retType,
                           Set<String> fieldNames, Set<String> paramNames) {
         if (s == null) {
             return null;
         }
-        // (1) void method call in return → extract to separate call + default return
+        // 修复模式1:非 void 方法中的 return void 方法调用 → 拆分为调用 + 默认值 return
         if (s instanceof ReturnStatement rs && rs.value() != null && nonVoid) {
             Expression v = rs.value();
             if (v instanceof InvocationExpr inv && isVoid(inv)) {
@@ -105,7 +135,7 @@ public class SourceCleanup implements RewriteRule {
             }
             return s;
         }
-        // (2) throw varN → auto-declare Throwable varN
+        // 修复模式2:throw varN 且变量未声明 → 自动声明 Throwable 类型变量
         if (s instanceof ThrowStatement ts && ts.expression() instanceof VarExpr ve
                 && ve.name().startsWith("var")) {
             return new BlockStatement(List.of(
@@ -115,15 +145,15 @@ public class SourceCleanup implements RewriteRule {
         if (s instanceof BlockStatement bs) {
             List<Statement> cleaned = new ArrayList<>();
             Set<String> seen = new HashSet<>();
-            // First pass: collect all declared names in this block (and nested)
+            // 第一趟:收集当前块(含嵌套块)中所有已声明的变量名
             Set<String> allDeclared = new HashSet<>();
             collectDeclared(bs, allDeclared);
-            // Also add field names to allDeclared to avoid auto-declaring field-shadows
+            // 将字段名也加入已声明集合,避免自动声明时遮蔽字段
             allDeclared.addAll(fieldNames);
-            // Also add parameter names to avoid redeclaring parameters
+            // 将参数名也加入已声明集合,避免重复声明参数
             allDeclared.addAll(paramNames);
             for (Statement c : bs.statements()) {
-                // (3) Duplicate variable declaration → convert to assignment
+                // 修复模式3:重复变量声明 → 转换为赋值语句
                 if (c instanceof VariableDeclaration vd) {
                     if (!seen.add(vd.name()) && vd.initializer() != null) {
                         cleaned.add(new ExpressionStatement(
@@ -131,13 +161,13 @@ public class SourceCleanup implements RewriteRule {
                         continue;
                     }
                 }
-                // (4) Check for undeclared variable uses before this statement
+                // 修复模式4:在语句执行前检查是否存在未声明的变量引用
                 Set<String> used = new HashSet<>();
                 collectVarNames(c, used);
                 for (String u : used) {
                     if (!allDeclared.contains(u) && !seen.contains(u)
                             && !isBuiltin(u) && !looksLikeClassName(u)) {
-                        // Auto-declare with default value (0 for int, null for objects)
+                        // 使用默认值自动声明(整型默认为 0,对象默认为 null)
                         cleaned.add(new VariableDeclaration(
                                 JavaType.INT, u,
                                 new LitExpr(0, JavaType.INT)));
@@ -172,10 +202,22 @@ public class SourceCleanup implements RewriteRule {
         return s;
     }
 
+    /**
+     * 判断方法调用表达式是否为 void 返回类型.
+     *
+     * @param inv 方法调用表达式
+     * @return 若返回类型为 void 则返回 {@code true}
+     */
     private boolean isVoid(InvocationExpr inv) {
         return inv.returnType() != null && inv.returnType().kind() == TypeKind.VOID;
     }
 
+    /**
+     * 递归收集语句中声明的所有变量名.
+     *
+     * @param s   待遍历的语句
+     * @param out 输出集合,收集到的变量名将添加至此
+     */
     private void collectDeclared(Statement s, Set<String> out) {
         if (s instanceof VariableDeclaration vd) {
             out.add(vd.name());
@@ -199,6 +241,12 @@ public class SourceCleanup implements RewriteRule {
         }
     }
 
+    /**
+     * 递归收集语句中引用的所有变量名.
+     *
+     * @param s   待遍历的语句
+     * @param out 输出集合,收集到的变量名将添加至此
+     */
     private void collectVarNames(Statement s, Set<String> out) {
         if (s instanceof ExpressionStatement es) {
             collectVarNamesInExpr(es.expression(), out);
@@ -217,6 +265,12 @@ public class SourceCleanup implements RewriteRule {
         }
     }
 
+    /**
+     * 递归收集表达式中引用的所有变量名.
+     *
+     * @param e   待遍历的表达式
+     * @param out 输出集合
+     */
     private void collectVarNamesInExpr(Expression e, Set<String> out) {
         if (e == null) {
             return;
@@ -241,12 +295,24 @@ public class SourceCleanup implements RewriteRule {
         }
     }
 
+    /**
+     * 判断名称是否为 Java 内置关键字/字面量.
+     *
+     * @param name 待检查的名称
+     * @return 若为内置关键字或字面量返回 {@code true}
+     */
     private boolean isBuiltin(String name) {
         return "null".equals(name) || "this".equals(name)
                 || "true".equals(name) || "false".equals(name)
                 || "super".equals(name);
     }
 
+    /**
+     * 根据 Java 类型返回对应的默认值表达式.
+     *
+     * @param t Java 类型
+     * @return 默认值表达式(整型为 0,浮点为 0.0,布尔为 false,对象为 null)
+     */
     private Expression defaultVal(JavaType t) {
         if (t == null) {
             return new VarExpr("null");

@@ -20,51 +20,65 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Control flow structurer — converts flat CFG with gotos into structured AST.
+ * 控制流结构化器——将包含 goto 的扁平 CFG 转化为结构化的 AST.
  *
- * Strategy: Immutable snapshots. Each fold pass returns a new ControlFlowGraph.
- * Dominator/post-dominator trees are recomputed after each successful fold.
+ * <p>策略:不可变快照.每次折叠遍历返回一个新的 ControlFlowGraph.
+ * 支配树/后支配树在每次成功折叠后重新计算.
  */
 public class ControlFlowStructurer {
 
+    /** 循环分析器 */
     private final LoopAnalyzer loopAnalyzer = new LoopAnalyzer();
 
+    /** 分支分析器 */
     private final BranchAnalyzer branchAnalyzer = new BranchAnalyzer();
 
+    /** switch 分析器 */
     private final SwitchAnalyzer switchAnalyzer = new SwitchAnalyzer();
 
+    /** try-catch 分析器 */
     private final TryCatchAnalyzer tryCatchAnalyzer = new TryCatchAnalyzer();
 
+    /** 不可归约图处理器(回退方案) */
     private final IrreducibleHandler irreducibleHandler = new IrreducibleHandler();
 
+    /** finally 块识别与合并器 */
     private final FinallyRecognizer finallyRecognizer = new FinallyRecognizer();
 
+    /** 块归约器(在结构化完成后将 CFG 转为 AST 语句) */
     private BlockReducer blockReducer;
 
+    /**
+     * 对方法的线性 IR 进行控制流结构化,生成 AST 方法体.
+     *
+     * @param ir  线性 IR
+     * @param ctx 反编译上下文
+     * @return 结构化方法对象,包含归约后的 AST 方法体
+     */
     public StructuredMethod structure(LinearIr ir, DecompileContext ctx) {
         ControlFlowGraph graph = ir.controlFlowGraph();
 
-        // 1. Compute initial dominator trees
+        // 1. 计算初始支配树与后支配树
         DominatorTree dom = DominatorTree.compute(graph);
         PostDominatorTree postDom = PostDominatorTree.compute(graph);
 
-        // 2. Analyze switch and try-catch (detection only, no folding yet)
+        // 2. 分析 switch 和 try-catch(仅检测,暂不折叠)
         List<SwitchInfo> switchInfos = switchAnalyzer.analyze(graph, dom);
         List<TryCatchInfo> tryCatchInfos = tryCatchAnalyzer.analyze(graph);
         List<IfInfo> allIfInfos = branchAnalyzer.analyze(graph, dom, postDom);
         List<LoopInfo> allLoopInfos = loopAnalyzer.analyze(graph, dom);
 
-        // 3. Build annotation maps
+        // 3. 构建注解映射
         Map<BasicBlock, LoopInfo> loopAnns = new HashMap<>();
         Map<BasicBlock, IfInfo> ifAnns = new HashMap<>();
         Map<BasicBlock, SwitchInfo> switchAnns = new HashMap<>();
         Map<BasicBlock, TryCatchInfo> tryCatchAnns = new HashMap<>();
 
-        // Record switch headers
+        // 记录 switch 头块
         for (SwitchInfo si : switchInfos) {
             switchAnns.put(si.header(), si);
         }
-        // Record try-catch entries (keyed by first try block, not handler)
+        // 记录 try-catch 入口(以第一个 try 块为键,而非处理器)
         for (TryCatchInfo tci : tryCatchInfos) {
             BasicBlock tryEntry = tci.tryBlocks().stream()
                     .min(Comparator.comparingInt(BasicBlock::startOffset))
@@ -73,9 +87,9 @@ public class ControlFlowStructurer {
                 tryCatchAnns.put(tryEntry, tci);
             }
         }
-        // Record if/else and loop annotations from pre-fold analysis.
-        // These are used directly by BlockReducer to build IfStatement/LoopStatement.
-        // We do NOT fold if/else blocks in the CFG — folding destroys the structure.
+        // 从预折叠分析中记录 if/else 和循环注解.
+        // 这些注解由 BlockReducer 直接用于构建 IfStatement/LoopStatement.
+        // 我们不在 CFG 中折叠 if/else 块——折叠会破坏结构.
         for (IfInfo ifInfo : allIfInfos) {
             ifAnns.put(ifInfo.header(), ifInfo);
         }
@@ -83,14 +97,14 @@ public class ControlFlowStructurer {
             loopAnns.put(loop.header(), loop);
         }
 
-        // 4. Iterative folding: loops first (to simplify CFG), then sequences.
-        // If/else blocks are NOT folded — BlockReducer builds them from annotations.
+        // 4. 迭代折叠:先循环(简化 CFG),再序列折叠.
+        // If/else 块不折叠——BlockReducer 从注解构建它们.
         boolean changed = true;
         int maxIterations = Math.max(graph.blockCount() * 2, 100);
         while (changed && maxIterations-- > 0) {
             changed = false;
 
-            // 4a. Loops (innermost first) — fold to simplify nested CFG
+            // 4a. 循环(最内层优先)——折叠以简化嵌套的 CFG
             List<LoopInfo> loops = loopAnalyzer.analyze(graph, dom);
             if (!loops.isEmpty()) {
                 loops = LoopAnalyzer.sortInnermostFirst(loops);
@@ -98,7 +112,7 @@ public class ControlFlowStructurer {
                     BasicBlock oldHeader = loop.header();
                     int oldBlockCount = graph.blockCount();
                     graph = foldLoop(graph, loop, postDom);
-                    // Migrate loop annotation to replacement virtual block
+                    // 将循环注解迁移到替换后的虚拟块
                     BasicBlock replacement = findReplacementBlock(graph, oldBlockCount);
                     loopAnns.remove(oldHeader);
                     if (replacement != null) {
@@ -111,12 +125,11 @@ public class ControlFlowStructurer {
                 continue;
             }
 
-            // 4b. Sequences — merge adjacent fallthrough blocks
+            // 4b. 序列——合 并相邻的 fallthrough 块
             ControlFlowGraph prevGraph = graph;
             graph = foldSequences(graph);
             if (graph != prevGraph) {
-                // After sequence merging, update if/else annotations:
-                // if the header block was merged into a sequence, update the key
+                // 序列合并后更新 if/else 注解:若头块被合并到序列中,则更新键
                 Map<BasicBlock, IfInfo> updatedIfAnns = new HashMap<>();
                 for (var entry : ifAnns.entrySet()) {
                     BasicBlock header = entry.getKey();
@@ -131,14 +144,14 @@ public class ControlFlowStructurer {
             }
         }
 
-        // 5. Irreducible fallback
+        // 5. 不可归约图回退处理
         if (graph.blockCount() > 3) {
             graph = irreducibleHandler.handle(graph);
         }
 
-        // 5b. Re-analyze if/else and loop patterns on the final folded graph.
-        // The pre-fold analysis results may have stale block references
-        // after CFG folding modified the graph. Refresh from final state.
+        // 5b. 在最终折叠图上重新分析 if/else 和循环模式.
+        // 预折叠分析结果可能在 CFG 折叠修改图后持有过时的块引用,
+        // 因此需要从最终状态刷新.
         DominatorTree finalDom = DominatorTree.compute(graph);
         PostDominatorTree finalPostDom = PostDominatorTree.compute(graph);
         List<IfInfo> finalIfs = branchAnalyzer.analyze(graph, finalDom, finalPostDom);
@@ -147,8 +160,8 @@ public class ControlFlowStructurer {
             finalIfAnns.put(ifInfo.header(), ifInfo);
         }
 
-        // 5c. Re-analyze try-catch on the final folded graph (folding may have
-        // replaced blocks, invalidating the pre-fold tryCatchAnns keys).
+        // 5c. 在最终折叠图上重新分析 try-catch(折叠可能替换了块,
+        // 导致预折叠的 tryCatchAnns 键失效).
         List<TryCatchInfo> finalTryCatch = tryCatchAnalyzer.analyze(graph);
         Map<BasicBlock, TryCatchInfo> finalTryCatchAnns = new HashMap<>();
         for (TryCatchInfo tci : finalTryCatch) {
@@ -160,18 +173,19 @@ public class ControlFlowStructurer {
             }
         }
 
-        // 6. Generate AST with structure annotations
+        // 6. 生成带有结构注解的 AST
         blockReducer = new BlockReducer(!ir.method().isStatic());
         BlockStatement body = blockReducer.reduce(graph, ir, loopAnns, finalIfAnns, switchAnns, finalTryCatchAnns);
 
-        // 7. Post-processing: merge adjacent try-finally blocks sharing the same handler
+        // 7. 后处理:合并共享同一处理器的相邻 try-finally 块
         body = finallyRecognizer.merge(body, finalTryCatchAnns);
 
         return new StructuredMethod(ir.method(), ir, body, loopAnns, ifAnns, switchAnns, finalTryCatchAnns);
     }
 
-    // ── Folding operations ────────────────────────────────────────
+    // ── 折叠操作 ────────────────────────────────────────
 
+    /** 将循环体折叠为单个虚拟基本块 */
     private ControlFlowGraph foldLoop(ControlFlowGraph graph, LoopInfo loop,
                                       PostDominatorTree postDom) {
         BasicBlock virtualBlock = new BasicBlock(graph.blockCount() + 1000,
@@ -179,6 +193,7 @@ public class ControlFlowStructurer {
         return buildFoldedGraph(graph, loop.body(), virtualBlock, loop.header());
     }
 
+    /** 将 if-else 的两个分支折叠为单个虚拟基本块 */
     private ControlFlowGraph foldIf(ControlFlowGraph graph, IfInfo info) {
         Set<BasicBlock> allFolded = new HashSet<>();
         allFolded.addAll(info.thenBlocks());
@@ -189,10 +204,10 @@ public class ControlFlowStructurer {
     }
 
     /**
-     * Merge adjacent fallthrough blocks into sequences.
-     * Respects exception range boundaries: blocks with different exception
-     * coverage (one has exception edges, the other doesn't) are NOT merged,
-     * ensuring pre-try code (like lock.lock()) stays separate from the try body.
+     * 将相邻的 fallthrough 块合并为序列.
+     *
+     * <p>尊重异常范围边界:具有不同异常覆盖范围的块(一个有异常边而另一个没有)
+     * 不会被合并,从而确保 try 前代码(如 lock.lock())与 try 体保持分离.
      */
     private ControlFlowGraph foldSequences(ControlFlowGraph graph) {
         List<BasicBlock> regularBlocks = new ArrayList<>();
@@ -209,9 +224,8 @@ public class ControlFlowStructurer {
                 boolean onlyFallthrough = graph.outgoingOf(b1).stream()
                         .allMatch(e -> e.kind() == EdgeKind.FALL_THROUGH);
                 if (onlyFallthrough && graph.predecessorsOf(b2).size() == 1) {
-                    // Don't merge if blocks have different exception coverage.
-                    // This keeps pre-try code (no exception edges) separate
-                    // from the try body (has exception edges to handler).
+                    // 不合并具有不同异常覆盖范围的块.
+                    // 这确保 try 前代码(无异常边)与 try 体(有指向处理器的异常边)保持分离.
                     boolean b1hasException = graph.outgoingOf(b1).stream()
                             .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
                     boolean b2hasException = graph.outgoingOf(b2).stream()
@@ -230,17 +244,16 @@ public class ControlFlowStructurer {
         return graph;
     }
 
-    // ── Helpers ────────────────────────────────────────────────────
+    // ── 辅助方法 ────────────────────────────────────────────────────
 
-    /** Find the equivalent of an old block in the new graph after folding.
-     *  Checks by ID and by instruction content match. */
+    /** 在折叠后的新图中按 ID 或起始偏移量查找等效块 */
     private BasicBlock findBlockInGraph(ControlFlowGraph graph, BasicBlock old) {
         for (BasicBlock b : graph.blocks()) {
             if (b.id() == old.id()) {
                 return b;
             }
         }
-        // If the block was merged, try to find by start offset
+        // 如果块已被合并,尝试按起始偏移量查找
         for (BasicBlock b : graph.blocks()) {
             if (b.startOffset() == old.startOffset()) {
                 return b;
@@ -249,8 +262,8 @@ public class ControlFlowStructurer {
         return null;
     }
 
-    /** Find the new virtual block created by a fold operation.
-     *  Virtual blocks are created with id = previousBlockCount + 1000. */
+    /** 查找折叠操作创建的替换虚拟块.
+     *  虚拟块的 id = 之前的块数量 + 1000. */
     private BasicBlock findReplacementBlock(ControlFlowGraph graph, int oldBlockCount) {
         int targetId = oldBlockCount + 1000;
         for (BasicBlock b : graph.blocks()) {
@@ -258,7 +271,7 @@ public class ControlFlowStructurer {
                 return b;
             }
         }
-        // Fallback: find any block not in entry/exit with instructions
+        // 回退:查找任意非 entry/exit 的,id >= 1000 且有指令的块
         for (BasicBlock b : graph.blocks()) {
             if (b != graph.entryBlock() && b != graph.exitBlock()
                     && b.id() >= 1000 && !b.instructions().isEmpty()) {
@@ -268,6 +281,7 @@ public class ControlFlowStructurer {
         return null;
     }
 
+    /** 将多个基本块的指令展平为单一指令列表 */
     private List<Instruction> flattenInstructions(Set<BasicBlock> blocks, ControlFlowGraph graph) {
         List<Instruction> result = new ArrayList<>();
         for (BasicBlock b : graph.blocks()) {
@@ -278,6 +292,17 @@ public class ControlFlowStructurer {
         return result;
     }
 
+    /**
+     * 构建折叠后的新控制流图.
+     *
+     * <p>将指定的一组块替换为单个替换块,并重新连接所有边.
+     *
+     * @param old         原始控制流图
+     * @param folded      被折叠的块集合
+     * @param replacement 替换后的虚拟块
+     * @param anchor      锚点块(替换块插入到该块之后)
+     * @return 折叠后的新控制流图
+     */
     private ControlFlowGraph buildFoldedGraph(ControlFlowGraph old,
                                               Set<BasicBlock> folded,
                                               BasicBlock replacement,
@@ -305,6 +330,7 @@ public class ControlFlowStructurer {
         Set<BasicBlock> externalBlocks = new HashSet<>(newBlocks);
         externalBlocks.remove(replacement);
 
+        // 将折叠块的前驱边重定向到替换块
         for (BasicBlock foldedBlock : folded) {
             for (ControlFlowEdge e : old.incomingOf(foldedBlock)) {
                 if (!folded.contains(e.source()) && externalBlocks.contains(e.source())) {
@@ -313,6 +339,7 @@ public class ControlFlowStructurer {
                 }
             }
         }
+        // 将折叠块的后继边从替换块引出
         for (BasicBlock foldedBlock : folded) {
             for (ControlFlowEdge e : old.outgoingOf(foldedBlock)) {
                 if (!folded.contains(e.target()) && externalBlocks.contains(e.target())) {
@@ -321,6 +348,7 @@ public class ControlFlowStructurer {
                 }
             }
         }
+        // 保留外部块之间的边
         for (BasicBlock b : externalBlocks) {
             for (ControlFlowEdge e : old.outgoingOf(b)) {
                 if (!folded.contains(e.target()) && externalBlocks.contains(e.target())) {

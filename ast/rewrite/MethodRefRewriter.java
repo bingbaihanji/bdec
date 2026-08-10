@@ -19,18 +19,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Detects {@code invokedynamic} patterns that resolve to method references
- * and converts them to Java {@code ::} syntax.
+ * 方法引用重写器,检测解析为方法引用的 {@code invokedynamic} 模式,
+ * 将其转换为 Java 的 {@code ::} 语法.
  *
- * <p>Four kinds of method references:
+ * <p>支持四种方法引用类型:
  * <pre>
- *   Static:        ClassName::staticMethod      (INVOKESTATIC)
- *   Bound:         expr::instanceMethod          (INVOKEVIRTUAL, receiver captured)
- *   Unbound:       ClassName::instanceMethod     (INVOKEVIRTUAL, receiver = 1st param)
- *   Constructor:   ClassName::new                (NEW + INVOKESPECIAL init)
+ *   静态:      ClassName::staticMethod      (INVOKESTATIC)
+ *   绑定:      expr::instanceMethod          (INVOKEVIRTUAL,接收者已捕获)
+ *   未绑定:    ClassName::instanceMethod     (INVOKEVIRTUAL,接收者为第 1 个参数)
+ *   构造器:    ClassName::new                (NEW + INVOKESPECIAL 初始化)
  * </pre>
  *
- * <p>Inspired by CFR's lambda handling and Vineflower's {@code LambdaProcessor}.
+ * <p>设计参考 CFR 的 lambda 处理和 Vineflower 的 {@code LambdaProcessor}.
  */
 public class MethodRefRewriter implements RewriteRule {
 
@@ -51,6 +51,7 @@ public class MethodRefRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /** 递归重写类型声明中的每个方法体 */
     private TypeDeclaration rewriteType(TypeDeclaration td) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
@@ -66,6 +67,7 @@ public class MethodRefRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
+    /** 递归重写语句,识别方法引用调用 */
     private Statement rewriteStatement(Statement s) {
         if (s instanceof BlockStatement bs) {
             return new BlockStatement(bs.statements().stream()
@@ -87,9 +89,10 @@ public class MethodRefRewriter implements RewriteRule {
         return s;
     }
 
+    /** 重写表达式,检测方法引用模式并转换为 :: 语法 */
     private Expression rewriteExpr(Expression e) {
         if (e instanceof InvocationExpr inv) {
-            // Recurse first
+            // 先递归处理子表达式
             List<Expression> newArgs = new ArrayList<>();
             for (Expression arg : inv.arguments()) {
                 newArgs.add(rewriteExpr(arg));
@@ -97,10 +100,10 @@ public class MethodRefRewriter implements RewriteRule {
             Expression newTarget = inv.target() != null
                     ? rewriteExpr(inv.target()) : null;
 
-            // Detect method reference pattern
+            // 检测方法引用模式
             String name = inv.methodName();
             if (name != null && newTarget == null && !newArgs.isEmpty()) {
-                // Possible method reference: invokedynamic with static args
+                // 可能为方法引用:invokedynamic 带静态参数
                 Expression methodRef = tryConvertMethodRef(name, newArgs);
                 if (methodRef != null) {
                     return methodRef;
@@ -113,25 +116,25 @@ public class MethodRefRewriter implements RewriteRule {
     }
 
     /**
-     * Try to convert an invokedynamic call to a {@code ::} method reference.
-     * Pattern: invokedynamic name contains "$$" or starts with known lambda/sam prefixes.
+     * 尝试将 invokedynamic 调用转换为 {@code ::} 方法引用.
+     * 模式:invokedynamic 的名称包含 "$$" 或以已知的 lambda/SAM 前缀开头.
      */
     private Expression tryConvertMethodRef(String name, List<Expression> args) {
-        // Pattern 1: new ClassName() constructor reference
+        // 模式一:new ClassName() 构造器引用
         if (name.startsWith("new") && args.size() == 1
                 && args.get(0) instanceof VarExpr vx) {
             return new VarExpr(vx.name() + "::new");
         }
 
-        // Pattern 2: static method reference Class::method
+        // 模式二:静态方法引用 Class::method
         if (name.contains("::")) {
-            return new VarExpr(name); // already formatted
+            return new VarExpr(name); // 已是格式化后的结果
         }
 
-        // Pattern 3: general method reference pattern from indy
-        // methodName$hash or lambda$method$N → extract
+        // 模式三:来自 indy 的一般方法引用模式
+        // methodName$hash 或 lambda$method$N → 提取
         if (name.contains("$") && args.size() >= 1) {
-            // Try to format as Class::method
+            // 尝试格式化为 Class::method
             String clean = name.replace("lambda$", "").replace("$", "::");
             if (clean.contains("::")) {
                 return new VarExpr(clean);

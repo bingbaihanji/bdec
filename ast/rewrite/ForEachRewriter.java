@@ -19,10 +19,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Detects Iterator-based loops and converts them to Java
- * {@code for (E element : collection)} enhanced for-each loops.
+ * 增强 for-each 循环重写器,检测基于 Iterator 的循环模式,
+ * 将其转换为 Java 的 {@code for (E element : collection)} 增强 for-each 循环.
  *
- * <p>Pattern:
+ * <p>可识别的模式:
  * <pre>
  *   Iterator iter = collection.iterator();
  *   while (iter.hasNext()) { E element = iter.next(); ...body... }
@@ -30,7 +30,7 @@ import java.util.List;
  *   → for (E element : collection) { ...body... }
  * </pre>
  *
- * <p>Inspired by CFR's {@code IterLoopRewriter}.
+ * <p>设计参考 CFR 的 {@code IterLoopRewriter}.
  */
 public class ForEachRewriter implements RewriteRule {
 
@@ -46,6 +46,7 @@ public class ForEachRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /** 递归重写类型声明中的每个方法体 */
     private TypeDeclaration rewriteType(TypeDeclaration td) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
@@ -61,6 +62,7 @@ public class ForEachRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
+    /** 递归重写语句块,检测 for-each 模式 */
     private Statement rewriteBlock(Statement s) {
         if (s instanceof BlockStatement bs) {
             List<Statement> rewritten = new ArrayList<>();
@@ -82,8 +84,8 @@ public class ForEachRewriter implements RewriteRule {
     }
 
     /**
-     * Walk a block looking for adjacent iterator-declaration + while-loop
-     * patterns and collapse them into for-each loops.
+     * 遍历代码块中的语句,查找相邻的 Iterator 声明 + while 循环模式,
+     * 将其合并为增强 for-each 循环.
      */
     private Statement detectForEach(BlockStatement bs) {
         List<Statement> stmts = new ArrayList<>(bs.statements());
@@ -92,32 +94,32 @@ public class ForEachRewriter implements RewriteRule {
             changed = false;
             for (int i = 0; i < stmts.size() - 1; i++) {
                 Statement s = stmts.get(i);
-                // Look for: ExpressionStatement containing iterator() assignment
+                // 查找:包含 iterator() 方法调用的表达式语句
                 ForEachCandidate candidate = matchIteratorDecl(s);
                 if (candidate == null) {
                     continue;
                 }
 
-                // Check next statement is a while-loop
+                // 验证下一条语句为 while 循环
                 if (!(stmts.get(i + 1) instanceof LoopStatement loop)
                         || loop.loopKind() != LoopStatement.LoopKind.WHILE) {
                     continue;
                 }
 
-                // Match: while(iter.hasNext())
+                // 匹配:while(iter.hasNext())
                 ForEachCandidate result = matchWhileLoop(loop, candidate);
                 if (result == null) {
                     continue;
                 }
 
-                // Build for-each loop
+                // 构建增强 for-each 循环
                 LoopStatement forEach = new LoopStatement(
                         LoopStatement.LoopKind.FOR_EACH,
                         result.elementVar,
                         candidate.iterableExpr,
                         result.body);
 
-                // Replace iterator decl + while loop with for-each
+                // 用增强 for-each 循环替换 Iterator 声明和 while 循环
                 stmts.remove(i + 1);
                 stmts.remove(i);
                 stmts.add(i, forEach);
@@ -129,7 +131,7 @@ public class ForEachRewriter implements RewriteRule {
         return new BlockStatement(stmts);
     }
 
-    /** Match: {@code Iterator iter = collection.iterator();} */
+    /** 匹配:{@code Iterator iter = collection.iterator();} */
     private ForEachCandidate matchIteratorDecl(Statement s) {
         if (!(s instanceof ExpressionStatement es)) {
             return null;
@@ -147,7 +149,7 @@ public class ForEachRewriter implements RewriteRule {
             return null;
         }
 
-        // Extract variable name
+        // 提取迭代器变量名
         String varName = null;
         if (assign.target() instanceof VarExpr vx) {
             varName = vx.name();
@@ -159,9 +161,9 @@ public class ForEachRewriter implements RewriteRule {
         return new ForEachCandidate(varName, inv.target());
     }
 
-    /** Match: {@code while(iter.hasNext()) { E e = iter.next(); ... }} */
+    /** 匹配:{@code while(iter.hasNext()) { E e = iter.next(); ... }} */
     private ForEachCandidate matchWhileLoop(LoopStatement loop, ForEachCandidate candidate) {
-        // Check condition: iter.hasNext()
+        // 检查循环条件:iter.hasNext()
         if (!(loop.condition() instanceof InvocationExpr condInv)) {
             return null;
         }
@@ -175,7 +177,7 @@ public class ForEachRewriter implements RewriteRule {
             return null;
         }
 
-        // Check body: first statement is E element = iter.next()
+        // 检查循环体首条语句:E element = iter.next()
         List<Statement> bodyStmts = getBodyStatements(loop.body());
         if (bodyStmts.isEmpty()) {
             return null;
@@ -201,7 +203,7 @@ public class ForEachRewriter implements RewriteRule {
             return null;
         }
 
-        // Build new body (minus the next() call)
+        // 构建新循环体(移除 next() 调用)
         List<Statement> newBodyStmts = new ArrayList<>(bodyStmts);
         newBodyStmts.remove(0);
         Statement newBody;
@@ -217,6 +219,7 @@ public class ForEachRewriter implements RewriteRule {
                 assign.target(), newBody);
     }
 
+    /** 提取语句中的子语句列表(若为块语句则展开,否则包装为单元素列表) */
     private List<Statement> getBodyStatements(Statement s) {
         if (s instanceof BlockStatement bs) {
             return new ArrayList<>(bs.statements());
@@ -224,17 +227,24 @@ public class ForEachRewriter implements RewriteRule {
         return new ArrayList<>(List.of(s));
     }
 
+    /**
+     * for-each 候选模式数据类,用于在匹配过程中传递上下文信息.
+     */
     private static class ForEachCandidate {
 
+        /** 迭代器变量名 */
         final String iterVar;
 
+        /** 可迭代集合/数组表达式 */
         final Expression iterableExpr;
 
-        final Expression elementVar; // null for decl pattern
+        /** for-each 的循环变量表达式(声明模式中为 null) */
+        final Expression elementVar;
 
-        final Statement body;       // null for decl pattern
+        /** 循环体语句(声明模式中为 null) */
+        final Statement body;
 
-        // Iterator declaration pattern
+        /** 用于 Iterator 声明模式的构造器 */
         ForEachCandidate(String iterVar, Expression iterableExpr) {
             this.iterVar = iterVar;
             this.iterableExpr = iterableExpr;
@@ -242,7 +252,7 @@ public class ForEachRewriter implements RewriteRule {
             this.body = null;
         }
 
-        // While-loop pattern
+        /** 用于 while 循环匹配模式的构造器 */
         ForEachCandidate(String iterVar, Expression iterableExpr,
                          Expression elementVar, Statement body) {
             this.iterVar = iterVar;

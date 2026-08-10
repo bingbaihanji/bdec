@@ -7,22 +7,33 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Minimal JVM Signature attribute parser.
+ * JVM 签名属性解析器(最小化实现).
  *
- * Parses generic type signatures to extract type parameter names
- * and reconstruct generic display names. Handles the most common
- * patterns: class type parameters, simple generic superclasses,
- * and bounded type parameters.
+ * <p>解析泛型类型签名({@code Signature} 属性),提取类型参数名称
+ * 并重建泛型显示名称.支持常见的泛型模式:
+ * <ul>
+ *   <li>类型参数声明({@code <E:Ljava/lang/Object;>})</li>
+ *   <li>泛型类/接口类型({@code Ljava/util/List<Ljava/lang/String;>;})</li>
+ *   <li>有界类型参数(继承/超类通配符)</li>
+ *   <li>无界通配符({@code *})</li>
+ *   <li>数组类型</li>
+ * </ul>
+ *
+ * <p>该类为工具类,仅包含静态方法,不可实例化.
  */
 public final class SignatureParser {
 
+    /** 私有构造函数,防止外部实例化工具类. */
     private SignatureParser() {}
 
     /**
-     * Extract formal type parameter names from a class signature.
+     * 从类签名中提取形式类型参数名称.
      *
-     * Example: {@code <E:Ljava/lang/Object;>Ljava/util/AbstractQueue<TE;>;}
-     * → returns {@code ["E"]}
+     * <p>例如:{@code <E:Ljava/lang/Object;>Ljava/util/AbstractQueue<TE;>;}
+     * → 返回 {@code ["E"]}
+     *
+     * @param signature 类签名属性字符串
+     * @return 类型参数名称列表
      */
     public static List<String> extractTypeParams(String signature) {
         List<String> params = new ArrayList<>();
@@ -30,18 +41,18 @@ public final class SignatureParser {
             return params;
         }
 
-        int i = 1; // skip '<'
+        int i = 1; // 跳过 '<'
         while (i < signature.length() && signature.charAt(i) != '>') {
-            // Read type param name until ':'
+            // 读取类型参数名称直到冒号
             int colon = signature.indexOf(':', i);
             if (colon < 0) {
                 break;
             }
             String name = signature.substring(i, colon);
             params.add(name);
-            // Skip to after the class bound and interface bounds
+            // 跳过类边界与接口边界描述
             i = colon + 1;
-            // Skip bound: L...; or T...;
+            // 跳过边界:L...; 或 T...;
             while (i < signature.length() && signature.charAt(i) != ':'
                     && signature.charAt(i) != '>') {
                 if (signature.charAt(i) == 'L') {
@@ -52,7 +63,7 @@ public final class SignatureParser {
                     i++;
                 }
             }
-            // Skip the ':' separator
+            // 跳过 ':' 分隔符
             if (i < signature.length() && signature.charAt(i) == ':') {
                 i++;
             }
@@ -61,21 +72,28 @@ public final class SignatureParser {
     }
 
     /**
-     * Extract method-level type parameters from a method signature.
+     * 从方法签名中提取方法级类型参数.
      *
-     * Example: {@code <T:Ljava/lang/Object;>(TT;)TT;}
-     * → returns {@code ["T"]}
+     * <p>例如:{@code <T:Ljava/lang/Object;>(TT;)TT;}
+     * → 返回 {@code ["T"]}
+     *
+     * <p>格式与类签名相同:以 {@code <...>} 开头.
+     *
+     * @param signature 方法签名属性字符串
+     * @return 方法级类型参数名称列表
      */
     public static List<String> extractMethodTypeParams(String signature) {
-        return extractTypeParams(signature); // same format: <...> at start
+        return extractTypeParams(signature); // 格式相同:以 <...> 开头
     }
 
     /**
-     * Parse a field or method signature into a structured JavaType with type arguments.
-     * For generic types like {@code Ljava/util/List<Ljava/lang/String;>;},
-     * the returned JavaType will have typeArguments = [JavaType("java/lang/String")].
+     * 将字段或方法签名解析为带类型参数的 {@link JavaType} 结构体.
      *
-     * @return a JavaType with type arguments populated, or null if parsing fails
+     * <p>对于 {@code Ljava/util/List<Ljava/lang/String;>;} 等泛型类型,
+     * 返回的 JavaType 将包含 typeArguments = [JavaType("java/lang/String")].
+     *
+     * @param sig 类型签名字符串
+     * @return 包含类型参数的 JavaType,解析失败则返回 {@code null}
      */
     public static JavaType parseGenericType(String sig) {
         if (sig == null || sig.isEmpty()) {
@@ -90,7 +108,14 @@ public final class SignatureParser {
         }
     }
 
-    /** Parse a type signature into a JavaType struct. Returns next position. */
+    /**
+     * 将类型签名字符串解析为 JavaType 结构体.
+     *
+     * @param sig 完整签名字符串
+     * @param i   当前解析起始位置
+     * @param out 输出结果容器
+     * @return 解析后的下一个位置
+     */
     private static int parseTypeToJavaType(String sig, int i,
                                            java.util.concurrent.atomic.AtomicReference<JavaType> out) {
         if (i >= sig.length()) {
@@ -98,6 +123,7 @@ public final class SignatureParser {
         }
         char c = sig.charAt(i);
         switch (c) {
+            // 基本类型
             case 'B':
                 out.set(JavaType.BYTE);
                 return i + 1;
@@ -125,34 +151,40 @@ public final class SignatureParser {
             case 'V':
                 out.set(JavaType.VOID);
                 return i + 1;
+            // 类型变量(如 TT;)
             case 'T': {
                 int semi = sig.indexOf(';', i);
                 String tvName = sig.substring(i + 1, semi);
-                // Type variable — use as internal name for display purposes
+                // 类型变量 —— 使用类型变量名作为内部名称用于显示
                 out.set(new JavaType(TypeKind.CLASS, tvName, "T" + tvName + ";",
                         List.of(), 0));
                 return semi + 1;
             }
+            // 引用类型(如 Ljava/lang/String; 或泛型 Lpkg/List<Lpkg/X;>;)
             case 'L': {
                 int semi = sig.indexOf(';', i);
                 String raw = sig.substring(i + 1, semi);
                 int lt = raw.indexOf('<');
                 if (lt >= 0) {
+                    // 泛型类型:解析类名与类型参数
                     String className = raw.substring(0, lt);
                     List<JavaType> typeArgs = new ArrayList<>();
                     int argPos = i + 1 + lt + 1;
                     while (argPos < i + semi) {
                         char ac = sig.charAt(argPos);
                         if (ac == '*') {
+                            // 无界通配符 ?
                             typeArgs.add(new JavaType(TypeKind.CLASS, "?",
                                     "Ljava/lang/Object;", List.of(), 0));
                             argPos++;
                         } else if (ac == '+') {
+                            // 上界通配符 ? extends T
                             var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos + 1, ref);
                             typeArgs.add(ref.get() != null ? ref.get()
                                     : JavaType.classType("java/lang/Object"));
                         } else if (ac == '-') {
+                            // 下界通配符 ? super T
                             var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos + 1, ref);
                             typeArgs.add(ref.get() != null ? ref.get()
@@ -175,6 +207,7 @@ public final class SignatureParser {
                 }
                 return semi + 1;
             }
+            // 数组类型
             case '[': {
                 var elemRef = new java.util.concurrent.atomic.AtomicReference<JavaType>();
                 int next = parseTypeToJavaType(sig, i + 1, elemRef);
@@ -191,10 +224,13 @@ public final class SignatureParser {
     }
 
     /**
-     * Convert a field or method parameter signature to a readable generic type name.
+     * 将字段或方法参数签名转换为可读的泛型类型名.
      *
-     * Example: {@code Ljava/util/List<Ljava/lang/String;>;}
+     * <p>例如:{@code Ljava/util/List<Ljava/lang/String;>;}
      * → {@code java.util.List<java.lang.String>}
+     *
+     * @param sig 类型签名字符串
+     * @return 可读的泛型类型名,解析失败则返回原始签名字符串
      */
     public static String signatureToDisplayName(String sig) {
         if (sig == null || sig.isEmpty()) {
@@ -205,17 +241,25 @@ public final class SignatureParser {
             parseTypeSignature(sig, 0, sb);
             return sb.toString();
         } catch (Exception e) {
-            return sig; // fallback: raw signature
+            return sig; // 解析失败时回退到原始签名
         }
     }
 
-    /** Parse a type signature starting at position i, appending to sb. Returns next position. */
+    /**
+     * 从位置 i 开始解析类型签名,将结果追加到 StringBuilder.
+     *
+     * @param sig 完整签名字符串
+     * @param i   当前解析起始位置
+     * @param sb  输出结果缓冲区
+     * @return 解析后的下一个位置
+     */
     private static int parseTypeSignature(String sig, int i, StringBuilder sb) {
         if (i >= sig.length()) {
             return i;
         }
         char c = sig.charAt(i);
         switch (c) {
+            // 基本类型 → Java 关键字
             case 'B':
                 sb.append("byte");
                 return i + 1;
@@ -243,17 +287,17 @@ public final class SignatureParser {
             case 'V':
                 sb.append("void");
                 return i + 1;
+            // 类型变量:Tname;
             case 'T': {
-                // Type variable: Tname;
                 int semi = sig.indexOf(';', i);
                 sb.append(sig, i + 1, semi);
                 return semi + 1;
             }
+            // 引用类型:Lpkg/Name; 或 Lpkg/Name<...>;
             case 'L': {
-                // Class type: Lpkg/Name; or Lpkg/Name<...>;
                 int semi = sig.indexOf(';', i);
                 String raw = sig.substring(i + 1, semi);
-                // Check for type arguments
+                // 检查是否存在类型参数
                 int lt = raw.indexOf('<');
                 if (lt >= 0) {
                     String className = raw.substring(0, lt).replace('/', '.');
@@ -265,7 +309,7 @@ public final class SignatureParser {
                             sb.append(", ");
                         }
                         first = false;
-                        // Type arg could be * (wildcard), +L... (extends), -L... (super), L...; or T...;
+                        // 类型参数可能为:*(无界通配符),+L...(extends),-L...(super),L...; 或 T...;
                         char ac = sig.charAt(argPos);
                         if (ac == '*') {
                             sb.append('?');
@@ -289,6 +333,7 @@ public final class SignatureParser {
                 }
                 return semi + 1;
             }
+            // 数组类型
             case '[': {
                 int next = parseTypeSignature(sig, i + 1, sb);
                 sb.append("[]");

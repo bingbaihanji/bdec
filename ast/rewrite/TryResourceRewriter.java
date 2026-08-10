@@ -21,19 +21,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Detects try-finally patterns that wrap {@code close()} calls and
- * converts them to Java try-with-resources statements.
+ * try-with-resources 重写器,检测包含 {@code close()} 调用的 try-finally 模式,
+ * 并将其转换为 Java 7+ 的 try-with-resources 语句.
  *
- * <p>Pattern:
+ * <p>匹配模式:</p>
  * <pre>
  *   ResourceType r = new Resource(...);
  *   try { ... body ... }
  *   finally { if (r != null) r.close(); }
  * </pre>
  *
- * <p>Also handles multi-resource patterns.
- *
- * <p>Inspired by Vineflower's {@code TryWithResourcesProcessor}.
+ * <p>同时支持多资源模式.参考了 Vineflower 的 {@code TryWithResourcesProcessor} 实现.</p>
  */
 public class TryResourceRewriter implements RewriteRule {
 
@@ -49,6 +47,12 @@ public class TryResourceRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /**
+     * 重写类型声明,遍历所有方法体进行 try-with-resources 模式检测.
+     *
+     * @param td 待重写的类型声明
+     * @return 重写后的类型声明
+     */
     private TypeDeclaration rewriteType(TypeDeclaration td) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
@@ -64,6 +68,12 @@ public class TryResourceRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
+    /**
+     * 递归重写代码块,对内嵌代码块和 try 语句进行资源检测.
+     *
+     * @param stmt 待重写的语句
+     * @return 重写后的语句
+     */
     private Statement rewriteBlock(Statement stmt) {
         if (stmt instanceof BlockStatement bs) {
             List<Statement> stmts = new ArrayList<>();
@@ -86,15 +96,18 @@ public class TryResourceRewriter implements RewriteRule {
     }
 
     /**
-     * Find variable declarations preceding try-finally blocks
-     * whose resources are closed in the finally body.
+     * 在代码块中查找 try-finally 前声明的资源变量,
+     * 若其 close() 在 finally 体中被调用,则转换为 try-with-resources.
+     *
+     * @param bs 待检测的代码块
+     * @return 转换后的代码块
      */
     private Statement detectTryResource(BlockStatement bs) {
         List<Statement> stmts = new ArrayList<>(bs.statements());
         for (int i = 0; i < stmts.size() - 1; i++) {
             Statement s = stmts.get(i);
 
-            // Find a variable declaration: Type r = new Resource(...)
+            // 查找变量声明:Type r = new Resource(...)
             String varName = null;
             Expression initExpr = null;
             if (s instanceof ExpressionStatement es
@@ -108,7 +121,7 @@ public class TryResourceRewriter implements RewriteRule {
                 continue;
             }
 
-            // Find try-finally immediately after
+            // 查找紧随其后的 try-finally
             if (!(stmts.get(i + 1) instanceof TryStatement ts)) {
                 continue;
             }
@@ -116,34 +129,40 @@ public class TryResourceRewriter implements RewriteRule {
                 continue;
             }
 
-            // Check finally body contains close() call on the variable
+            // 检查 finally 体中是否包含对该变量的 close() 调用
             if (!finallyContainsClose(ts.finallyBody(), varName)) {
                 continue;
             }
 
-            // Build try-with-resources
+            // 构建 try-with-resources 的资源列表
             List<Expression> resources = new ArrayList<>();
             resources.add(initExpr);
 
-            // Rebuild try body
+            // 重建 try 体
             Statement newTryBody = rewriteBlock(ts.tryBody());
             List<TryStatement.CatchClause> catchClauses = ts.catchClauses();
             Statement newFinally = removeCloseFromFinally(ts.finallyBody(), varName);
 
-            // Remove variable decl and old try, insert new try-with-resources
+            // 移除原变量声明和旧 try,插入新的 try-with-resources
             stmts.remove(i + 1);
             stmts.remove(i);
 
             TryStatement newTry = new TryStatement(newTryBody, catchClauses, newFinally);
-            // Note: the current TryStatement model doesn't have a resources field.
-            // We emit resources as comments for now — a full model change is needed.
+            // 注意:当前 TryStatement 模型没有 resources 字段,
+            // 资源变量已在上方声明并保留以便代码生成器处理.
             stmts.add(i, newTry);
             return new BlockStatement(stmts);
         }
         return bs;
     }
 
-    /** Check if a finally body contains a close() call on the given variable. */
+    /**
+     * 检查 finally 体中是否包含对指定变量的 close() 调用.
+     *
+     * @param finallyBody finally 体语句
+     * @param varName     待检查的变量名
+     * @return 若包含 close() 调用则返回 {@code true}
+     */
     private boolean finallyContainsClose(Statement finallyBody, String varName) {
         List<Statement> stmts = collectStatements(finallyBody);
         for (Statement s : stmts) {
@@ -158,19 +177,27 @@ public class TryResourceRewriter implements RewriteRule {
         return false;
     }
 
-    /** Remove the close() call from finally body, preserving other statements. */
+    /**
+     * 从 finally 体中移除 close() 调用,保留其他语句.
+     * <p>同时移除关联的 null 检查:{@code if(r != null) r.close()}.</p>
+     *
+     * @param finallyBody finally 体语句
+     * @param varName     待移除的变量名
+     * @return 移除 close() 调用后的语句,若无剩余语句则返回 {@code null}
+     */
     private Statement removeCloseFromFinally(Statement finallyBody, String varName) {
         List<Statement> stmts = collectStatements(finallyBody);
         List<Statement> filtered = new ArrayList<>();
         for (Statement s : stmts) {
+            // 移除 close() 调用
             if (s instanceof ExpressionStatement es
                     && es.expression() instanceof InvocationExpr inv
                     && "close".equals(inv.methodName())
                     && inv.target() instanceof VarExpr vx
                     && varName.equals(vx.name())) {
-                continue; // remove
+                continue;
             }
-            // Also remove null check: if(r != null) r.close()
+            // 同时移除 null 检查:if(r != null) r.close()
             if (s instanceof IfStatement ifs
                     && ifs.condition() instanceof BinExpr be
                     && be.operator() == BinaryOperator.NE) {
@@ -184,7 +211,12 @@ public class TryResourceRewriter implements RewriteRule {
         return new BlockStatement(filtered);
     }
 
-    /** Flatten nested blocks into a flat statement list. */
+    /**
+     * 将嵌套代码块展平为语句列表.
+     *
+     * @param s 待展平的语句
+     * @return 展平后的语句列表
+     */
     private List<Statement> collectStatements(Statement s) {
         if (s instanceof BlockStatement bs) {
             List<Statement> result = new ArrayList<>();

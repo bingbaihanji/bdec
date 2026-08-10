@@ -1,47 +1,44 @@
 package com.bingbaihanji.bdec.semantic;
 
 /**
- * Semantic annotation tags attached to IR instructions by the
- * {@link SemanticReconstructor} pipeline.
+ * 语义注解标签枚举.
  *
- * Each tag represents a high-level semantic pattern that was recognized
- * in the raw bytecode IR, enabling downstream passes (BlockReducer,
- * StatementEmitter) to produce correct Java source.
+ * <p>由 {@link SemanticReconstructor} 管线附加到 IR 指令上的语义标记.
+ *
+ * <p>每个标签代表在原始字节码 IR 中识别出的一个高级语义模式,
+ * 供下游遍历({@code BlockReducer},{@code StatementEmitter})使用,
+ * 以便生成正确的 Java 源代码.
  */
 public enum SemanticTag {
 
-    /** An invokespecial call to {@code <init>} — constructor delegation. */
+    /** 对 {@code <init>} 的 invokespecial 调用 —— 构造函数委托 */
     CONSTRUCTOR_DELEGATION,
 
-    /** Constructor delegation to the same class: {@code this(...)}. */
+    /** 对同一类的构造函数委托:{@code this(...)} */
     THIS_CONSTRUCTOR,
 
-    /** Constructor delegation to the super class: {@code super(...)}. */
+    /** 对父类的构造函数委托:{@code super(...)} */
     SUPER_CONSTRUCTOR,
 
-    /** An {@code Objects.requireNonNull} or {@code getClass()} null-check
-     *  that has been removed. */
+    /** 已被移除的 {@code Objects.requireNonNull} 或 {@code getClass()} 空检查调用 */
     NULL_CHECK_REMOVED,
 
-    /** A block containing monitorenter → synchronized body → monitorexit. */
+    /** 包含 monitorenter → synchronized 方法体 → monitorexit 的同步块 */
     SYNCHRONIZED_BLOCK,
 
-    /** A return instruction in a boolean-typed method. */
+    /** 布尔类型方法中的返回指令 */
     BOOLEAN_RETURN,
 
-    /** A field initialization that should be extracted from the constructor
-     *  into a field-level initializer. */
+    /** 应从构造函数中提取为字段级初始化器的字段初始化 */
     FIELD_INIT,
 
-    /** An expression whose result is consumed exactly once — candidate
-     *  for inlining the definition into the use site. */
+    /** 结果恰好被消费一次的表达式 —— 可内联到使用点的候选 */
     SINGLE_USE_INLINE,
 
-    /** The declaring class for a static method call. Allows emitting
-     *  {@code Arrays.fill(...)} instead of just {@code fill(...)}. */
+    /** 静态方法调用的声明类.允许输出如 {@code Arrays.fill(...)} 而非仅 {@code fill(...)} */
     DECLARING_CLASS,
 
-    /** An INVOKE IR instruction that originated from an invokedynamic bytecode.
-     *  Downstream passes use this to generate lambda expressions or method refs. */
+    /** 源自 invokedynamic 字节码的 INVOKE IR 指令.
+     *  下游遍历可用此标签生成 lambda 表达式或方法引用. */
     INDY,
 }

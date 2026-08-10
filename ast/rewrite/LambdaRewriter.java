@@ -25,31 +25,71 @@ import com.bingbaihanji.bdec.ir.LinearIr;
 import com.bingbaihanji.bdec.semantic.SemanticReconstructor;
 import com.bingbaihanji.bdec.structuring.ControlFlowStructurer;
 import com.bingbaihanji.bdec.structuring.StructuredMethod;
-import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Detects {@code invokedynamic} / {@code LambdaMetafactory} patterns and
- * converts them to Java lambda expressions.
+ * Lambda 表达式重写器,检测 {@code invokedynamic} / {@code LambdaMetafactory} 模式,
+ * 将其转换为 Java lambda 表达式.
  *
- * <p>Pattern (at IR/AST level):
+ * <p>在 IR/AST 层面的模式:
  * <pre>
  *   invokeDynamic("lambda$method$0", ...)  →  (args) -> body
  *   invokeDynamic("methodRef", ...)        →  Class::method
  * </pre>
  *
- * <p>The bootstrap methods data from the class file is used to resolve
- * the functional interface type, target method handle, and captured args.
+ * <p>利用类文件中的引导方法数据来解析函数式接口类型,目标方法句柄和捕获的参数.
  *
- * <p>Inspired by CFR's {@code LambdaExpressionRewriter} and
- * Vineflower's {@code LambdaProcessor}.
+ * <p>设计参考 CFR 的 {@code LambdaExpressionRewriter}
+ * 和 Vineflower 的 {@code LambdaProcessor}.
  */
 public class LambdaRewriter implements RewriteRule {
 
-    /** ACC_SYNTHETIC flag (0x1000). */
+    /** ACC_SYNTHETIC 标志位(0x1000) */
     private static final int ACC_SYNTHETIC = 0x1000;
+
+    /** 在类文件中按名称查找 lambda 合成方法 */
+    private static MethodModel findLambdaMethod(ClassFileModel cfm, String methodName) {
+        for (MethodModel m : cfm.methods()) {
+            if (methodName.equals(m.name())) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 若方法体为单条 "return expr;" 语句,则提取其中的表达式.
+     * 若方法体包含多条语句或不是简单 return 语句,则返回 null.
+     */
+    private static Expression extractReturnExpr(BlockStatement body) {
+        List<Statement> stmts = body.statements();
+        if (stmts.size() == 1 && stmts.get(0) instanceof ReturnStatement rs
+                && rs.value() != null) {
+            return rs.value();
+        }
+        return null;
+    }
+
+    /**
+     * 从块体中移除结尾的合成 return 语句.
+     * 对于表达式式 lambda,将最后的 "return expr;" 转换为 "expr;".
+     * 对于块式 lambda,移除结构化过程中添加的合成返回值.
+     */
+    private static BlockStatement stripOuterReturn(BlockStatement body) {
+        List<Statement> stmts = new ArrayList<>(body.statements());
+        // 移除非 void 方法中结构化器添加的结尾合成 "return null/0/false"
+        if (!stmts.isEmpty()) {
+            Statement last = stmts.get(stmts.size() - 1);
+            if (last instanceof ReturnStatement rs && rs.value() instanceof LitExpr lit
+                    && (lit.value() == null || lit.value() instanceof Number n
+                    && n.intValue() == 0 || Boolean.FALSE.equals(lit.value()))) {
+                stmts.remove(stmts.size() - 1);
+            }
+        }
+        return new BlockStatement(stmts);
+    }
 
     @Override
     public String name() {return "lambda";}
@@ -66,6 +106,7 @@ public class LambdaRewriter implements RewriteRule {
         return new CompilationUnit(unit.packageName(), unit.imports(), types);
     }
 
+    /** 重写类型声明,过滤掉 lambda 合成方法并重写方法体 */
     private TypeDeclaration rewriteType(TypeDeclaration td,
                                         List<BootstrapMethodEntry> bootstrapMethods,
                                         ClassFileModel cfm,
@@ -73,7 +114,7 @@ public class LambdaRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                // Filter lambda synthetic methods: lambda$xxx$N or method ref bridges.
+                // 过滤 lambda 合成方法:lambda$xxx$N 或方法引用桥接方法
                 if (isLambdaSyntheticMethod(md)) {
                     continue;
                 }
@@ -90,21 +131,22 @@ public class LambdaRewriter implements RewriteRule {
                 td.superName(), td.interfaceNames(), td.typeParameters(), members);
     }
 
-    /** Check if a method is a lambda synthetic (lambda$xxx$N or method ref bridge). */
+    /** 检查方法是否为 lambda 合成方法(lambda$xxx$N 或方法引用桥接方法) */
     private boolean isLambdaSyntheticMethod(MethodDeclaration md) {
         String name = md.name();
         if (name == null) {
             return false;
         }
-        // Lambda body methods: lambda$enclosingMethod$N
+        // lambda 体方法:lambda$enclosingMethod$N
         if (name.startsWith("lambda$")) {
             return true;
         }
-        // Method reference bridge: lambda$xxx$N pattern is most common;
-        // other synthetic patterns are harder to detect without class context
+        // 方法引用桥接:lambda$xxx$N 是最常见的模式
+        // 其他合成模式在没有类上下文的情况下较难检测
         return false;
     }
 
+    /** 递归重写语句,识别并转换 lambda 表达式 */
     private Statement rewriteStatement(Statement s,
                                        List<BootstrapMethodEntry> bootstrapMethods,
                                        ClassFileModel cfm,
@@ -134,15 +176,15 @@ public class LambdaRewriter implements RewriteRule {
         return s;
     }
 
+    /** 重写表达式,将 lambda 占位符替换为反编译的 lambda 体 */
     private Expression rewriteExpr(Expression e,
                                    List<BootstrapMethodEntry> bootstrapMethods,
                                    ClassFileModel cfm,
                                    DecompileContext ctx) {
-        // Replace LambdaExpr placeholders with decompiled bodies.
-        // Temporarily disabled: need to fix params reconstruction first.
-        // The placeholder has empty params (from INDY operands) but the
-        // decompiled body references the lambda method's params by name.
-        // TODO: reconstruct params from lambda method, not INDY operands.
+        // 将 LambdaExpr 占位符替换为反编译后的 lambda 体.
+        // 暂时禁用:需要先修复参数重建逻辑.
+        // 占位符中的参数为空(来自 INDY 操作数),但反编译体引用的是 lambda 方法的参数名.
+        // TODO: 从 lambda 方法而非 INDY 操作数重建参数.
         //if (e instanceof LambdaExpr lambda && !lambda.isMethodRef()
         //        && lambda.bodyExpr() instanceof VarExpr ve
         //        && ve.name().startsWith("/* lambda")) {
@@ -155,12 +197,12 @@ public class LambdaRewriter implements RewriteRule {
                 return e;
             }
 
-            // Detect lambda: method name starts with "lambda$"
+            // 检测 lambda:方法名以 "lambda$" 开头
             if (name.startsWith("lambda$") && inv.target() == null) {
                 return convertLambda(inv);
             }
 
-            // Recurse into children
+            // 递归处理子表达式
             List<Expression> newArgs = new ArrayList<>();
             for (Expression arg : inv.arguments()) {
                 newArgs.add(rewriteExpr(arg, bootstrapMethods, cfm, ctx));
@@ -173,7 +215,7 @@ public class LambdaRewriter implements RewriteRule {
         return e;
     }
 
-    /** Convert a lambda invocation into a lambda expression placeholder. */
+    /** 将 lambda 调用转换为 lambda 表达式占位符 */
     private Expression convertLambda(InvocationExpr inv) {
         String name = inv.methodName();
         String descriptor = name.replace("lambda$", "");
@@ -193,11 +235,12 @@ public class LambdaRewriter implements RewriteRule {
         return new VarExpr(lambdaText.toString());
     }
 
-    /** Decompile the body of a lambda synthetic method and produce a real
-     *  LambdaExpr instead of a placeholder. */
+    /**
+     * 反编译 lambda 合成方法的方法体,生成真正的 LambdaExpr 代替占位符.
+     */
     private LambdaExpr buildLambdaBody(LambdaExpr placeholder, String bodyHint,
-                                        ClassFileModel cfm, DecompileContext ctx) {
-        // Extract method name: "/* lambda$methodName$N */" → "lambda$methodName$N"
+                                       ClassFileModel cfm, DecompileContext ctx) {
+        // 提取方法名:"/* lambda$methodName$N */" → "lambda$methodName$N"
         String methodName = bodyHint.replace("/* ", "").replace(" */", "").trim();
         if (methodName.isEmpty()) {
             return placeholder;
@@ -224,60 +267,19 @@ public class LambdaRewriter implements RewriteRule {
                 return placeholder;
             }
 
-            // Try to extract an expression body from the decompiled method.
-            // Lambda methods typically have the form: return expr;
+            // 尝试从反编译方法体中提取表达式体.
+            // lambda 方法通常为:return expr;
             Expression bodyExpr = extractReturnExpr(sm.body());
             if (bodyExpr != null) {
                 return LambdaExpr.expression(placeholder.parameters(),
                         bodyExpr, placeholder.functionalType());
             }
 
-            // Block lambda: use the method body directly (minus the outer
-            // return for the last statement if present).
+            // 块 lambda:直接使用方法体(去掉外层对最后一条语句的 return 包装)
             return LambdaExpr.block(placeholder.parameters(),
                     stripOuterReturn(sm.body()), placeholder.functionalType());
         } catch (Exception e) {
             return placeholder;
         }
-    }
-
-    /** Find the lambda synthetic method by name in the class file. */
-    private static MethodModel findLambdaMethod(ClassFileModel cfm, String methodName) {
-        for (MethodModel m : cfm.methods()) {
-            if (methodName.equals(m.name())) {
-                return m;
-            }
-        }
-        return null;
-    }
-
-    /** If the method body is a single "return expr;", extract the expression.
-     *  Returns null if the body has multiple statements or isn't a simple return. */
-    private static Expression extractReturnExpr(BlockStatement body) {
-        List<Statement> stmts = body.statements();
-        if (stmts.size() == 1 && stmts.get(0) instanceof ReturnStatement rs
-                && rs.value() != null) {
-            return rs.value();
-        }
-        return null;
-    }
-
-    /** Strip the outer return from a block body, converting the last
-     *  "return expr;" to just "expr;" for expression-style lambdas.
-     *  For block lambdas, keep all statements but remove the final
-     *  synthetic return that was added by wrapAsReturn. */
-    private static BlockStatement stripOuterReturn(BlockStatement body) {
-        List<Statement> stmts = new ArrayList<>(body.statements());
-        // Remove trailing synthetic "return null/0/false" added by the
-        // structurer for non-void methods.
-        if (!stmts.isEmpty()) {
-            Statement last = stmts.get(stmts.size() - 1);
-            if (last instanceof ReturnStatement rs && rs.value() instanceof LitExpr lit
-                    && (lit.value() == null || lit.value() instanceof Number n
-                    && n.intValue() == 0 || Boolean.FALSE.equals(lit.value()))) {
-                stmts.remove(stmts.size() - 1);
-            }
-        }
-        return new BlockStatement(stmts);
     }
 }
