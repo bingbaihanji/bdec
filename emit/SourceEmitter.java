@@ -99,6 +99,14 @@ public class SourceEmitter {
         w.space().write("{").newLine();
         w.indent();
 
+        // 对于嵌套类型,使用新的 StatementEmitter 以确保构造函数检测
+        // 使用正确的类名(而非外层类的类名)
+        StatementEmitter nestedStmts = stmts;
+        if (!type.simpleName().equals(stmts.className())) {
+            nestedStmts = new StatementEmitter(w, stmts.exprs(),
+                    type.simpleName(), type.isInterface());
+        }
+
         boolean firstMember = true;
         for (AstNode member : type.children()) {
             // 将枚举常量作为逗号分隔的列表输出(字段名为特殊标记 $enumConstants$)
@@ -110,13 +118,13 @@ public class SourceEmitter {
                 continue;
             }
             if (member instanceof Statement s) {
-                stmts.emit(s);
+                nestedStmts.emit(s);
             } else if (member instanceof TypeDeclaration nestedType) {
                 // 输出嵌套类型(内部类,内部接口等)
                 if (!firstMember) {
                     w.newLine();
                 }
-                emitType(nestedType, w, stmts);
+                emitType(nestedType, w, nestedStmts);
             } else {
                 w.write("// " + member.kind()).newLine();
             }
