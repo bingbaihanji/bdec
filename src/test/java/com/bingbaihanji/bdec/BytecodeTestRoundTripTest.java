@@ -198,4 +198,34 @@ public class BytecodeTestRoundTripTest {
         }
         org.junit.Assert.assertEquals("OK", r);
     }
+
+    @Test
+    public void testSimpleNewTestRoundTrip() throws Exception {
+        String r = decompileAndRecompile("SimpleNewTest");
+        if (!r.equals("OK")) {
+            System.err.println("=== SimpleNewTest decompile/compile failure ===");
+            System.err.println(r);
+        }
+        org.junit.Assert.assertEquals("OK", r);
+    }
+
+    @Test
+    public void testSimpleForEachTestRoundTrip() throws Exception {
+        String r = decompileAndRecompile("SimpleForEachTest");
+        if (!r.equals("OK")) {
+            System.err.println("=== SimpleForEachTest decompile/compile failure ===");
+            System.err.println(r);
+        }
+        org.junit.Assert.assertEquals("OK", r);
+    }
+
+    @Test
+    public void testSimpleStringTestRoundTrip() throws Exception {
+        String r = decompileAndRecompile("SimpleStringTest");
+        if (!r.equals("OK")) {
+            System.err.println("=== SimpleStringTest decompile/compile failure ===");
+            System.err.println(r);
+        }
+        org.junit.Assert.assertEquals("OK", r);
+    }
 }

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.bingbaihanji.bdec.ControlFlowTest" time="1.166" tests="23" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.bingbaihanji.bdec.ControlFlowTest" time="1.139" tests="23" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="25"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -15,7 +15,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="CN"/>
     <property name="sun.boot.library.path" value="D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin"/>
-    <property name="sun.java.command" value="C:\Users\bingb\AppData\Local\Temp\surefire760480823070147319\surefirebooter-20260810175020397_3.jar C:\Users\bingb\AppData\Local\Temp\surefire760480823070147319 2026-08-10T17-50-20_278-jvmRun1 surefire-20260810175020397_1tmp surefire_0-20260810175020397_2tmp"/>
+    <property name="sun.java.command" value="C:\Users\bingb\AppData\Local\Temp\surefire568441218443911875\surefirebooter-20260810185742159_3.jar C:\Users\bingb\AppData\Local\Temp\surefire568441218443911875 2026-08-10T18-57-42_037-jvmRun1 surefire-20260810185742159_1tmp surefire_0-20260810185742159_2tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="D:\bingbaihanji\fxdecomplie\bdec\bdec\target\test-classes;D:\bingbaihanji\fxdecomplie\bdec\bdec\target\classes;D:\develop\maven\apache-maven-3.9.9\repository\junit\junit\4.13.2\junit-4.13.2.jar;D:\develop\maven\apache-maven-3.9.9\repository\org\hamcrest\hamcrest-core\1.3\hamcrest-core-1.3.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -30,7 +30,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\bingb\AppData\Local\Temp\surefire760480823070147319\surefirebooter-20260810175020397_3.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\bingb\AppData\Local\Temp\surefire568441218443911875\surefirebooter-20260810185742159_3.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="25.0.3+12-LTS"/>
@@ -60,27 +60,27 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="69.0"/>
   </properties>
-  <testcase name="testEnumSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.085"/>
-  <testcase name="testDecompileBasicClass" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.042"/>
-  <testcase name="testConditionNotInverted" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.039"/>
-  <testcase name="testInstanceOfExpr" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.042"/>
-  <testcase name="testTryCatchBasic" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.04"/>
-  <testcase name="testWhileLoop" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.038"/>
+  <testcase name="testEnumSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.088"/>
+  <testcase name="testDecompileBasicClass" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.044"/>
+  <testcase name="testConditionNotInverted" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.038"/>
+  <testcase name="testInstanceOfExpr" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.041"/>
+  <testcase name="testTryCatchBasic" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.035"/>
+  <testcase name="testWhileLoop" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.041"/>
   <testcase name="testBooleanMethod" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.041"/>
-  <testcase name="testTryFinally" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.044"/>
-  <testcase name="testArrayAccess" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.037"/>
-  <testcase name="testMethodRef" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.05"/>
-  <testcase name="testVoidMethodNotReturned" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.081"/>
-  <testcase name="testNewInstanceWithArgs" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.047"/>
-  <testcase name="testLockTryFinallyClear" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.079"/>
-  <testcase name="testLockTryFinallyOffer" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.079"/>
-  <testcase name="testStringSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.041"/>
-  <testcase name="testDuplicateVarDeclMerged" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.075"/>
-  <testcase name="testLockTryFinallySize" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.072"/>
-  <testcase name="testDoWhile" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.034"/>
-  <testcase name="testIfElse" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.033"/>
-  <testcase name="testLambda" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.045"/>
-  <testcase name="testSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.044"/>
-  <testcase name="testBooleanArgFolding" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.036"/>
-  <testcase name="testStaticMethodCall" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.038"/>
+  <testcase name="testTryFinally" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.042"/>
+  <testcase name="testArrayAccess" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.035"/>
+  <testcase name="testMethodRef" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.048"/>
+  <testcase name="testVoidMethodNotReturned" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.082"/>
+  <testcase name="testNewInstanceWithArgs" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.041"/>
+  <testcase name="testLockTryFinallyClear" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.083"/>
+  <testcase name="testLockTryFinallyOffer" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.073"/>
+  <testcase name="testStringSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.039"/>
+  <testcase name="testDuplicateVarDeclMerged" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.067"/>
+  <testcase name="testLockTryFinallySize" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.075"/>
+  <testcase name="testDoWhile" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.036"/>
+  <testcase name="testIfElse" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.032"/>
+  <testcase name="testLambda" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.048"/>
+  <testcase name="testSwitch" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.035"/>
+  <testcase name="testBooleanArgFolding" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.033"/>
+  <testcase name="testStaticMethodCall" classname="com.bingbaihanji.bdec.ControlFlowTest" time="0.037"/>
 </testsuite>

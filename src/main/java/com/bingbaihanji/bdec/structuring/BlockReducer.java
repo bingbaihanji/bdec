@@ -488,7 +488,7 @@ public final class BlockReducer {
                     && def.resultType().kind() == TypeKind.BOOLEAN) {
                 return true;
             }
-            // CONDITION、COMPARE、INSTANCE_OF 产生布尔值
+            // CONDITION,COMPARE,INSTANCE_OF 产生布尔值
             // INSTANCE_OF 在 JVM 字节码层面产生 int(0/1),但在 Java 源码中
             // 总是用作布尔条件,因此应简化 CONDITION 中的 "==0"/"!=0" 比较
             if (def.opcode() == IrOpcode.CONDITION
@@ -658,7 +658,7 @@ public final class BlockReducer {
         // 作为 if-header 检测的回退方案,以提供正确的合并点.
         PostDominatorTree postDom = PostDominatorTree.compute(graph);
 
-        List<BlockGroup> groups = groupAdjacentBlocks(sorted, graph);
+        List<BlockGroup> groups = groupAdjacentBlocks(sorted, graph, loopAnns);
         Set<BlockGroup> consumed = new HashSet<>();
         // 收集处理器块,以便跳过它们对应的组(这些组将被
         // wrapTryCatchBlocks 吸收到 try-finally 中).
@@ -778,6 +778,14 @@ public final class BlockReducer {
                 s = translateGroup(group, ir);
                 if (s != null && !isEmptyBlock(s) && !isHandlerLoop) {
                     Expression cond = simplifyCondition(extractCondition(group, ir));
+                    // bytecode 中的条件跳转(如 ifeq/iflt)表示"满足条件时跳转到循环出口".
+                    // 但 Java while 循环的条件表示"满足条件时继续循环".
+                    // 因此需要取反:while-loop 条件 = NOT(bytecode jump condition).
+                    // 例如 ifeq exit 表示 value==0 时退出,while 条件应为 value!=0.
+                    if (cond != null) {
+                        cond = new UnExpr(UnaryOperator.NOT, cond);
+                        cond = simplifyCondition(cond);
+                    }
                     s = new LoopStatement(LoopStatement.LoopKind.WHILE,
                             cond != null ? cond : new VarExpr("true"), s);
                 }
@@ -1364,6 +1372,12 @@ public final class BlockReducer {
                 return new BinExpr(op, left, right);
             }
         }
+        // !!x → x (双重否定消除)
+        if (cond instanceof UnExpr un && un.operator() == UnaryOperator.NOT
+                && un.operand() instanceof UnExpr inner
+                && inner.operator() == UnaryOperator.NOT) {
+            return simplifyCondition(inner.operand());
+        }
         return cond;
     }
 
@@ -1373,13 +1387,14 @@ public final class BlockReducer {
      * 且两者具有相同的异常覆盖范围——因为 try 前代码(如 lock.lock())
      * 与 try 体合并后将无法正确包装.
      */
-    private List<BlockGroup> groupAdjacentBlocks(List<BasicBlock> blocks, ControlFlowGraph graph) {
+    private List<BlockGroup> groupAdjacentBlocks(List<BasicBlock> blocks, ControlFlowGraph graph,
+                                                  Map<BasicBlock, LoopInfo> loopAnns) {
         List<BlockGroup> groups = new ArrayList<>();
         BlockGroup current = null;
         for (BasicBlock b : blocks) {
             if (current == null) {
                 current = new BlockGroup(b);
-            } else if (isAdjacent(current.last(), b, graph)) {
+            } else if (isAdjacent(current.last(), b, graph, loopAnns)) {
                 current.add(b);
             } else {
                 groups.add(current);
@@ -1397,8 +1412,12 @@ public final class BlockReducer {
      * 相邻块之间具有从前驱到后继的单条 fallthrough 边,
      * 且具有相同的异常覆盖范围——不同异常处理器的块不应被合并,
      * 否则 try 前代码(如 lock.lock())会与 try 体合并而无法正确包装.
+     *
+     * <p>同时检查循环边界:不将前导块与循环头块合并,
+     * 否则循环初始化代码会被错误地包含在循环体内.
      */
-    private boolean isAdjacent(BasicBlock prev, BasicBlock next, ControlFlowGraph graph) {
+    private boolean isAdjacent(BasicBlock prev, BasicBlock next, ControlFlowGraph graph,
+                               Map<BasicBlock, LoopInfo> loopAnns) {
         List<BasicBlock> succs = graph.successorsOf(prev);
         if (succs.size() != 1 || succs.get(0) != next) {
             return false;
@@ -1414,6 +1433,15 @@ public final class BlockReducer {
                 .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
         if (prevHasException != nextHasException) {
             return false;
+        }
+        // 尊重循环边界:如果后继块是循环头,不要将前导块(循环初始化代码)
+        // 与循环体合并.检查 next 块本身及其内部所有块.
+        if (loopAnns != null) {
+            for (BasicBlock b : loopAnns.keySet()) {
+                if (b == next || b.id() == next.id()) {
+                    return false;
+                }
+            }
         }
         return true;
     }
@@ -1523,15 +1551,9 @@ public final class BlockReducer {
             // 通过 extractCondition() 提取.如果条件块没有匹配的注解,
             // 则生成注释占位符以免控制流被静默丢失.
             if (insn.opcode() == IrOpcode.CONDITION) {
-                if (insn.operands().size() >= 2) {
-                    Expression left = valueToExpr(insn.operands().get(0));
-                    Expression right = valueToExpr(insn.operands().get(1));
-                    BinaryOperator cmp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
-                    stmts.add(new ExpressionStatement(
-                            new com.bingbaihanji.bdec.ast.expr.VarExpr(
-                                    "/* if (" + left + " " + (cmp != null ? cmp : "?")
-                                            + " " + right + ") */")));
-                }
+                // CONDITION 指令由 reduce() 中的 IfStatement/LoopStatement 包装器
+                // 通过 extractCondition() 提取.在此处静默跳过——
+                // 条件块总是在组级别进行结构化.
                 continue;
             }
 

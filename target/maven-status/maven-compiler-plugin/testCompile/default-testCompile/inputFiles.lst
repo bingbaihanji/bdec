@@ -8,6 +8,7 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\Byteco
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\cfg\CfgBuilderTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\cfg\DominatorTreeTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\ControlFlowTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\DebugDecompile.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\DebugOutputTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\DecompileContextTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\decompiler\diagnostic\DecompilerDiagnosticTest.java
@@ -22,5 +23,8 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\InterfaceA
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\InterfaceB.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\RecordDemo.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\SealedParent.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\SimpleForEachTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\SimpleNewTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\SimpleStringTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\TestClass1.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\TestClass2.java

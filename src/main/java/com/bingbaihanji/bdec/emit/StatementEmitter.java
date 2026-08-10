@@ -174,11 +174,17 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
                 w.token("for").space().write("(");
                 // 输出变量和可迭代对象:"Type var : iterable"
                 if (l.forEachVar() != null) {
-                    exprs.emit(l.forEachVar());
+                    // 若为裸 VarExpr(无类型信息),补全类型声明
+                    if (l.forEachVar() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
+                            && !(l.forEachVar() instanceof com.bingbaihanji.bdec.ast.expr.AssignExpr)) {
+                        w.write("Object ").write(v.name());
+                    } else {
+                        exprs.emit(l.forEachVar());
+                    }
                 } else if (l.initExpr() != null) {
                     exprs.emit(l.initExpr());
                 } else {
-                    w.write("Object e");
+                    w.write("Object element");
                 }
                 w.space().write(":").space();
                 if (l.condition() != null) {

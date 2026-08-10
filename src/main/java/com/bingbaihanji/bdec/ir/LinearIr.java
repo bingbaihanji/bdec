@@ -7,8 +7,10 @@ import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 线性IR.
@@ -31,6 +33,9 @@ public class LinearIr {
 
     /** 基本块ID到指令列表的映射 */
     private final Map<Integer, List<IrInstruction>> blockInstructions;
+
+    /** 源偏移量到IR指令的映射(用于虚拟块的回退查找) */
+    private Map<Integer, IrInstruction> offsetToInstruction;
 
     /** 变量列表 */
     private final List<Variable> variables;
@@ -77,7 +82,41 @@ public class LinearIr {
      * @return 该基本块内的指令列表
      */
     public List<IrInstruction> instructionsOf(BasicBlock block) {
-        return blockInstructions.getOrDefault(block.id(), List.of());
+        List<IrInstruction> result = blockInstructions.get(block.id());
+        if (result != null) {
+            return result;
+        }
+        // 回退方案:对于CFG折叠期间创建的虚拟块,通过源字节码偏移量查找IR指令.
+        // 当foldLoop/foldIf将基本块替换为虚拟块时,虚拟块的ID与原始块的ID
+        // 不匹配,因此blockInstructions映射查找会失败.
+        if (!block.instructions().isEmpty()) {
+            buildOffsetMap();
+            result = new ArrayList<>();
+            Set<Integer> visited = new HashSet<>();
+            for (var instr : block.instructions()) {
+                int offset = instr.offset();
+                if (visited.add(offset)) {
+                    IrInstruction irInsn = offsetToInstruction.get(offset);
+                    if (irInsn != null) {
+                        result.add(irInsn);
+                    }
+                }
+            }
+        }
+        return result != null ? result : List.of();
+    }
+
+    /** 惰性构建源偏移量到IR指令的映射 */
+    private void buildOffsetMap() {
+        if (offsetToInstruction == null) {
+            offsetToInstruction = new HashMap<>();
+            for (IrInstruction insn : instructions) {
+                int offset = insn.sourceOffset();
+                if (!offsetToInstruction.containsKey(offset)) {
+                    offsetToInstruction.put(offset, insn);
+                }
+            }
+        }
     }
 
     /** @return 是否已进行SSA优化 */
@@ -110,5 +149,7 @@ public class LinearIr {
             blockInstructions.computeIfAbsent(insn.blockId(),
                     k -> new ArrayList<>()).add(insn);
         }
+        // 使偏移量缓存失效(指令已变更)
+        offsetToInstruction = null;
     }
 }
