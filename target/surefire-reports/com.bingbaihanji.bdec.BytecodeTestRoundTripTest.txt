@@ -1,11 +1,11 @@
 -------------------------------------------------------------------------------
 Test set: com.bingbaihanji.bdec.BytecodeTestRoundTripTest
 -------------------------------------------------------------------------------
-Tests run: 11, Failures: 4, Errors: 0, Skipped: 0, Time elapsed: 1.166 s <<< FAILURE! -- in com.bingbaihanji.bdec.BytecodeTestRoundTripTest
-com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass1RoundTrip -- Time elapsed: 0.215 s <<< FAILURE!
+Tests run: 11, Failures: 4, Errors: 0, Skipped: 0, Time elapsed: 1.341 s <<< FAILURE! -- in com.bingbaihanji.bdec.BytecodeTestRoundTripTest
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass1RoundTrip -- Time elapsed: 0.243 s <<< FAILURE!
 org.junit.ComparisonFailure: 
 expected:<[OK]> but was:<[COMPILE FAILED:
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-5259441268924646322\compile-1996947507952802845\TestClass1.java:61: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-3484248134621187194\compile-7754379464616768993\TestClass1.java:61: 错误: 不是语句
                     "big";
                     ^
 1 个错误
@@ -42,22 +42,13 @@ C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-5259441268924646322\compile-1996
 	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
 	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
 
-com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testEnumDemoRoundTrip -- Time elapsed: 0.029 s <<< FAILURE!
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testEnumDemoRoundTrip -- Time elapsed: 0.039 s <<< FAILURE!
 org.junit.ComparisonFailure: 
 expected:<[OK]> but was:<[COMPILE FAILED:
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:3: 错误: 需要'{'
-public abstract enum EnumDemo extends Enum {
-                             ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:3: 错误: 此处需要枚举常量
-public abstract enum EnumDemo extends Enum {
-                              ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:7: 错误: 方法声明无效; 需要返回类型
-    private EnumDemo(String param0, int param1, int value) {
-            ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:29: 错误: 进行语法分析时已到达文件结尾
-}
- ^
-4 个错误
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-9554352257536712880\compile-3822963127875154812\EnumDemo.java:4: 错误: 此处需要枚举常量
+    public static final com.bytecode.test.EnumDemo ONE;
+    ^
+1 个错误
 ]>
 	at org.junit.Assert.assertEquals(Assert.java:117)
 	at org.junit.Assert.assertEquals(Assert.java:146)
@@ -91,13 +82,13 @@ C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-1764
 	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
 	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
 
-com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testBaseClassRoundTrip -- Time elapsed: 0.048 s <<< FAILURE!
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testBaseClassRoundTrip -- Time elapsed: 0.051 s <<< FAILURE!
 org.junit.ComparisonFailure: 
 expected:<[OK]> but was:<[COMPILE FAILED:
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-10473692069596660378\BaseClass.java:26: 错误: 已在方法 synchronizedMethod()中定义了变量 var2
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-15241704037857873422\compile-7728561907627469196\BaseClass.java:26: 错误: 已在方法 synchronizedMethod()中定义了变量 var2
                     Throwable var2;
                               ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-10473692069596660378\BaseClass.java:41: 错误: 返回外部方法
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-15241704037857873422\compile-7728561907627469196\BaseClass.java:41: 错误: 返回外部方法
         return;
         ^
 2 个错误
@@ -134,40 +125,40 @@ C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-1047
 	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
 	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
 
-com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip -- Time elapsed: 0.057 s <<< FAILURE!
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip -- Time elapsed: 0.059 s <<< FAILURE!
 org.junit.ComparisonFailure: 
 expected:<[OK]> but was:<[COMPILE FAILED:
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:60: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:60: 错误: 不是语句
             System.out;
                   ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:77: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:77: 错误: 不是语句
                     System.out;
                           ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:106: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:106: 错误: 不是语句
         "positive int";
         ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:109: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:109: 错误: 不是语句
             "non-positive int";
             ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:111: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:111: 错误: 不是语句
         "" + (String) var2;
            ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:112: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:112: 错误: 不是语句
         "null value";
         ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:113: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:113: 错误: 不是语句
         "unknown";
         ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 非法的表达式开始
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:128: 错误: 非法的表达式开始
             () -> /* lambda$unnamedDemo$0 */;
                                             ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:128: 错误: 不是语句
             () -> /* lambda$unnamedDemo$0 */;
             ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 非法的表达式开始
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:144: 错误: 非法的表达式开始
         () -> /* lambda$streamDemo$0 */;
                                        ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 不是语句
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7178257967893893487\compile-1426726199936862305\TestClass2.java:144: 错误: 不是语句
         () -> /* lambda$streamDemo$0 */;
         ^
 11 个错误

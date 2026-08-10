@@ -1,10 +1,10 @@
 package com.bytecode.test;
 
-public abstract enum EnumDemo extends Enum {
-    public static final com.bytecode.test.EnumDemo ONE;
-    public static final com.bytecode.test.EnumDemo TWO;
+public enum EnumDemo {
+    ONE, TWO;
     private final int value;
-    private EnumDemo(String param0, int param1, int value) {
+    private static final com.bytecode.test.EnumDemo[] $VALUES;
+    private EnumDemo(int value) {
         int var2 = 0;
         int var1 = 0;
         super(var1, var2);
@@ -14,16 +14,11 @@ public abstract enum EnumDemo extends Enum {
         return value;
     }
     public abstract void action() ;
-    private static com.bytecode.test.EnumDemo[] $values() {
-        (new com.bytecode.test.EnumDemo[2])[0] = EnumDemo.ONE;
-        (new com.bytecode.test.EnumDemo[2])[1] = EnumDemo.TWO;
-        return new com.bytecode.test.EnumDemo[2];
-    }
     static {
-        int ? = 0;
-        ONE = ?;
-        TWO = ?;
-        $VALUES = ?;
+        int varUnresolved = 0;
+        ONE = varUnresolved;
+        TWO = varUnresolved;
+        $VALUES = varUnresolved;
         return;
     }
 }
