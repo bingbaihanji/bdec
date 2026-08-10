@@ -510,7 +510,27 @@ public final class BlockReducer {
                 Statement tryBody = tryBodyStmts.size() == 1
                         ? tryBodyStmts.get(0)
                         : new BlockStatement(tryBodyStmts);
-                stmts.set(firstTryGroup, buildTryCatch(tci, tryBody, ir));
+
+                // Skip try-catch wrapping for synchronized blocks — the
+                // exception handler is a JVM artifact (monitorexit retry),
+                // not actual Java source catch/finally.
+                if (containsSynchronizedStatement(tryBody)) {
+                    continue;
+                }
+
+                // Detect synchronized block pattern: try body contains
+                // MONITOR_ENTER, handler does MONITOR_EXIT + THROW.
+                // Emit SynchronizedStatement directly instead of try-finally.
+                if (isSynchronizedHandler(tci, ir)) {
+                    String monObj = extractMonitorObject(tci, ir);
+                    SynchronizedStatement syncStmt = new SynchronizedStatement(
+                            new VarExpr(monObj), tryBody);
+                    // Strip the pre-synchronized preamble (DUP/ASTORE) from the body
+                    syncStmt = stripSyncPreamble(syncStmt);
+                    stmts.set(firstTryGroup, syncStmt);
+                } else {
+                    stmts.set(firstTryGroup, buildTryCatch(tci, tryBody, ir));
+                }
                 // Remove absorbed groups
                 for (int i = normalExitEnd; i > firstTryGroup; i--) {
                     if (i < stmts.size()) {
@@ -683,6 +703,15 @@ public final class BlockReducer {
             else if (switchInfo != null) {
                 s = buildSwitch(switchInfo, group, ir, groups, consumed);
             }
+            // synchronized: takes priority over try-catch. Synchronized blocks
+            // have exception handlers (monitorexit + athrow) that are JVM
+            // implementation details — they must be hidden from the output.
+            else if (groupHasSynchronizedAnnotation(group, ir)) {
+                s = translateGroup(group, ir);
+                if (s != null) {
+                    s = wrapSynchronized(s, group, ir);
+                }
+            }
             // try-catch: defer wrapping to post-processing pass (wrapTryCatchBlocks)
             // This ensures try ranges that contain if/else/loop structures
             // are properly wrapped AFTER inner structures are built.
@@ -693,13 +722,6 @@ public final class BlockReducer {
             // try-finally by wrapTryCatchBlocks — skip them to avoid dead code.
             else if (group.blocks().size() == 1 && handlerBlocks.contains(group.first())) {
                 continue; // skip handler block — absorbed by try-finally
-            }
-            // synchronized
-            else if (groupHasSynchronizedAnnotation(group, ir)) {
-                s = translateGroup(group, ir);
-                if (s != null) {
-                    s = wrapSynchronized(s, group, ir);
-                }
             }
             // plain sequence
             else {
@@ -758,7 +780,11 @@ public final class BlockReducer {
         } else {
             root = new BlockStatement(statements);
         }
-        return wrapTryCatchBlocks(root, groups, tryCatchAnns, ir);
+        root = wrapTryCatchBlocks(root, groups, tryCatchAnns, ir);
+        // Post-process: strip synchronized preamble variables (DUP/ASTORE
+        // artifacts that set up monitor objects before SynchronizedStatements)
+        root = stripSyncPreambles(root);
+        return root;
     }
 
     // ── IR → Expression ────────────────────────────────────────────
@@ -1524,6 +1550,11 @@ public final class BlockReducer {
             case MONITOR_ENTER, MONITOR_EXIT -> null;
             case RETURN -> {
                 if (insn.operands().isEmpty()) {
+                    // Static initializers (<clinit>) should not emit "return;"
+                    // — it's a JVM artifact, not valid Java source.
+                    if (currentIr != null && "<clinit>".equals(currentIr.method().name())) {
+                        yield null;
+                    }
                     yield new ReturnStatement(null);
                 } else {
                     Expression retVal = valueToExpr(insn.operands().getFirst());
@@ -2374,6 +2405,193 @@ public final class BlockReducer {
      *  Fallback detection via IR-level tag checking. */
     private boolean isSynchronizedBlock(Statement stmt) {
         return false; // detection now uses IR-level tags in groupHasSynchronizedAnnotation
+    }
+
+    /** Check if a statement tree contains a SynchronizedStatement (recursively). */
+    private boolean containsSynchronizedStatement(Statement s) {
+        if (s instanceof SynchronizedStatement) {
+            return true;
+        }
+        if (s instanceof BlockStatement bs) {
+            return bs.statements().stream().anyMatch(this::containsSynchronizedStatement);
+        }
+        if (s instanceof TryStatement t) {
+            return containsSynchronizedStatement(t.tryBody());
+        }
+        return false;
+    }
+
+    /** Check if a TryCatchInfo represents a synchronized block:
+     *  the method contains MONITOR_ENTER, handler contains MONITOR_EXIT + THROW.
+     *  MONITOR_ENTER is typically at the bytecode offset just before the try range,
+     *  so we search the full method IR rather than only the try blocks. */
+    private boolean isSynchronizedHandler(TryCatchInfo info, LinearIr ir) {
+        // Check entire method for MONITOR_ENTER (it's usually at tryStartPc - 1)
+        boolean hasMonitorEnter = false;
+        for (BasicBlock b : ir.controlFlowGraph().blocks()) {
+            if (b == ir.controlFlowGraph().entryBlock()
+                    || b == ir.controlFlowGraph().exitBlock()) {
+                continue;
+            }
+            for (IrInstruction insn : ir.instructionsOf(b)) {
+                if (insn.opcode() == IrOpcode.MONITOR_ENTER) {
+                    hasMonitorEnter = true;
+                    break;
+                }
+            }
+            if (hasMonitorEnter) break;
+        }
+        if (!hasMonitorEnter) {
+            return false;
+        }
+        // Check handler for MONITOR_EXIT + THROW
+        List<IrInstruction> handlerInsns = collectHandlerInstructions(info, ir);
+        boolean hasMonitorExit = false;
+        boolean hasThrow = false;
+        for (IrInstruction insn : handlerInsns) {
+            if (insn.opcode() == IrOpcode.MONITOR_EXIT) {
+                hasMonitorExit = true;
+            }
+            if (insn.opcode() == IrOpcode.THROW) {
+                hasThrow = true;
+            }
+        }
+        return hasMonitorExit && hasThrow;
+    }
+
+    /** Extract the monitor object name from a synchronized try-catch. */
+    private String extractMonitorObject(TryCatchInfo info, LinearIr ir) {
+        for (BasicBlock b : info.tryBlocks()) {
+            for (IrInstruction insn : ir.instructionsOf(b)) {
+                if (insn.opcode() == IrOpcode.MONITOR_ENTER && !insn.operands().isEmpty()) {
+                    Value obj = insn.operands().getFirst();
+                    // Trace through InstructionRef chain to find underlying variable
+                    while (obj instanceof InstructionRef ref) {
+                        IrInstruction def = ref.instruction();
+                        if (!def.operands().isEmpty()
+                                && def.operands().getFirst() instanceof Variable v) {
+                            if (v.slot() == 0) {
+                                return "this";
+                            }
+                            return v.name();
+                        }
+                        if (!def.operands().isEmpty()
+                                && def.operands().getFirst() instanceof InstructionRef r) {
+                            obj = r; // continue tracing
+                        } else {
+                            break;
+                        }
+                    }
+                    if (obj instanceof Variable v) {
+                        if (v.slot() == 0) {
+                            return "this";
+                        }
+                        return v.name();
+                    }
+                }
+            }
+        }
+        return "this";
+    }
+
+    /** Strip the synchronized preamble (DUP/ASTORE) from the body
+     *  to produce clean {@code synchronized(expr) { body }} output.
+     *  Also filters out handler artifacts (while(true){throw...}) that
+     *  leak from the monitorexit exception handler. */
+    private SynchronizedStatement stripSyncPreamble(SynchronizedStatement syncStmt) {
+        Statement body = syncStmt.body();
+        String monObj = ((VarExpr) syncStmt.monitorObject()).name();
+        if (body instanceof BlockStatement bs) {
+            List<Statement> filtered = new ArrayList<>();
+            for (Statement s : bs.statements()) {
+                // Strip "Type varN = this" preamble (the DUP+ASTRORE pattern)
+                if (s instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
+                        && (vd.name().equals(monObj) || isTypicalSyncTemp(vd))) {
+                    continue;
+                }
+                // Strip ExpressionStatements that are just varN (unconsumed loads)
+                if (s instanceof com.bingbaihanji.bdec.ast.stmt.ExpressionStatement es
+                        && es.expression() instanceof VarExpr v
+                        && v.name().equals(monObj)) {
+                    continue;
+                }
+                // Strip handler artifacts: while(true){Throwable varN; throw varN;}
+                // These are the monitorexit exception handler leaking into the body.
+                if (s instanceof LoopStatement loop
+                        && loop.loopKind() == LoopStatement.LoopKind.WHILE
+                        && loop.condition() instanceof VarExpr vc
+                        && "true".equals(vc.name())) {
+                    Statement loopBody = loop.body();
+                    if (loopBody instanceof BlockStatement lbs) {
+                        boolean isHandlerArtifact = false;
+                        for (Statement lb : lbs.statements()) {
+                            if (lb instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
+                                    && vd.type().descriptor() != null
+                                    && vd.type().descriptor().contains("Throwable")) {
+                                isHandlerArtifact = true;
+                            }
+                        }
+                        if (isHandlerArtifact) {
+                            continue; // skip this handler artifact
+                        }
+                    }
+                }
+                // Also strip bare ThrowStatement inside synchronized (handler leak)
+                if (s instanceof com.bingbaihanji.bdec.ast.stmt.ThrowStatement) {
+                    continue;
+                }
+                // Strip "return;" after unreachable code (synchronized body cleanup)
+                if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement r
+                        && r.value() == null) {
+                    continue;
+                }
+                filtered.add(s);
+            }
+            if (filtered.isEmpty()) {
+                return syncStmt;
+            }
+            if (filtered.size() == 1) {
+                return new SynchronizedStatement(syncStmt.monitorObject(), filtered.getFirst());
+            }
+            return new SynchronizedStatement(syncStmt.monitorObject(), new BlockStatement(filtered));
+        }
+        return syncStmt;
+    }
+
+    /** Check if a variable declaration looks like a synchronized temp copy. */
+    private boolean isTypicalSyncTemp(com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
+        String name = vd.name();
+        return (name.startsWith("var") && name.length() <= 5)
+                || (vd.initializer() instanceof VarExpr v && "this".equals(v.name()));
+    }
+
+    /** Strip variable declarations that set up monitor objects before
+     *  SynchronizedStatements. These are DUP/ASTORE artifacts from the
+     *  bytecode pattern: aload_0, dup, astore_1, monitorenter. */
+    private BlockStatement stripSyncPreambles(BlockStatement root) {
+        List<Statement> stmts = new ArrayList<>(root.statements());
+        for (int i = 0; i < stmts.size() - 1; i++) {
+            if (stmts.get(i + 1) instanceof SynchronizedStatement syncStmt) {
+                // Strip VariableDeclaration that's a sync temp copy
+                if (stmts.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
+                        && isTypicalSyncTemp(vd)) {
+                    stmts.remove(i);
+                    i--; // re-check the new element at this index
+                }
+                // Strip ExpressionStatement "varN" (unconsumed load)
+                if (i >= 0 && stmts.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.ExpressionStatement es
+                        && es.expression() instanceof VarExpr v
+                        && v.name().startsWith("var")) {
+                    stmts.remove(i);
+                    i--;
+                }
+            }
+        }
+        if (stmts.size() == 1) {
+            return stmts.getFirst() instanceof BlockStatement bs ? bs
+                    : new BlockStatement(stmts);
+        }
+        return new BlockStatement(stmts);
     }
 
     /** Wrap a statement tree as a synchronized block. */

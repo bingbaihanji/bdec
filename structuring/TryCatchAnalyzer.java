@@ -38,6 +38,15 @@ public final class TryCatchAnalyzer {
                 continue;
             }
 
+            // Skip self-referencing exception ranges where the handler is inside
+            // its own try range. These are JVM artifacts of the synchronized block's
+            // monitorexit retry mechanism (e.g., try [17,20) → handler 17).
+            // Without this filter, the self-looping exception edge is detected as
+            // a while(true) loop by LoopAnalyzer, corrupting the CFG structure.
+            if (tryBlocks.contains(handler)) {
+                continue;
+            }
+
             results.add(new TryCatchInfo(
                     tryBlocks,
                     handler,
