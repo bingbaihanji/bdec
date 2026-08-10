@@ -1,6 +1,7 @@
 autoDeleteData: false
 autoDetectedPackages:
 - com.bingbaihanji.bdec
+- com.bytecode.test
 autoKeepDataNum: 10
 enableAutoDetect: true
 entryDisplayConfig:

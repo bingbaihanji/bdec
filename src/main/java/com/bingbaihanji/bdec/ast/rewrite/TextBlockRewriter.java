@@ -58,7 +58,7 @@ public class TextBlockRewriter implements RewriteRule {
             if (m instanceof MethodDeclaration md) {
                 members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(),
-                        rewriteStatement(md.body())));
+                        md.body() != null ? rewriteStatement(md.body()) : null));
             } else if (m instanceof FieldDeclaration fd) {
                 members.add(new FieldDeclaration(fd.accessFlags(), fd.name(), fd.type(),
                         fd.initializer() != null ? rewriteExpr(fd.initializer()) : null));

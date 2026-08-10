@@ -4,6 +4,7 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\BdecIn
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\bytecode\parser\ClassFileReaderTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\bytecode\parser\ConstantPoolParserTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\bytecode\parser\InstructionDecoderTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\BytecodeTestRoundTripTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\cfg\CfgBuilderTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\cfg\DominatorTreeTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\ControlFlowTest.java
@@ -14,3 +15,12 @@ D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\Decomp
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\ir\IrBuilderTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\ir\SsaBuilderTest.java
 D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bingbaihanji\bdec\type\TypeResolverTest.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\AnnotationDemo.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\BaseClass.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\EnumDemo.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\InterfaceA.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\InterfaceB.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\RecordDemo.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\SealedParent.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\TestClass1.java
+D:\bingbaihanji\fxdecomplie\bdec\bdec\src\test\java\com\bytecode\test\TestClass2.java

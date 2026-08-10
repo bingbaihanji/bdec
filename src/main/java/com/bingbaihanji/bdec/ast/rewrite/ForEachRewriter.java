@@ -52,7 +52,7 @@ public class ForEachRewriter implements RewriteRule {
             if (m instanceof MethodDeclaration md) {
                 members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(),
-                        rewriteBlock(md.body())));
+                        md.body() != null ? rewriteBlock(md.body()) : null));
             } else {
                 members.add(m);
             }

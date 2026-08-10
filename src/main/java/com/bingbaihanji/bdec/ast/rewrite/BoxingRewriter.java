@@ -81,6 +81,9 @@ public class BoxingRewriter implements RewriteRule {
     }
 
     private Statement rewriteStatement(Statement s) {
+        if (s == null) {
+            return null; // abstract/native methods have no body
+        }
         return switch (s) {
             case BlockStatement bs -> new BlockStatement(bs.statements().stream()
                     .map(this::rewriteStatement).toList());

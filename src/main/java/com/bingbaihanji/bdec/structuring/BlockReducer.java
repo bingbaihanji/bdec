@@ -1519,6 +1519,9 @@ public final class BlockReducer {
 
     private Statement translateStmt(IrInstruction insn) {
         return switch (insn.opcode()) {
+            // MONITOR_ENTER/EXIT are handled by SynchronizedRecognizer → SynchronizedStatement.
+            // If they appear here unprocessed, skip them rather than emitting invalid syntax.
+            case MONITOR_ENTER, MONITOR_EXIT -> null;
             case RETURN -> {
                 if (insn.operands().isEmpty()) {
                     yield new ReturnStatement(null);
@@ -1737,7 +1740,7 @@ public final class BlockReducer {
                 } else {
                     lhs = valueToExpr(target);
                 }
-                Expression rhs = source != null ? valueToExpr(source) : new VarExpr("?");
+                Expression rhs = source != null ? valueToExpr(source) : new VarExpr("varUnresolved");
                 // Compound assignment detection: x = x OP y → x OP= y
                 // When detected, use only the right operand (strip the duplicated left)
                 BinaryOperator compoundOp = detectCompoundOp(lhs, rhs);
@@ -1769,9 +1772,24 @@ public final class BlockReducer {
 
             // Field load — on implicit 'this', use just the field name unless
             // a local variable with the same name creates ambiguity.
+            // For static fields tagged with DECLARING_CLASS, emit ClassName.fieldName.
             case FIELD_LOAD -> {
                 Expression obj = insn.operands().isEmpty() ? null : valueToExpr(insn.operands().getFirst());
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
+                // Check for static field with declaring class annotation
+                if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS)) {
+                    var dcAnn = insn.getAnnotation(
+                            com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS);
+                    if (dcAnn != null) {
+                        String dc = dcAnn.getString(
+                                com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS);
+                        if (dc != null) {
+                            int lastSlash = dc.lastIndexOf('/');
+                            obj = new VarExpr(lastSlash >= 0
+                                    ? dc.substring(lastSlash + 1) : dc);
+                        }
+                    }
+                }
                 // In instance methods, field load on 'this' → just the field name
                 // UNLESS a local variable shadows the field name (e.g., "lock = this.lock")
                 if (isInstanceMethod && obj instanceof VarExpr v && "this".equals(v.name())) {
@@ -1798,7 +1816,7 @@ public final class BlockReducer {
                 } else {
                     lhs = new FieldAccessExpr(null, fName);
                 }
-                Expression rhs = val != null ? valueToExpr(val) : new VarExpr("?");
+                Expression rhs = val != null ? valueToExpr(val) : new VarExpr("varUnresolved");
                 // Apply compound assignment and increment detection for field stores too
                 BinaryOperator compoundOp = detectCompoundOp(lhs, rhs);
                 Expression assignRhs = rhs;
@@ -2001,7 +2019,7 @@ public final class BlockReducer {
             // Type cast
             case CAST -> {
                 Expression operand = !insn.operands().isEmpty()
-                        ? valueToExpr(insn.operands().getFirst()) : new VarExpr("?");
+                        ? valueToExpr(insn.operands().getFirst()) : new VarExpr("varUnresolved");
                 yield new CastExpr(insn.resultType(), operand);
             }
 
@@ -2034,7 +2052,7 @@ public final class BlockReducer {
                     dims.add(valueToExpr(op));
                 }
                 if (dims.isEmpty()) {
-                    dims.add(new VarExpr("?"));
+                    dims.add(new VarExpr("varUnresolved"));
                 }
                 yield new NewExpr(insn.resultType(), dims, List.of());
             }
@@ -2064,7 +2082,7 @@ public final class BlockReducer {
                 Expression idx = insn.operands().size() > 1
                         ? valueToExpr(insn.operands().get(1)) : new VarExpr("i");
                 Expression val = insn.operands().size() > 2
-                        ? valueToExpr(insn.operands().get(2)) : new VarExpr("?");
+                        ? valueToExpr(insn.operands().get(2)) : new VarExpr("varUnresolved");
                 yield new AssignExpr(new ArrayAccessExpr(arr, idx), val);
             }
 
@@ -2160,7 +2178,7 @@ public final class BlockReducer {
                 Expression expr = translateExpr(def);
                 yield expr != null ? expr : new VarExpr("tmp" + def.id());
             }
-            default -> new VarExpr("?");
+            default -> new VarExpr("varUnresolved");
         };
     }
 

@@ -69,7 +69,7 @@ public class LambdaRewriter implements RewriteRule {
                 }
                 members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                         md.parameterNames(), md.parameterTypes(),
-                        rewriteStatement(md.body(), bootstrapMethods)));
+                        md.body() != null ? rewriteStatement(md.body(), bootstrapMethods) : null));
             } else {
                 members.add(m);
             }

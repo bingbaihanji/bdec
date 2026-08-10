@@ -1,0 +1,326 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="1.166" tests="11" errors="0" skipped="0" failures="4">
+  <properties>
+    <property name="java.specification.version" value="25"/>
+    <property name="sun.cpu.isalist" value="amd64"/>
+    <property name="sun.jnu.encoding" value="GBK"/>
+    <property name="java.class.path" value="D:\bingbaihanji\fxdecomplie\bdec\bdec\target\test-classes;D:\bingbaihanji\fxdecomplie\bdec\bdec\target\classes;D:\develop\maven\apache-maven-3.9.9\repository\junit\junit\4.13.2\junit-4.13.2.jar;D:\develop\maven\apache-maven-3.9.9\repository\org\hamcrest\hamcrest-core\1.3\hamcrest-core-1.3.jar;"/>
+    <property name="java.vm.vendor" value="BellSoft"/>
+    <property name="sun.arch.data.model" value="64"/>
+    <property name="user.variant" value=""/>
+    <property name="java.vendor.url" value="https://bell-sw.com/"/>
+    <property name="user.timezone" value="Asia/Shanghai"/>
+    <property name="os.name" value="Windows 11"/>
+    <property name="java.vm.specification.version" value="25"/>
+    <property name="sun.java.launcher" value="SUN_STANDARD"/>
+    <property name="user.country" value="CN"/>
+    <property name="sun.boot.library.path" value="D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin"/>
+    <property name="sun.java.command" value="C:\Users\bingb\AppData\Local\Temp\surefire12685026478979215742\surefirebooter-20260810105947440_3.jar C:\Users\bingb\AppData\Local\Temp\surefire12685026478979215742 2026-08-10T10-59-47_303-jvmRun1 surefire-20260810105947440_1tmp surefire_0-20260810105947440_2tmp"/>
+    <property name="jdk.debug" value="release"/>
+    <property name="test" value="BytecodeTestRoundTripTest,ControlFlowTest"/>
+    <property name="surefire.test.class.path" value="D:\bingbaihanji\fxdecomplie\bdec\bdec\target\test-classes;D:\bingbaihanji\fxdecomplie\bdec\bdec\target\classes;D:\develop\maven\apache-maven-3.9.9\repository\junit\junit\4.13.2\junit-4.13.2.jar;D:\develop\maven\apache-maven-3.9.9\repository\org\hamcrest\hamcrest-core\1.3\hamcrest-core-1.3.jar;"/>
+    <property name="sun.cpu.endian" value="little"/>
+    <property name="user.home" value="C:\Users\bingb"/>
+    <property name="user.language" value="zh"/>
+    <property name="java.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.version.date" value="2026-04-21"/>
+    <property name="java.home" value="D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3"/>
+    <property name="file.separator" value="\"/>
+    <property name="basedir" value="D:\bingbaihanji\fxdecomplie\bdec\bdec"/>
+    <property name="java.vm.compressedOopsMode" value="Zero based"/>
+    <property name="line.separator" value="&#10;"/>
+    <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.specification.name" value="Java Platform API Specification"/>
+    <property name="surefire.real.class.path" value="C:\Users\bingb\AppData\Local\Temp\surefire12685026478979215742\surefirebooter-20260810105947440_3.jar"/>
+    <property name="user.script" value=""/>
+    <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
+    <property name="java.runtime.version" value="25.0.3+12-LTS"/>
+    <property name="user.name" value="bingb"/>
+    <property name="stdout.encoding" value="GBK"/>
+    <property name="path.separator" value=";"/>
+    <property name="os.version" value="10.0"/>
+    <property name="java.runtime.name" value="OpenJDK Runtime Environment"/>
+    <property name="file.encoding" value="UTF-8"/>
+    <property name="java.vm.name" value="OpenJDK 64-Bit Server VM"/>
+    <property name="java.vendor.version" value="Liberica-NIK-25.0.3-1"/>
+    <property name="localRepository" value="D:\develop\maven\apache-maven-3.9.9\repository"/>
+    <property name="java.vendor.url.bug" value="https://bell-sw.com/support"/>
+    <property name="java.io.tmpdir" value="C:\Users\bingb\AppData\Local\Temp\"/>
+    <property name="java.version" value="25.0.3"/>
+    <property name="user.dir" value="D:\bingbaihanji\fxdecomplie\bdec\bdec"/>
+    <property name="os.arch" value="amd64"/>
+    <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
+    <property name="failIfNoTests" value="false"/>
+    <property name="sun.os.patch.level" value=""/>
+    <property name="native.encoding" value="GBK"/>
+    <property name="java.library.path" value="D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin;C:\WINDOWS\Sun\Java\bin;C:\WINDOWS\system32;C:\WINDOWS;C:\Users\bingb\bin;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\local\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\bin;C:\Users\bingb\bin;D:\develop\jdk\jdk25\bellsoft-liberica-vm-full-openjdk25-25.0.3\bin;D:\application\PowerShell-7.6.1;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0;D:\develop\jdk\jdk25\openjdk25+37-bellsoft\bin;C:\Program Files\Git\cmd;D:\Windows Kits\10\Windows Performance Toolkit;D:\develop\maven\apache-maven-3.9.9\bin;D:\develop\mysql\mysql-8.4.4-winx64\bin;D:\application\PowerShell-7.6.1;D:\bingbaihanji\path\ldd\ldd\mingw64\bin;D:\cygwin64\bin;D:\bingbaihanji\path\busybox\bin;D:\develop\nodejs\node-v22.15.0-win-x64;D:\develop\gcc\mingw64\bin;D:\bingbaihanji\path\vim\vim\vim91;D:\develop\cmake\cmake-4.0.2-windows-x86_64\bin;D:\develop\opencv\opencv4.11\build\x64\vc16\bin;D:\develop\opencv\opencv4.11\build\x64\vc16\lib;D:\develop\apache\gradle\gradle-8.14.3\bin;C:\Program Files\dotnet;D:\c++Lib\open3d-devel-windows-amd64-0.19.0\bin;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;D:\Android-develop\Android-sdk\build-tools\36.0.0;D:\Android-develop\Android-sdk\platform-tools;D:\home\javacv;C:\WINDOWS\System32\OpenSSH;D:\develop\Flutter\flutter_windows_3.35.7\bin;D:\develop\DartSDK\Dart\dart-sdk\bin;D:\Qt\6.9.3\msvc2022_64\bin;D:\application\WezTerm-windows;D:\develop\IDE\IntelliJ_IDEA\idea-2026.1\bin;D:\develop\jdk\jdk21\bellsoft-liberica-vm-full-openjdk21-23.1.11\bin;C:\Users\bingb\.kimi-code\bin;C:\Users\bingb\AppData\Local\Programs\oh-my-posh\bin;C:\Users\bingb\.local\bin;D:\develop\python\Python313\Scripts;D:\develop\python\Python313;D:\develop\python\Python314\Scripts;D:\develop\python\Python314;C:\Users\bingb\AppData\Local\Microsoft\WindowsApps;C:\Users\bingb\.dotnet\tools;D:\application\cursor\resources\app\bin;D:\application\WezTerm-windows-20240203-110809-5046fc22;C:\Users\bingb\AppData\Local\Programs\Ollama;C:\Users\bingb\AppData\Local\Microsoft\WinGet\Links;D:\develop\apache\gradle\gradle-9.5.1\bin;C:\Program Files\Git\usr\bin\vendor_perl;C:\Program Files\Git\usr\bin\core_perl;C:\Users\bingb\.claude\plugins\cache\karpathy-skills\andrej-karpathy-skills\1.0.0\bin;C:\Users\bingb\.claude\plugins\cache\superpowers-marketplace\superpowers\5.1.0\bin;."/>
+    <property name="java.vm.info" value="mixed mode, sharing"/>
+    <property name="stderr.encoding" value="GBK"/>
+    <property name="java.vendor" value="BellSoft"/>
+    <property name="java.vm.version" value="25.0.3+12-LTS"/>
+    <property name="stdin.encoding" value="GBK"/>
+    <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
+    <property name="java.class.version" value="69.0"/>
+  </properties>
+  <testcase name="testInterfaceBRoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.43"/>
+  <testcase name="testTestClass1RoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.215">
+    <failure message="expected:&lt;[OK]&gt; but was:&lt;[COMPILE FAILED:&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-5259441268924646322\compile-1996947507952802845\TestClass1.java:61: 错误: 不是语句&#10;                    &quot;big&quot;;&#10;                    ^&#10;1 个错误&#10;]&gt;" type="org.junit.ComparisonFailure"><![CDATA[org.junit.ComparisonFailure: 
+expected:<[OK]> but was:<[COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-5259441268924646322\compile-1996947507952802845\TestClass1.java:61: 错误: 不是语句
+                    "big";
+                    ^
+1 个错误
+]>
+	at org.junit.Assert.assertEquals(Assert.java:117)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass1RoundTrip(BytecodeTestRoundTripTest.java:170)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+]]></failure>
+    <system-out><![CDATA[Static initializer
+]]></system-out>
+    <system-err><![CDATA[=== TestClass1 decompile/compile failure ===
+COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-5259441268924646322\compile-1996947507952802845\TestClass1.java:61: 错误: 不是语句
+                    "big";
+                    ^
+1 个错误
+
+]]></system-err>
+  </testcase>
+  <testcase name="testInterfaceARoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.067"/>
+  <testcase name="testSealedChild2RoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.054"/>
+  <testcase name="testSealedChild1RoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.047"/>
+  <testcase name="testEnumDemoRoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.029">
+    <failure message="expected:&lt;[OK]&gt; but was:&lt;[COMPILE FAILED:&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:3: 错误: 需要&apos;{&apos;&#10;public abstract enum EnumDemo extends Enum {&#10;                             ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:3: 错误: 此处需要枚举常量&#10;public abstract enum EnumDemo extends Enum {&#10;                              ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:7: 错误: 方法声明无效; 需要返回类型&#10;    private EnumDemo(String param0, int param1, int value) {&#10;            ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:29: 错误: 进行语法分析时已到达文件结尾&#10;}&#10; ^&#10;4 个错误&#10;]&gt;" type="org.junit.ComparisonFailure"><![CDATA[org.junit.ComparisonFailure: 
+expected:<[OK]> but was:<[COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:3: 错误: 需要'{'
+public abstract enum EnumDemo extends Enum {
+                             ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:3: 错误: 此处需要枚举常量
+public abstract enum EnumDemo extends Enum {
+                              ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:7: 错误: 方法声明无效; 需要返回类型
+    private EnumDemo(String param0, int param1, int value) {
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:29: 错误: 进行语法分析时已到达文件结尾
+}
+ ^
+4 个错误
+]>
+	at org.junit.Assert.assertEquals(Assert.java:117)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testEnumDemoRoundTrip(BytecodeTestRoundTripTest.java:136)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+]]></failure>
+  </testcase>
+  <testcase name="testAnnotationDemoRoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.044"/>
+  <testcase name="testSealedParentRoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.039"/>
+  <testcase name="testBaseClassRoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.048">
+    <failure message="expected:&lt;[OK]&gt; but was:&lt;[COMPILE FAILED:&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-10473692069596660378\BaseClass.java:26: 错误: 已在方法 synchronizedMethod()中定义了变量 var2&#10;                    Throwable var2;&#10;                              ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-10473692069596660378\BaseClass.java:41: 错误: 返回外部方法&#10;        return;&#10;        ^&#10;2 个错误&#10;]&gt;" type="org.junit.ComparisonFailure"><![CDATA[org.junit.ComparisonFailure: 
+expected:<[OK]> but was:<[COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-10473692069596660378\BaseClass.java:26: 错误: 已在方法 synchronizedMethod()中定义了变量 var2
+                    Throwable var2;
+                              ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-10473692069596660378\BaseClass.java:41: 错误: 返回外部方法
+        return;
+        ^
+2 个错误
+]>
+	at org.junit.Assert.assertEquals(Assert.java:117)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testBaseClassRoundTrip(BytecodeTestRoundTripTest.java:130)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+]]></failure>
+  </testcase>
+  <testcase name="testRecordDemoRoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.078"/>
+  <testcase name="testTestClass2RoundTrip" classname="com.bingbaihanji.bdec.BytecodeTestRoundTripTest" time="0.057">
+    <failure message="expected:&lt;[OK]&gt; but was:&lt;[COMPILE FAILED:&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:60: 错误: 不是语句&#10;            System.out;&#10;                  ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:77: 错误: 不是语句&#10;                    System.out;&#10;                          ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:106: 错误: 不是语句&#10;        &quot;positive int&quot;;&#10;        ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:109: 错误: 不是语句&#10;            &quot;non-positive int&quot;;&#10;            ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:111: 错误: 不是语句&#10;        &quot;&quot; + (String) var2;&#10;           ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:112: 错误: 不是语句&#10;        &quot;null value&quot;;&#10;        ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:113: 错误: 不是语句&#10;        &quot;unknown&quot;;&#10;        ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 非法的表达式开始&#10;            () -&gt; /* lambda$unnamedDemo$0 */;&#10;                                            ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 不是语句&#10;            () -&gt; /* lambda$unnamedDemo$0 */;&#10;            ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 非法的表达式开始&#10;        () -&gt; /* lambda$streamDemo$0 */;&#10;                                       ^&#10;C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 不是语句&#10;        () -&gt; /* lambda$streamDemo$0 */;&#10;        ^&#10;11 个错误&#10;]&gt;" type="org.junit.ComparisonFailure"><![CDATA[org.junit.ComparisonFailure: 
+expected:<[OK]> but was:<[COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:60: 错误: 不是语句
+            System.out;
+                  ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:77: 错误: 不是语句
+                    System.out;
+                          ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:106: 错误: 不是语句
+        "positive int";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:109: 错误: 不是语句
+            "non-positive int";
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:111: 错误: 不是语句
+        "" + (String) var2;
+           ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:112: 错误: 不是语句
+        "null value";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:113: 错误: 不是语句
+        "unknown";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 非法的表达式开始
+            () -> /* lambda$unnamedDemo$0 */;
+                                            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 不是语句
+            () -> /* lambda$unnamedDemo$0 */;
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 非法的表达式开始
+        () -> /* lambda$streamDemo$0 */;
+                                       ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 不是语句
+        () -> /* lambda$streamDemo$0 */;
+        ^
+11 个错误
+]>
+	at org.junit.Assert.assertEquals(Assert.java:117)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip(BytecodeTestRoundTripTest.java:180)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+]]></failure>
+    <system-err><![CDATA[=== TestClass2 decompile/compile failure ===
+COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:60: 错误: 不是语句
+            System.out;
+                  ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:77: 错误: 不是语句
+                    System.out;
+                          ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:106: 错误: 不是语句
+        "positive int";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:109: 错误: 不是语句
+            "non-positive int";
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:111: 错误: 不是语句
+        "" + (String) var2;
+           ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:112: 错误: 不是语句
+        "null value";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:113: 错误: 不是语句
+        "unknown";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 非法的表达式开始
+            () -> /* lambda$unnamedDemo$0 */;
+                                            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 不是语句
+            () -> /* lambda$unnamedDemo$0 */;
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 非法的表达式开始
+        () -> /* lambda$streamDemo$0 */;
+                                       ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 不是语句
+        () -> /* lambda$streamDemo$0 */;
+        ^
+11 个错误
+
+]]></system-err>
+  </testcase>
+</testsuite>

@@ -163,7 +163,7 @@ public class EnumSwitchRewriter implements RewriteRule {
     }
 
     private MethodDeclaration rewriteMethod(MethodDeclaration md, Set<String> switchMapFieldNames) {
-        Statement newBody = rewriteStatement(md.body(), switchMapFieldNames);
+        Statement newBody = md.body() != null ? rewriteStatement(md.body(), switchMapFieldNames) : null;
         return new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                 md.parameterNames(), md.parameterTypes(), md.typeParameters(), newBody);
     }

@@ -1,0 +1,206 @@
+-------------------------------------------------------------------------------
+Test set: com.bingbaihanji.bdec.BytecodeTestRoundTripTest
+-------------------------------------------------------------------------------
+Tests run: 11, Failures: 4, Errors: 0, Skipped: 0, Time elapsed: 1.166 s <<< FAILURE! -- in com.bingbaihanji.bdec.BytecodeTestRoundTripTest
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass1RoundTrip -- Time elapsed: 0.215 s <<< FAILURE!
+org.junit.ComparisonFailure: 
+expected:<[OK]> but was:<[COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-5259441268924646322\compile-1996947507952802845\TestClass1.java:61: 错误: 不是语句
+                    "big";
+                    ^
+1 个错误
+]>
+	at org.junit.Assert.assertEquals(Assert.java:117)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass1RoundTrip(BytecodeTestRoundTripTest.java:170)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testEnumDemoRoundTrip -- Time elapsed: 0.029 s <<< FAILURE!
+org.junit.ComparisonFailure: 
+expected:<[OK]> but was:<[COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:3: 错误: 需要'{'
+public abstract enum EnumDemo extends Enum {
+                             ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:3: 错误: 此处需要枚举常量
+public abstract enum EnumDemo extends Enum {
+                              ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:7: 错误: 方法声明无效; 需要返回类型
+    private EnumDemo(String param0, int param1, int value) {
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-7122324680159466100\compile-17649503059643225364\EnumDemo.java:29: 错误: 进行语法分析时已到达文件结尾
+}
+ ^
+4 个错误
+]>
+	at org.junit.Assert.assertEquals(Assert.java:117)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testEnumDemoRoundTrip(BytecodeTestRoundTripTest.java:136)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testBaseClassRoundTrip -- Time elapsed: 0.048 s <<< FAILURE!
+org.junit.ComparisonFailure: 
+expected:<[OK]> but was:<[COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-10473692069596660378\BaseClass.java:26: 错误: 已在方法 synchronizedMethod()中定义了变量 var2
+                    Throwable var2;
+                              ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-6609322484676795216\compile-10473692069596660378\BaseClass.java:41: 错误: 返回外部方法
+        return;
+        ^
+2 个错误
+]>
+	at org.junit.Assert.assertEquals(Assert.java:117)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testBaseClassRoundTrip(BytecodeTestRoundTripTest.java:130)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip -- Time elapsed: 0.057 s <<< FAILURE!
+org.junit.ComparisonFailure: 
+expected:<[OK]> but was:<[COMPILE FAILED:
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:60: 错误: 不是语句
+            System.out;
+                  ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:77: 错误: 不是语句
+                    System.out;
+                          ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:106: 错误: 不是语句
+        "positive int";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:109: 错误: 不是语句
+            "non-positive int";
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:111: 错误: 不是语句
+        "" + (String) var2;
+           ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:112: 错误: 不是语句
+        "null value";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:113: 错误: 不是语句
+        "unknown";
+        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 非法的表达式开始
+            () -> /* lambda$unnamedDemo$0 */;
+                                            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:128: 错误: 不是语句
+            () -> /* lambda$unnamedDemo$0 */;
+            ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 非法的表达式开始
+        () -> /* lambda$streamDemo$0 */;
+                                       ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-12697741369009370487\compile-14998776325563781551\TestClass2.java:144: 错误: 不是语句
+        () -> /* lambda$streamDemo$0 */;
+        ^
+11 个错误
+]>
+	at org.junit.Assert.assertEquals(Assert.java:117)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip(BytecodeTestRoundTripTest.java:180)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.internal.runners.statements.RunBefores.evaluate(RunBefores.java:26)
+	at org.junit.internal.runners.statements.RunAfters.evaluate(RunAfters.java:27)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.execute(JUnit4Provider.java:316)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeWithRerun(JUnit4Provider.java:240)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.executeTestSet(JUnit4Provider.java:214)
+	at org.apache.maven.surefire.junit4.JUnit4Provider.invoke(JUnit4Provider.java:155)
+	at org.apache.maven.surefire.booter.ForkedBooter.runSuitesInProcess(ForkedBooter.java:385)
+	at org.apache.maven.surefire.booter.ForkedBooter.execute(ForkedBooter.java:162)
+	at org.apache.maven.surefire.booter.ForkedBooter.run(ForkedBooter.java:507)
+	at org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)
+
