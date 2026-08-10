@@ -156,6 +156,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         if (type.kind() == TypeKind.CLASS && type.internalName() != null) {
             String internal = type.internalName();
             String full = internal.replace('/', '.');
+            // 将命名内部类的 $ 转为 .(如 Map$Entry → Map.Entry),
+            // 但跳过匿名类(如 TestClass2$1——数字开头的"名称"非法)
+            String simple = full.substring(full.lastIndexOf('.') + 1);
+            if (!isAnonymousClassName(simple)) {
+                full = full.replace('$', '.');
+            }
             // java.lang 包下的类型始终使用简单类名
             if (full.startsWith("java.lang.") && full.indexOf('.', 10) < 0) {
                 return full.substring(10);
@@ -165,13 +171,25 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             if (lastSlash >= 0) {
                 String pkg = internal.substring(0, lastSlash).replace('/', '.');
                 if (importedPackages.contains(pkg)) {
-                    return internal.substring(lastSlash + 1);
+                    // 返回已转换 $→. 的简单名称
+                    String rawSimple = internal.substring(lastSlash + 1);
+                    return isAnonymousClassName(rawSimple) ? rawSimple : rawSimple.replace('$', '.');
                 }
             }
             return full;
         }
         // 数组类型委托给类型自身的 displayName(递归处理)
         return type.displayName();
+    }
+
+    /** 检查简单类名是否为匿名类引用(如 TestClass2$1, Foo$2LocalClass) */
+    private static boolean isAnonymousClassName(String simpleName) {
+        int idx = simpleName.lastIndexOf('$');
+        if (idx >= 0 && idx + 1 < simpleName.length()) {
+            char c = simpleName.charAt(idx + 1);
+            return c >= '0' && c <= '9';
+        }
+        return false;
     }
 
     @Override
@@ -290,7 +308,9 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             case POST_INC, POST_DEC -> "";
         };
         w.write(sym);
-        emit(un.operand());
+        // 使用 emitWithParens 而非 emit,确保低优先级操作数
+        // (如 instanceof 优先级 8)在 ! 前缀(优先级 13)后正确加括号
+        emitWithParens(un.operand(), un.precedence());
         // 输出后缀运算符
         if (op == UnaryOperator.POST_INC) {
             w.write("++");

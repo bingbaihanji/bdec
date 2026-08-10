@@ -337,8 +337,26 @@ public class AstBuilder {
         if (type.kind() == com.bingbaihanji.bdec.type.TypeKind.CLASS) {
             String internalName = type.internalName();
             if (internalName != null && !simpleName(internalName).equals(thisClass)) {
-                imports.add(internalName.replace('/', '.'));
+                String dotted = internalName.replace('/', '.');
+                // 对命名内部类将 $ 转换为 .(如 Map$Entry → Map.Entry),
+                // 但跳过匿名类(如 TestClass2$1——数字开头的"名称"非法)
+                if (isAnonymousClassRef(simpleName(internalName))) {
+                    return; // 匿名类不导入
+                }
+                dotted = dotted.replace('$', '.');
+                imports.add(dotted);
             }
         }
+    }
+
+    /** 检查简单类名是否为匿名类引用(如 TestClass2$1, Foo$2LocalClass).
+     *  匿名类在 $ 后紧跟数字,在 Java 源码中不可作为类型名引用. */
+    private static boolean isAnonymousClassRef(String simpleName) {
+        int idx = simpleName.lastIndexOf('$');
+        if (idx >= 0 && idx + 1 < simpleName.length()) {
+            char c = simpleName.charAt(idx + 1);
+            return c >= '0' && c <= '9';
+        }
+        return false;
     }
 }

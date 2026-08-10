@@ -488,9 +488,12 @@ public final class BlockReducer {
                     && def.resultType().kind() == TypeKind.BOOLEAN) {
                 return true;
             }
-            // CONDITION 或 COMPARE 产生布尔值
+            // CONDITION、COMPARE、INSTANCE_OF 产生布尔值
+            // INSTANCE_OF 在 JVM 字节码层面产生 int(0/1),但在 Java 源码中
+            // 总是用作布尔条件,因此应简化 CONDITION 中的 "==0"/"!=0" 比较
             if (def.opcode() == IrOpcode.CONDITION
-                    || def.opcode() == IrOpcode.COMPARE) {
+                    || def.opcode() == IrOpcode.COMPARE
+                    || def.opcode() == IrOpcode.INSTANCE_OF) {
                 return true;
             }
         }

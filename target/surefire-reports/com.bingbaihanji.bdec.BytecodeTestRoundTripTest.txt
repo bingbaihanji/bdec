@@ -1,23 +1,116 @@
 -------------------------------------------------------------------------------
 Test set: com.bingbaihanji.bdec.BytecodeTestRoundTripTest
 -------------------------------------------------------------------------------
-Tests run: 11, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 1.129 s <<< FAILURE! -- in com.bingbaihanji.bdec.BytecodeTestRoundTripTest
-com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip -- Time elapsed: 0.068 s <<< FAILURE!
+Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.734 s <<< FAILURE! -- in com.bingbaihanji.bdec.BytecodeTestRoundTripTest
+com.bingbaihanji.bdec.BytecodeTestRoundTripTest.testTestClass2RoundTrip -- Time elapsed: 0.681 s <<< FAILURE!
 org.junit.ComparisonFailure: 
 expected:<[OK]> but was:<[COMPILE FAILED:
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-10621877012062695855\compile-7992790409682956814\TestClass2.java:125: 错误: 非法的表达式开始
-            () -> /* lambda$unnamedDemo$0 */;
-                                            ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-10621877012062695855\compile-7992790409682956814\TestClass2.java:125: 错误: 不是语句
-            () -> /* lambda$unnamedDemo$0 */;
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:19: 错误: 找不到符号
+            Iterator var1 = list.iterator();
             ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-10621877012062695855\compile-7992790409682956814\TestClass2.java:141: 错误: 非法的表达式开始
-        () -> /* lambda$streamDemo$0 */;
-                                       ^
-C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-10621877012062695855\compile-7992790409682956814\TestClass2.java:141: 错误: 不是语句
-        () -> /* lambda$streamDemo$0 */;
+  符号:   类 Iterator
+  位置: 类 TestClass2
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:39: 错误: 找不到符号
+        com.bytecode.test.TestClass2$1LocalClass lc = new com.bytecode.test.TestClass2$1LocalClass(this);
+                         ^
+  符号:   类 TestClass2$1LocalClass
+  位置: 程序包 com.bytecode.test
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:39: 错误: 找不到符号
+        com.bytecode.test.TestClass2$1LocalClass lc = new com.bytecode.test.TestClass2$1LocalClass(this);
+                                                                           ^
+  符号:   类 TestClass2$1LocalClass
+  位置: 程序包 com.bytecode.test
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:44: 错误: 找不到符号
+        com.bytecode.test.TestClass2$1 a = new com.bytecode.test.TestClass2$1(this);
+                         ^
+  符号:   类 TestClass2$1
+  位置: 程序包 com.bytecode.test
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:44: 错误: 找不到符号
+        com.bytecode.test.TestClass2$1 a = new com.bytecode.test.TestClass2$1(this);
+                                                                ^
+  符号:   类 TestClass2$1
+  位置: 程序包 com.bytecode.test
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:46: 错误: 找不到符号
+        com.bytecode.test.TestClass2$2 bc = new com.bytecode.test.TestClass2$2(this, 0, "anon");
+                         ^
+  符号:   类 TestClass2$2
+  位置: 程序包 com.bytecode.test
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:46: 错误: 找不到符号
+        com.bytecode.test.TestClass2$2 bc = new com.bytecode.test.TestClass2$2(this, 0, "anon");
+                                                                 ^
+  符号:   类 TestClass2$2
+  位置: 程序包 com.bytecode.test
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:57: 错误: 找不到符号
+        RecordDemo("Alice", 25);
         ^
-4 个错误
+  符号:   方法 RecordDemo(String,int)
+  位置: 类 TestClass2
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:58: 错误: 无法将记录 RecordDemo中的构造器 RecordDemo应用到给定类型;
+        com.bytecode.test.RecordDemo r = new com.bytecode.test.RecordDemo();
+                                         ^
+  需要: String,int
+  找到:    没有参数
+  原因: 实际参数列表和形式参数列表长度不同
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:60: 错误: 已在方法 recordDemo()中定义了变量 r
+            int r = 0;
+                ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:61: 错误: 无法取消引用int
+            makeConcatWithConstants(r.name(), r.age());
+                                     ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:61: 错误: 无法取消引用int
+            makeConcatWithConstants(r.name(), r.age());
+                                               ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:66: 错误: 找不到符号
+                com.bytecode.test.RecordDemo var3 = (com.bytecode.test.RecordDemo) obj;
+                                                                                   ^
+  符号:   变量 obj
+  位置: 类 TestClass2
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:67: 错误: 不兼容的类型: 意外的返回值
+                return var3.name();
+                                ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:70: 错误: 不兼容的类型: 意外的返回值
+                return var3.age();
+                               ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:71: 错误: 不兼容的类型: int无法转换为String
+                var6 = var3.age();
+                               ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:72: 错误: 不兼容的类型: String无法转换为int
+                int var7 = var6;
+                           ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:74: 错误: 已在方法 recordDemo()中定义了变量 var6
+                    int var6 = 0;
+                        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:76: 错误: 已在方法 recordDemo()中定义了变量 name
+                    int name = 0;
+                        ^
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:77: 错误: 找不到符号
+                    makeConcatWithConstants(name, age);
+                    ^
+  符号:   方法 makeConcatWithConstants(int,int)
+  位置: 类 TestClass2
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:82: 错误: 找不到符号
+            String var3 = var3.name();
+                              ^
+  符号:   方法 name()
+  位置: 类型为String的变量 var3
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:83: 错误: 找不到符号
+            MatchException(var3.toString(), var3);
+            ^
+  符号:   方法 MatchException(String,String)
+  位置: 类 TestClass2
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:87: 错误: 找不到符号
+        SealedChild1();
+        ^
+  符号:   方法 SealedChild1()
+  位置: 类 TestClass2
+C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java:106: 错误: 找不到符号
+        Integer i = (Integer) var2;
+                              ^
+  符号:   变量 var2
+  位置: 类 TestClass2
+注: C:\Users\bingb\AppData\Local\Temp\bdec-bytetest-1071632461099598966\compile-18260640308806759820\TestClass2.java使用了未经检查或不安全的操作。
+注: 有关详细信息, 请使用 -Xlint:unchecked 重新编译。
+24 个错误
 ]>
 	at org.junit.Assert.assertEquals(Assert.java:117)
 	at org.junit.Assert.assertEquals(Assert.java:146)

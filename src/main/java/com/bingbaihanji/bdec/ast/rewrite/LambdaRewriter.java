@@ -146,7 +146,7 @@ public class LambdaRewriter implements RewriteRule {
         return false;
     }
 
-    /** 递归重写语句,识别并转换 lambda 表达式 */
+    /** 递归重写语句,识别并转换 lambda 表达式,同时过滤孤立的 lambda 占位符 */
     private Statement rewriteStatement(Statement s,
                                        List<BootstrapMethodEntry> bootstrapMethods,
                                        ClassFileModel cfm,
@@ -158,8 +158,14 @@ public class LambdaRewriter implements RewriteRule {
                     .toList());
         }
         if (s instanceof ExpressionStatement es) {
-            return new ExpressionStatement(
-                    rewriteExpr(es.expression(), bootstrapMethods, cfm, ctx));
+            // 过滤孤立的 LambdaExpr 占位符(INDY 结果在另一个 BlockGroup 中被消费,
+            // 导致此处作为独立 ExpressionStatement 残留).独立的 lambda 表达式
+            // 或方法引用在 Java 中不是合法语句,必须被赋值/传参/返回/转型.
+            Expression rewritten = rewriteExpr(es.expression(), bootstrapMethods, cfm, ctx);
+            if (isOrphanLambda(rewritten)) {
+                return null;
+            }
+            return new ExpressionStatement(rewritten);
         }
         if (s instanceof ReturnStatement rs) {
             return new ReturnStatement(rs.value() != null
@@ -174,6 +180,16 @@ public class LambdaRewriter implements RewriteRule {
                             : null);
         }
         return s;
+    }
+
+    /** 检测表达式是否为孤立的 lambda 占位符(不应作为独立语句存在的 lambda) */
+    private static boolean isOrphanLambda(Expression e) {
+        if (e instanceof LambdaExpr lambda && !lambda.isMethodRef()
+                && lambda.bodyExpr() instanceof VarExpr ve
+                && ve.name().startsWith("/* lambda")) {
+            return true;
+        }
+        return false;
     }
 
     /** 重写表达式,将 lambda 占位符替换为反编译的 lambda 体 */
