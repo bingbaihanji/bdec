@@ -115,11 +115,11 @@ public final class BlockReducer {
         if (e instanceof LitExpr) {
             return true;
         }
-        // Standalone lambda expressions are not valid statements
-        // (they must be assigned to a variable or passed as argument).
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.LambdaExpr) {
-            return true;
-        }
+        // NOTE: LambdaExpr is NOT marked ignorable here even though
+        // standalone lambdas are not valid statements. We handle
+        // orphan lambdas via other mechanisms (consumed set check).
+        // Marking LambdaExpr as ignorable prevents wrapAsReturn from
+        // wrapping lambda/method-ref returns in non-void methods.
         // Standalone field access (e.g., System.out from GETSTATIC for
         // method reference) is not a valid Java statement.
         if (e instanceof FieldAccessExpr) {
