@@ -66,10 +66,26 @@ public class BytecodeTestRoundTripTest {
             throw new RuntimeException("Class file not found: " + classFile + ". Run: javac -g -d target/test-classes src/test/java/com/bytecode/test/*.java");
         }
 
+        // Class byte loader that can load inner classes from target/test-classes/.
+        // This is needed by EnumRewriter to find and merge anonymous class bodies
+        // (e.g., EnumDemo$1.class, EnumDemo$2.class) back into enum constants.
+        Path testClassesDir = Paths.get("target/test-classes/");
+        java.util.function.Function<String, byte[]> classByteLoader = internalName -> {
+            try {
+                Path innerFile = testClassesDir.resolve(internalName + ".class");
+                if (Files.exists(innerFile)) {
+                    return Files.readAllBytes(innerFile);
+                }
+            } catch (Exception ignored) {
+            }
+            return null;
+        };
+
         // Decompile
         BdecConfig config = BdecConfig.builder().build();
         BdecEngine engine = new BdecEngine(config, d -> {});
-        BdecResult result = engine.decompile(classFile, DecompileContext.empty(config));
+        BdecResult result = engine.decompile(classFile,
+                new DecompileContext(config, classByteLoader));
         if (!result.success()) {
             return "DECOMPILE FAILED: " + (result.cause() != null ? result.cause().getMessage() : "unknown");
         }
