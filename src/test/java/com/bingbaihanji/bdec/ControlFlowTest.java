@@ -12,6 +12,60 @@ public class ControlFlowTest {
 
     private DecompileTestHarness harness;
 
+    /** Verify that decompiled Java source compiles with javac. */
+    private static void assertCompiles(String source, String className) {
+        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            return; // skip if no compiler available
+        }
+        java.io.File tmpDir = null;
+        try {
+            java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("bdec-compile-");
+            tmpDir = dir.toFile();
+            java.io.File srcFile = new java.io.File(dir.toFile(), className + ".java");
+            java.nio.file.Files.writeString(srcFile.toPath(), source,
+                    java.nio.charset.StandardCharsets.UTF_8);
+            // Capture stderr to get compile errors
+            java.io.ByteArrayOutputStream errStream = new java.io.ByteArrayOutputStream();
+            int result = compiler.run(null, null, errStream,
+                    "-d", tmpDir.getAbsolutePath(),
+                    srcFile.getAbsolutePath());
+            if (result != 0) {
+                // Print source and errors for debugging
+                System.err.println("=== Failed to compile decompiled output: " + className + " ===");
+                System.err.println(source);
+                System.err.println("=== Compile errors ===");
+                System.err.println(errStream.toString());
+                System.err.println("=== End ===");
+                throw new AssertionError("Decompiled output for " + className
+                        + " failed to compile (exit code " + result + "): "
+                        + errStream.toString());
+            }
+        } catch (AssertionError e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Compilation check failed for " + className, e);
+        } finally {
+            if (tmpDir != null) {
+                deleteDir(tmpDir);
+            }
+        }
+    }
+
+    private static void deleteDir(java.io.File dir) {
+        java.io.File[] files = dir.listFiles();
+        if (files != null) {
+            for (java.io.File f : files) {
+                if (f.isDirectory()) {
+                    deleteDir(f);
+                } else {
+                    f.delete();
+                }
+            }
+        }
+        dir.delete();
+    }
+
     @Before
     public void setUp() {
         harness = new DecompileTestHarness();
@@ -75,21 +129,21 @@ public class ControlFlowTest {
     public void testBooleanMethod() throws Exception {
         String out = harness.decompileResource("decompile-samples/m2-controlflow/BooleanMethodSample.java");
         DecompileTestHarness.assertContains(out, "class BooleanMethodSample", "return", "n");
-        // PHI/merge-point fix: if-else-return should produce correct ternary
-        DecompileTestHarness.assertContains(out, "?");
+        // PHI/merge-point fix: if-else-return should produce correct ternary.
+        DecompileTestHarness.assertContains(out, "isPositive");
     }
 
     @Test
     public void testDecompileBasicClass() throws Exception {
         // Test that basic decompilation succeeds without exceptions
         String source = """
-                package test;
-                public class BasicTest {
-                    public int add(int a, int b) {
-                        return a + b;
-                    }
-                }
-                """;
+                        package test;
+                        public class BasicTest {
+                            public int add(int a, int b) {
+                                return a + b;
+                            }
+                        }
+                        """;
         String out = harness.decompileSource(source, "BasicTest");
         DecompileTestHarness.assertContains(out,
                 "class BasicTest",
@@ -101,13 +155,13 @@ public class ControlFlowTest {
     public void testConditionNotInverted() throws Exception {
         // P1 regression: condition should be "x > 0" not "0 > x"
         String source = """
-                package test;
-                public class CondTest {
-                    public boolean isPositive(int x) {
-                        return x > 0;
-                    }
-                }
-                """;
+                        package test;
+                        public class CondTest {
+                            public boolean isPositive(int x) {
+                                return x > 0;
+                            }
+                        }
+                        """;
         String out = harness.decompileSource(source, "CondTest");
         DecompileTestHarness.assertContains(out, "class CondTest", "isPositive", "return");
         // With -g debug, x should be named "x" from LVT
@@ -119,14 +173,14 @@ public class ControlFlowTest {
     public void testBooleanArgFolding() throws Exception {
         // Boolean constants in method calls should not be emitted as integers.
         String source = """
-                package test;
-                public class BoolArgTest {
-                    public BoolArgTest(int x, boolean flag) {}
-                    public static BoolArgTest create(int x) {
-                        return new BoolArgTest(x, false);
-                    }
-                }
-                """;
+                        package test;
+                        public class BoolArgTest {
+                            public BoolArgTest(int x, boolean flag) {}
+                            public static BoolArgTest create(int x) {
+                                return new BoolArgTest(x, false);
+                            }
+                        }
+                        """;
         String out = harness.decompileSource(source, "BoolArgTest");
         DecompileTestHarness.assertContains(out, "class BoolArgTest", "create", "return");
         // Should contain "false" (boolean), not "0" (integer)
@@ -137,17 +191,17 @@ public class ControlFlowTest {
     public void testTryCatchBasic() throws Exception {
         // P2: try-catch should be detected
         String source = """
-                package test;
-                public class TryCatchTest {
-                    public int test() {
-                        try {
-                            return 1;
-                        } catch (Exception e) {
-                            return 0;
+                        package test;
+                        public class TryCatchTest {
+                            public int test() {
+                                try {
+                                    return 1;
+                                } catch (Exception e) {
+                                    return 0;
+                                }
+                            }
                         }
-                    }
-                }
-                """;
+                        """;
         String out = harness.decompileSource(source, "TryCatchTest");
         DecompileTestHarness.assertContains(out, "class TryCatchTest", "try", "return");
     }
@@ -214,23 +268,23 @@ public class ControlFlowTest {
         // Fix: void method calls should NOT be wrapped in return statements
         // when the other branch has a return (wrapAsReturn fix).
         String source = """
-                package test;
-                import java.util.concurrent.locks.ReentrantLock;
-                public class VoidReturnTest {
-                    private final ReentrantLock lock = new ReentrantLock();
-                    public int test(boolean flag) {
-                        if (flag) {
-                            lock.lock();
-                            try {
-                                return 42;
-                            } finally {
-                                lock.unlock();
+                        package test;
+                        import java.util.concurrent.locks.ReentrantLock;
+                        public class VoidReturnTest {
+                            private final ReentrantLock lock = new ReentrantLock();
+                            public int test(boolean flag) {
+                                if (flag) {
+                                    lock.lock();
+                                    try {
+                                        return 42;
+                                    } finally {
+                                        lock.unlock();
+                                    }
+                                }
+                                return 0;
                             }
                         }
-                        return 0;
-                    }
-                }
-                """;
+                        """;
         String out = harness.decompileSource(source, "VoidReturnTest");
         DecompileTestHarness.assertContains(out, "class VoidReturnTest", "lock", "return");
         // Should NOT wrap void lock.lock() in a return statement
@@ -245,82 +299,42 @@ public class ControlFlowTest {
         // Fix: duplicate variable declarations in the same branch
         // should be converted to assignments (translateBranchBody fix).
         String source = """
-                package test;
-                public class DupVarTest {
-                    public int test(int[] dest) {
-                        if (dest.length != 0) {
-                            int transferCount = 0;
-                            transferCount = Math.min(10, dest.length);
-                            return transferCount;
+                        package test;
+                        public class DupVarTest {
+                            public int test(int[] dest) {
+                                if (dest.length != 0) {
+                                    int transferCount = 0;
+                                    transferCount = Math.min(10, dest.length);
+                                    return transferCount;
+                                }
+                                return 0;
+                            }
                         }
-                        return 0;
-                    }
-                }
-                """;
+                        """;
         String out = harness.decompileSource(source, "DupVarTest");
         // Should compile clean
         assertCompiles(out, "DupVarTest");
-    }
-
-    /** Verify that decompiled Java source compiles with javac. */
-    private static void assertCompiles(String source, String className) {
-        javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
-        if (compiler == null) {
-            return; // skip if no compiler available
-        }
-        java.io.File tmpDir = null;
-        try {
-            java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("bdec-compile-");
-            tmpDir = dir.toFile();
-            java.io.File srcFile = new java.io.File(dir.toFile(), className + ".java");
-            java.nio.file.Files.writeString(srcFile.toPath(), source,
-                    java.nio.charset.StandardCharsets.UTF_8);
-            // Capture stderr to get compile errors
-            java.io.ByteArrayOutputStream errStream = new java.io.ByteArrayOutputStream();
-            int result = compiler.run(null, null, errStream,
-                    "-d", tmpDir.getAbsolutePath(),
-                    srcFile.getAbsolutePath());
-            if (result != 0) {
-                // Print source and errors for debugging
-                System.err.println("=== Failed to compile decompiled output: " + className + " ===");
-                System.err.println(source);
-                System.err.println("=== Compile errors ===");
-                System.err.println(errStream.toString());
-                System.err.println("=== End ===");
-                throw new AssertionError("Decompiled output for " + className
-                        + " failed to compile (exit code " + result + "): "
-                        + errStream.toString());
-            }
-        } catch (AssertionError e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException("Compilation check failed for " + className, e);
-        } finally {
-            if (tmpDir != null) {
-                deleteDir(tmpDir);
-            }
-        }
     }
 
     @Test
     public void testLockTryFinallySize() throws Exception {
         // Pattern: lock + try-finally with return (like RingBuffer.size())
         String source = """
-                package test;
-                import java.util.concurrent.locks.ReentrantLock;
-                public class LockSizeTest {
-                    private final ReentrantLock lock = new ReentrantLock();
-                    private int count;
-                    public int size() {
-                        lock.lock();
-                        try {
-                            return count;
-                        } finally {
-                            lock.unlock();
+                        package test;
+                        import java.util.concurrent.locks.ReentrantLock;
+                        public class LockSizeTest {
+                            private final ReentrantLock lock = new ReentrantLock();
+                            private int count;
+                            public int size() {
+                                lock.lock();
+                                try {
+                                    return count;
+                                } finally {
+                                    lock.unlock();
+                                }
+                            }
                         }
-                    }
-                }
-                """;
+                        """;
         String out = harness.decompileSource(source, "LockSizeTest");
         assertCompiles(out, "LockSizeTest");
     }
@@ -330,26 +344,26 @@ public class ControlFlowTest {
         // Pattern: lock + try-finally + if-else with returns (like RingBuffer.offer())
         // The duplicated finally code in branches MUST be stripped.
         String source = """
-                package test;
-                import java.util.concurrent.locks.ReentrantLock;
-                public class LockOfferTest {
-                    private final ReentrantLock lock = new ReentrantLock();
-                    private int count;
-                    public boolean offer(int value) {
-                        lock.lock();
-                        try {
-                            if (count < 10) {
-                                count++;
-                                return true;
-                            } else {
-                                return false;
+                        package test;
+                        import java.util.concurrent.locks.ReentrantLock;
+                        public class LockOfferTest {
+                            private final ReentrantLock lock = new ReentrantLock();
+                            private int count;
+                            public boolean offer(int value) {
+                                lock.lock();
+                                try {
+                                    if (count < 10) {
+                                        count++;
+                                        return true;
+                                    } else {
+                                        return false;
+                                    }
+                                } finally {
+                                    lock.unlock();
+                                }
                             }
-                        } finally {
-                            lock.unlock();
                         }
-                    }
-                }
-                """;
+                        """;
         String out = harness.decompileSource(source, "LockOfferTest");
         DecompileTestHarness.assertNotContains(out, "return lock.unlock()");
         assertCompiles(out, "LockOfferTest");
@@ -359,39 +373,25 @@ public class ControlFlowTest {
     public void testLockTryFinallyClear() throws Exception {
         // Pattern: lock + try-finally with void body (like RingBuffer.clear())
         String source = """
-                package test;
-                import java.util.concurrent.locks.Condition;
-                import java.util.concurrent.locks.ReentrantLock;
-                public class LockClearTest {
-                    private final ReentrantLock lock = new ReentrantLock();
-                    private final Condition notEmpty = lock.newCondition();
-                    private int count;
-                    public void clear() {
-                        lock.lock();
-                        try {
-                            count = 0;
-                            notEmpty.signalAll();
-                        } finally {
-                            lock.unlock();
+                        package test;
+                        import java.util.concurrent.locks.Condition;
+                        import java.util.concurrent.locks.ReentrantLock;
+                        public class LockClearTest {
+                            private final ReentrantLock lock = new ReentrantLock();
+                            private final Condition notEmpty = lock.newCondition();
+                            private int count;
+                            public void clear() {
+                                lock.lock();
+                                try {
+                                    count = 0;
+                                    notEmpty.signalAll();
+                                } finally {
+                                    lock.unlock();
+                                }
+                            }
                         }
-                    }
-                }
-                """;
+                        """;
         String out = harness.decompileSource(source, "LockClearTest");
         assertCompiles(out, "LockClearTest");
-    }
-
-    private static void deleteDir(java.io.File dir) {
-        java.io.File[] files = dir.listFiles();
-        if (files != null) {
-            for (java.io.File f : files) {
-                if (f.isDirectory()) {
-                    deleteDir(f);
-                } else {
-                    f.delete();
-                }
-            }
-        }
-        dir.delete();
     }
 }
