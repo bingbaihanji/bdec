@@ -128,8 +128,8 @@ public final class CfgBuilder {
 
             if (last.isTerminal()) {
                 // Check for switch before treating as return
-                if (last.mnemonic().equals("tableswitch") || last.mnemonic().equals("lookupswitch")) {
-                    boolean isTable = last.mnemonic().equals("tableswitch");
+                if ("tableswitch".equals(last.mnemonic()) || "lookupswitch".equals(last.mnemonic())) {
+                    boolean isTable = "tableswitch".equals(last.mnemonic());
                     int[] targets = last.jumpTargets();
                     java.util.List<Integer> operands = last.rawOperands();
                     // First target is default
@@ -160,7 +160,7 @@ public final class CfgBuilder {
                 } else {
                     edges.add(ControlFlowEdge.returnEdge(block, exit));
                 }
-            } else if (last.mnemonic().equals("goto")) {
+            } else if ("goto".equals(last.mnemonic())) {
                 BasicBlock target = offsetToBlock.get(last.jumpTargets()[0]);
                 if (target != null) {
                     edges.add(ControlFlowEdge.gotoEdge(block, target));
