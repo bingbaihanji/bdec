@@ -115,6 +115,16 @@ public final class BlockReducer {
         if (e instanceof LitExpr) {
             return true;
         }
+        // Standalone lambda expressions are not valid statements
+        // (they must be assigned to a variable or passed as argument).
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.LambdaExpr) {
+            return true;
+        }
+        // Standalone field access (e.g., System.out from GETSTATIC for
+        // method reference) is not a valid Java statement.
+        if (e instanceof FieldAccessExpr) {
+            return true;
+        }
         return false;
     }
 
@@ -352,10 +362,14 @@ public final class BlockReducer {
                 } else if (child instanceof BlockStatement inner) {
                     Statement wrapped = wrapAsReturn(inner, isBoolRet);
                     result.add(wrapped);
-                    if (hasReturnStmt(wrapped)) addedReturn = true;
+                    if (hasReturnStmt(wrapped)) {
+                        addedReturn = true;
+                    }
                 } else {
                     result.add(child);
-                    if (child instanceof ReturnStatement) addedReturn = true;
+                    if (child instanceof ReturnStatement) {
+                        addedReturn = true;
+                    }
                 }
             }
             // If no return was added, append a synthetic one so the method compiles
@@ -451,6 +465,44 @@ public final class BlockReducer {
         }
         return internalName;
     }
+
+    /** Check if a type represents java.lang.Class. */
+    private static boolean isClassType(com.bingbaihanji.bdec.type.JavaType type) {
+        return type != null && type.kind() == TypeKind.CLASS
+                && "java/lang/Class".equals(type.internalName());
+    }
+
+    // ── IR → Statement ─────────────────────────────────────────────
+
+    /** Check if a Value represents a boolean value (variable, method return, etc.).
+     *  This enables proper `if(flag)` vs `if(!flag)` emission instead of
+     *  `if(flag != 0)` which produces type-mismatch errors for boolean expressions. */
+    private static boolean isBooleanValue(Value v) {
+        if (v instanceof Variable var) {
+            return var.type().kind() == TypeKind.BOOLEAN;
+        }
+        if (v instanceof InstructionRef ref) {
+            IrInstruction def = ref.instruction();
+            // Check if the defining instruction produces a boolean result
+            if (def.resultType() != null
+                    && def.resultType().kind() == TypeKind.BOOLEAN) {
+                return true;
+            }
+            // INVOKE with boolean return type
+            if (def.opcode() == IrOpcode.INVOKE && def.resultType() != null
+                    && def.resultType().kind() == TypeKind.BOOLEAN) {
+                return true;
+            }
+            // CONDITION or COMPARE produces boolean
+            if (def.opcode() == IrOpcode.CONDITION
+                    || def.opcode() == IrOpcode.COMPARE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ── IR → Expression ────────────────────────────────────────────
 
     /**
      * Post-processing: wrap statement groups in try-catch based on CFG exception ranges.
@@ -575,8 +627,6 @@ public final class BlockReducer {
 
         return new BlockStatement(stmts);
     }
-
-    // ── IR → Statement ─────────────────────────────────────────────
 
     public BlockStatement reduce(ControlFlowGraph graph, LinearIr ir,
                                  Map<BasicBlock, LoopInfo> loopAnns,
@@ -821,8 +871,6 @@ public final class BlockReducer {
         root = stripSyncPreambles(root);
         return root;
     }
-
-    // ── IR → Expression ────────────────────────────────────────────
 
     /** Find if any block in the group has an IfInfo annotation. */
     private IfInfo findIfAnnotation(BlockGroup group, Map<BasicBlock, IfInfo> ifAnns) {
@@ -1173,6 +1221,12 @@ public final class BlockReducer {
         return result;
     }
 
+    /**
+     * Translate a single IR instruction to an AST expression.
+     * For intermediate values (LOAD, BINARY, etc.) this produces the
+     * appropriate expression node that will be inlined into the parent statement.
+     */
+
     /** Translate the non-condition, side-effecting statements from an if-header
      *  group. These are instructions that execute BEFORE the condition check
      *  and should appear before the IfStatement in the output. */
@@ -1280,12 +1334,6 @@ public final class BlockReducer {
         }
         return null;
     }
-
-    /**
-     * Translate a single IR instruction to an AST expression.
-     * For intermediate values (LOAD, BINARY, etc.) this produces the
-     * appropriate expression node that will be inlined into the parent statement.
-     */
 
     /** Simplify common boolean redundancy patterns:
      *  {@code x == true} → {@code x}, {@code x != false} → {@code x},
@@ -1720,7 +1768,7 @@ public final class BlockReducer {
                 String bodyHint = "/* " + implName + " */";
                 return LambdaExpr.placeholder(params, bodyHint, funcType);
             }
-            if (implName.equals("<init>")) {
+            if ("<init>".equals(implName)) {
                 // Constructor reference: ClassName::new
                 return LambdaExpr.methodRef(simplifyClassName(implOwner), "new", funcType);
             }
@@ -1728,7 +1776,7 @@ public final class BlockReducer {
             String owner = simplifyClassName(implOwner);
             // For instance method refs with captured receiver, use variable name
             if (!operands.isEmpty() && operands.getFirst() instanceof Variable v
-                    && v.name() != null && !v.name().equals("this")) {
+                    && v.name() != null && !"this".equals(v.name())) {
                 owner = v.name();
             }
             return LambdaExpr.methodRef(owner, implName, funcType);
@@ -1757,7 +1805,7 @@ public final class BlockReducer {
             String pName = "arg" + i;
             if (op instanceof Variable v) {
                 String vn = v.name();
-                if (vn != null && !vn.startsWith("var") && !vn.equals("this")) {
+                if (vn != null && !vn.startsWith("var") && !"this".equals(vn)) {
                     pName = vn;
                 }
             }
@@ -2341,12 +2389,6 @@ public final class BlockReducer {
         return new VarExpr("/* const */");
     }
 
-    /** Check if a type represents java.lang.Class. */
-    private static boolean isClassType(com.bingbaihanji.bdec.type.JavaType type) {
-        return type != null && type.kind() == TypeKind.CLASS
-                && "java/lang/Class".equals(type.internalName());
-    }
-
     /** Check if a local variable has the same name as the given field,
      *  which would create ambiguity when the "this." prefix is stripped. */
     private boolean localVarShadowsField(String fieldName) {
@@ -2356,34 +2398,6 @@ public final class BlockReducer {
         for (Variable v : currentIr.variables()) {
             String name = v.name();
             if (name != null && name.equals(fieldName) && !(v.slot() == 0 && v.version() == 0)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Check if a Value represents a boolean value (variable, method return, etc.).
-     *  This enables proper `if(flag)` vs `if(!flag)` emission instead of
-     *  `if(flag != 0)` which produces type-mismatch errors for boolean expressions. */
-    private static boolean isBooleanValue(Value v) {
-        if (v instanceof Variable var) {
-            return var.type().kind() == TypeKind.BOOLEAN;
-        }
-        if (v instanceof InstructionRef ref) {
-            IrInstruction def = ref.instruction();
-            // Check if the defining instruction produces a boolean result
-            if (def.resultType() != null
-                    && def.resultType().kind() == TypeKind.BOOLEAN) {
-                return true;
-            }
-            // INVOKE with boolean return type
-            if (def.opcode() == IrOpcode.INVOKE && def.resultType() != null
-                    && def.resultType().kind() == TypeKind.BOOLEAN) {
-                return true;
-            }
-            // CONDITION or COMPARE produces boolean
-            if (def.opcode() == IrOpcode.CONDITION
-                    || def.opcode() == IrOpcode.COMPARE) {
                 return true;
             }
         }
