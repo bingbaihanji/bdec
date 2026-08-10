@@ -79,12 +79,22 @@ public class SourceEmitter {
         w.space().write("{").newLine();
         w.indent();
 
+        boolean firstMember = true;
         for (AstNode member : type.children()) {
+            // Emit enum constants as comma-separated list (special marker field)
+            if (member instanceof com.bingbaihanji.bdec.ast.stmt.FieldDeclaration fd
+                    && "$enumConstants$".equals(fd.name())) {
+                if (fd.initializer() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr ve) {
+                    w.write(ve.name()).newLine();
+                }
+                continue;
+            }
             if (member instanceof Statement s) {
                 stmts.emit(s);
             } else {
                 w.write("// " + member.kind()).newLine();
             }
+            firstMember = false;
         }
 
         w.dedent();
