@@ -65,6 +65,12 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         this(w, exprs, className, false);
     }
 
+    /** @return 当前类的简单名称(用于构造函数检测) */
+    public String className() {return className;}
+
+    /** @return 表达式发射器 */
+    public ExpressionEmitter exprs() {return exprs;}
+
     /**
      * 委托给 ExpressionEmitter 解析类型名称为最短有效形式.
      *
