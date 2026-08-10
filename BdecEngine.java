@@ -25,9 +25,13 @@ import com.bingbaihanji.bdec.semantic.SemanticReconstructor;
 import com.bingbaihanji.bdec.structuring.ControlFlowStructurer;
 import com.bingbaihanji.bdec.structuring.StructuredMethod;
 
+import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
+
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * BDEC 反编译引擎核心类,实现 {@link Decompiler} 接口.
@@ -205,6 +209,9 @@ public class BdecEngine implements Decompiler {
             // 阶段 5b:应用 AST 重写规则
             unit = astRewriter.rewrite(unit, config, context);
 
+            // 阶段 5c:反编译内部类(成员内部类,非匿名/局部类)
+            unit = decompileInnerClasses(unit, classFile, context, new HashSet<>());
+
             // 阶段 6:生成 Java 源代码
             SourceFile source = sourceEmitter.emit(unit, config);
 
@@ -215,6 +222,145 @@ public class BdecEngine implements Decompiler {
             diagnostics.report(DecompilerDiagnostic.error("emit", internalName,
                     null, -1, "decompilation failed: " + e.getMessage(), e));
             return BdecResult.error(e, warnings);
+        }
+    }
+
+    /**
+     * 反编译成员内部类,将其 TypeDeclaration 追加到编译单元中.
+     *
+     * <p>仅处理成员内部类(非匿名类,非局部类,非枚举).
+     * 匿名类和局部类在字节码中的名称以 $数字 开头(如 TestClass2$1),
+     * 在 Java 源码中没有直接的名称,需要特殊处理(内联匿名类体).</p>
+     */
+    private CompilationUnit decompileInnerClasses(CompilationUnit unit,
+                                                   ClassFileModel classFile,
+                                                   DecompileContext context,
+                                                   Set<String> processed) {
+        // 防止无限递归
+        if (!processed.add(classFile.internalName())) {
+            return unit;
+        }
+
+        List<InnerClassEntry> innerClasses = classFile.innerClasses();
+        if (innerClasses.isEmpty()) {
+            return unit;
+        }
+
+        List<com.bingbaihanji.bdec.ast.TypeDeclaration> allTypes = new ArrayList<>(unit.types());
+
+        for (InnerClassEntry ice : innerClasses) {
+            String innerName = ice.innerClass();
+            if (innerName == null) {
+                continue;
+            }
+
+            // 仅处理当前类的内部类
+            String outerName = ice.outerClass();
+            if (outerName == null || !outerName.equals(classFile.internalName())) {
+                continue;
+            }
+
+            // 跳过匿名类和局部类(名称以 $数字 开头)
+            int lastSlash = innerName.lastIndexOf('/');
+            String simple = lastSlash >= 0 ? innerName.substring(lastSlash + 1) : innerName;
+            if (isAnonymousOrLocalClass(simple)) {
+                continue;
+            }
+
+            // 跳过枚举(由 EnumRewriter 处理)
+            if ((ice.accessFlags() & 0x2000) != 0) {
+                continue;
+            }
+
+            // 跳过已添加到主类中的类型
+            boolean alreadyPresent = allTypes.stream()
+                    .anyMatch(td -> innerName.endsWith("/" + td.simpleName())
+                            || innerName.endsWith("$" + td.simpleName()));
+            if (alreadyPresent) {
+                continue;
+            }
+
+            // 加载内部类字节码
+            byte[] innerBytes = context.loadClassBytes(innerName);
+            if (innerBytes == null) {
+                continue;
+            }
+
+            try {
+                // 为内部类创建新的反编译上下文
+                DecompileContext innerCtx = new DecompileContext(
+                        context.config(), context::loadClassBytes);
+
+                // 解析并反编译内部类,将其作为嵌套类型嵌入主类
+                ClassFileModel innerCfm = classReader.read(innerName, innerBytes);
+                CompilationUnit innerUnit = buildInnerClassUnit(innerCfm, innerCtx);
+                if (innerUnit != null && !innerUnit.types().isEmpty()) {
+                    // 将内部类 TypeDeclaration 作为嵌套类型嵌入主类
+                    com.bingbaihanji.bdec.ast.TypeDeclaration innerType = innerUnit.types().getFirst();
+                    // 去掉 public 修饰符(嵌套类不需要自己的文件)
+                    int flags = innerType.accessFlags() & ~0x0001;
+                    com.bingbaihanji.bdec.ast.TypeDeclaration nestedType =
+                            new com.bingbaihanji.bdec.ast.TypeDeclaration(
+                                    flags, innerType.simpleName(), innerType.kindName(),
+                                    innerType.superName(), innerType.interfaceNames(),
+                                    innerType.typeParameters(), innerType.children());
+                    // 将嵌套类型添加到主类的成员列表中
+                    com.bingbaihanji.bdec.ast.TypeDeclaration mainType = allTypes.getFirst();
+                    List<com.bingbaihanji.bdec.ast.AstNode> mainMembers = new ArrayList<>(mainType.children());
+                    mainMembers.add(nestedType);
+                    allTypes.set(0, new com.bingbaihanji.bdec.ast.TypeDeclaration(
+                            mainType.accessFlags(), mainType.simpleName(), mainType.kindName(),
+                            mainType.superName(), mainType.interfaceNames(),
+                            mainType.typeParameters(), mainMembers));
+                }
+            } catch (Exception e) {
+                diagnostics.report(DecompilerDiagnostic.warning("inner",
+                        classFile.internalName(), null, -1,
+                        "failed to decompile inner class " + innerName + ": " + e.getMessage()));
+            }
+        }
+
+        return new CompilationUnit(unit.packageName(), unit.imports(),
+                allTypes, unit.innerClassNames());
+    }
+
+    /** 检查简单类名是否为匿名类或局部类($ 后紧跟数字) */
+    private static boolean isAnonymousOrLocalClass(String simpleName) {
+        int idx = simpleName.lastIndexOf('$');
+        if (idx >= 0 && idx + 1 < simpleName.length()) {
+            char c = simpleName.charAt(idx + 1);
+            return c >= '0' && c <= '9';
+        }
+        return false;
+    }
+
+    /** 为内部类构建 CompilationUnit(仅类型声明,跳过源代码生成) */
+    private CompilationUnit buildInnerClassUnit(ClassFileModel cfm, DecompileContext ctx) {
+        try {
+            List<StructuredMethod> methods = new ArrayList<>();
+            for (MethodModel method : cfm.methods()) {
+                if (method.isAbstract() || method.isNative()) {
+                    methods.add(new StructuredMethod(method, null, null));
+                    continue;
+                }
+                if (method.instructions() == null || method.instructions().isEmpty()) {
+                    continue;
+                }
+                try {
+                    ControlFlowGraph cfg = cfgBuilder.build(method);
+                    LinearIr ir = irBuilder.build(cfg, method, cfm.constantPool(),
+                            cfm.bootstrapMethods());
+                    ir = semanticReconstructor.reconstruct(ir, method, cfg, cfm);
+                    StructuredMethod sm = structurer.structure(ir, ctx);
+                    methods.add(sm);
+                } catch (Exception e) {
+                    // 跳过反编译失败的方法
+                }
+            }
+            CompilationUnit innerUnit = astBuilder.build(cfm, methods, ctx);
+            return astRewriter.rewrite(innerUnit, config, ctx);
+        } catch (Exception e) {
+            return null;
         }
     }
 }

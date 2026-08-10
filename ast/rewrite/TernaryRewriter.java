@@ -41,7 +41,7 @@ public class TernaryRewriter implements RewriteRule {
         for (TypeDeclaration td : unit.types()) {
             rewrittenTypes.add(rewriteType(td));
         }
-        return new CompilationUnit(unit.packageName(), unit.imports(), rewrittenTypes);
+        return new CompilationUnit(unit.packageName(), unit.imports(), rewrittenTypes, unit.innerClassNames());
     }
 
     /**

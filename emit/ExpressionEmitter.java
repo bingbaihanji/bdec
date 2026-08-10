@@ -22,6 +22,9 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
     /** 已导入的包集合,用于类型名称简写判断 */
     private final Set<String> importedPackages;
 
+    /** 内部类 friendly 名称映射:内部名称 → 简单名称(如 "TestClass2$1LocalClass" → "LocalClass") */
+    private java.util.Map<String, String> innerClassNames = java.util.Map.of();
+
     /**
      * 构造表达式发射器,无导入信息.
      *
@@ -47,6 +50,16 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
                 importedPackages.add(imp.substring(0, lastDot));
             }
         }
+    }
+
+    /**
+     * 设置内部类名称映射,用于将字节码内部名称(如 TestClass2$1LocalClass)
+     * 解析为 Java 源码中的友好简单名称(如 LocalClass).
+     *
+     * @param names 内部名称到简单名称的映射
+     */
+    public void setInnerClassNames(java.util.Map<String, String> names) {
+        this.innerClassNames = names != null ? names : java.util.Map.of();
     }
 
     /**
@@ -156,6 +169,19 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         if (type.kind() == TypeKind.CLASS && type.internalName() != null) {
             String internal = type.internalName();
             String full = internal.replace('/', '.');
+
+            // 检查内部类友好名称映射(如 TestClass2$1LocalClass → LocalClass)
+            String rawSimple = internal.substring(internal.lastIndexOf('/') + 1);
+            if (innerClassNames.containsKey(rawSimple)) {
+                String friendly = innerClassNames.get(rawSimple);
+                // 对于命名内部类,直接返回友好简单名称
+                if (friendly != null && !friendly.isEmpty()) {
+                    // 检查是否有冲突类型(需要包名限定)
+                    // 简化处理:对于同包类型,简单名称即可
+                    return friendly;
+                }
+            }
+
             // 将命名内部类的 $ 转为 .(如 Map$Entry → Map.Entry),
             // 但跳过匿名类(如 TestClass2$1——数字开头的"名称"非法)
             String simple = full.substring(full.lastIndexOf('.') + 1);
@@ -172,8 +198,17 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
                 String pkg = internal.substring(0, lastSlash).replace('/', '.');
                 if (importedPackages.contains(pkg)) {
                     // 返回已转换 $→. 的简单名称
-                    String rawSimple = internal.substring(lastSlash + 1);
-                    return isAnonymousClassName(rawSimple) ? rawSimple : rawSimple.replace('$', '.');
+                    if (!isAnonymousClassName(rawSimple)) {
+                        return rawSimple.replace('$', '.');
+                    }
+                    // 匿名类:检查是否有友好名称
+                    if (innerClassNames.containsKey(rawSimple)) {
+                        String friendly = innerClassNames.get(rawSimple);
+                        if (friendly != null && !friendly.isEmpty()) {
+                            return friendly;
+                        }
+                    }
+                    return rawSimple;
                 }
             }
             return full;

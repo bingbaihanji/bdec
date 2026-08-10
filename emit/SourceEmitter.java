@@ -28,6 +28,7 @@ public class SourceEmitter {
         Map<Integer, Integer> lineMapping = new HashMap<>();
 
         ExpressionEmitter exprs = new ExpressionEmitter(w, unit.imports());
+        exprs.setInnerClassNames(unit.innerClassNames());
 
         // 判断是否为接口类型
         boolean isInterface = !unit.types().isEmpty() && unit.types().getFirst().isInterface();
@@ -110,6 +111,12 @@ public class SourceEmitter {
             }
             if (member instanceof Statement s) {
                 stmts.emit(s);
+            } else if (member instanceof TypeDeclaration nestedType) {
+                // 输出嵌套类型(内部类,内部接口等)
+                if (!firstMember) {
+                    w.newLine();
+                }
+                emitType(nestedType, w, stmts);
             } else {
                 w.write("// " + member.kind()).newLine();
             }

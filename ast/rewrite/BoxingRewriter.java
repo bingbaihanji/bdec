@@ -64,7 +64,7 @@ public class BoxingRewriter implements RewriteRule {
         for (TypeDeclaration td : unit.types()) {
             types.add(rewriteType(td));
         }
-        return new CompilationUnit(unit.packageName(), unit.imports(), types);
+        return new CompilationUnit(unit.packageName(), unit.imports(), types, unit.innerClassNames());
     }
 
     /** 递归重写类型声明中的每个方法体 */
