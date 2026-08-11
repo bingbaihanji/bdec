@@ -88,6 +88,7 @@ public class BdecEngine implements Decompiler {
                     new StringSwitchRewriter(),
                     new EnumSwitchRewriter(),
                     new EnumRewriter(),
+                    new InnerClassRewriter(),
                     new SourceCleanup()));
 
     /** 源代码输出器 */
