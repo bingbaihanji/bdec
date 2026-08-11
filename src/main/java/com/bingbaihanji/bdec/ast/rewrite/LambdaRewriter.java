@@ -15,6 +15,7 @@ import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
@@ -25,6 +26,7 @@ import com.bingbaihanji.bdec.ir.LinearIr;
 import com.bingbaihanji.bdec.semantic.SemanticReconstructor;
 import com.bingbaihanji.bdec.structuring.ControlFlowStructurer;
 import com.bingbaihanji.bdec.structuring.StructuredMethod;
+import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -168,9 +170,7 @@ public class LambdaRewriter implements RewriteRule {
                     .toList());
         }
         if (s instanceof ExpressionStatement es) {
-            // 过滤孤立的 LambdaExpr 占位符(INDY 结果在另一个 BlockGroup 中被消费,
-            // 导致此处作为独立 ExpressionStatement 残留).独立的 lambda 表达式
-            // 或方法引用在 Java 中不是合法语句,必须被赋值/传参/返回/转型.
+            // 过滤孤立的 LambdaExpr 占位符
             Expression rewritten = rewriteExpr(es.expression(), bootstrapMethods, cfm, ctx);
             if (isOrphanLambda(rewritten)) {
                 return null;
@@ -192,20 +192,17 @@ public class LambdaRewriter implements RewriteRule {
         return s;
     }
 
-    /** 重写表达式,将 lambda 占位符替换为反编译的 lambda 体 */
+    /** 重写表达式,将 lambda 占位符替换为反编译的 lambda 体. */
     private Expression rewriteExpr(Expression e,
                                    List<BootstrapMethodEntry> bootstrapMethods,
                                    ClassFileModel cfm,
                                    DecompileContext ctx) {
-        // 将 LambdaExpr 占位符替换为反编译后的 lambda 体.
-        // 暂时禁用:需要先修复参数重建逻辑.
-        // 占位符中的参数为空(来自 INDY 操作数),但反编译体引用的是 lambda 方法的参数名.
-        // TODO: 从 lambda 方法而非 INDY 操作数重建参数.
-        //if (e instanceof LambdaExpr lambda && !lambda.isMethodRef()
-        //        && lambda.bodyExpr() instanceof VarExpr ve
-        //        && ve.name().startsWith("/* lambda")) {
-        //    return buildLambdaBody(lambda, ve.name(), cfm, ctx);
-        //}
+        // 将 LambdaExpr 占位符替换为反编译后的 lambda 体(参数从 lambda method 提取)
+        if (e instanceof LambdaExpr lambda && !lambda.isMethodRef()
+                && lambda.bodyExpr() instanceof VarExpr ve
+                && ve.name().startsWith("/* lambda")) {
+            return buildLambdaBody(lambda, ve.name(), cfm, ctx);
+        }
 
         if (e instanceof InvocationExpr inv) {
             String name = inv.methodName();
@@ -253,6 +250,7 @@ public class LambdaRewriter implements RewriteRule {
 
     /**
      * 反编译 lambda 合成方法的方法体,生成真正的 LambdaExpr 代替占位符.
+     * 参数从 lambda METHOD 的 MethodModel 中提取,因为 INDY 操作数只包含捕获变量.
      */
     private LambdaExpr buildLambdaBody(LambdaExpr placeholder, String bodyHint,
                                        ClassFileModel cfm, DecompileContext ctx) {
@@ -266,6 +264,9 @@ public class LambdaRewriter implements RewriteRule {
         if (lambdaMethod == null) {
             return placeholder;
         }
+
+        // 从 lambda 方法自身提取参数类型和名称
+        List<LambdaExpr.Param> params = buildLambdaParams(lambdaMethod);
 
         try {
             CfgBuilder cfgBuilder = new CfgBuilder();
@@ -287,15 +288,30 @@ public class LambdaRewriter implements RewriteRule {
             // lambda 方法通常为:return expr;
             Expression bodyExpr = extractReturnExpr(sm.body());
             if (bodyExpr != null) {
-                return LambdaExpr.expression(placeholder.parameters(),
-                        bodyExpr, placeholder.functionalType());
+                return LambdaExpr.expression(params, bodyExpr,
+                        placeholder.functionalType());
             }
 
             // 块 lambda:直接使用方法体(去掉外层对最后一条语句的 return 包装)
-            return LambdaExpr.block(placeholder.parameters(),
+            return LambdaExpr.block(params,
                     stripOuterReturn(sm.body()), placeholder.functionalType());
         } catch (Exception e) {
             return placeholder;
         }
+    }
+
+    /** 从 lambda 合成方法中提取参数列表(类型来自描述符,名称来自 LVT) */
+    private static List<LambdaExpr.Param> buildLambdaParams(MethodModel m) {
+        List<LambdaExpr.Param> params = new ArrayList<>();
+        JavaType[] paramTypes = m.parameterTypes();
+        for (int i = 0; i < paramTypes.length; i++) {
+            int slot = m.isStatic() ? i : i + 1;
+            String name = m.localVarNames().get(slot);
+            if (name == null || name.isEmpty()) {
+                name = "arg" + i;
+            }
+            params.add(new LambdaExpr.Param(name, paramTypes[i]));
+        }
+        return params;
     }
 }
