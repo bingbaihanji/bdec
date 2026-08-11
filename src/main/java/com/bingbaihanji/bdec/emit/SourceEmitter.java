@@ -36,6 +36,9 @@ public class SourceEmitter {
         StatementEmitter stmts = new StatementEmitter(w, exprs, unit.types().isEmpty()
                 ? "Unknown" : unit.types().getFirst().simpleName(), isInterface);
 
+        // 将语句发射器注入表达式发射器,用于 lambda 块体等需要语句级别输出的场景
+        exprs.setStmtEmitter(stmts);
+
         // 输出包声明
         if (unit.packageName() != null && !unit.packageName().isEmpty()) {
             w.token("package").space().write(unit.packageName()).write(';');

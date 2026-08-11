@@ -2,6 +2,7 @@ package com.bingbaihanji.bdec.emit;
 
 import com.bingbaihanji.bdec.ast.AstVisitor;
 import com.bingbaihanji.bdec.ast.expr.*;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
@@ -24,6 +25,9 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
 
     /** 内部类 friendly 名称映射:内部名称 → 简单名称(如 "TestClass2$1LocalClass" → "LocalClass") */
     private java.util.Map<String, String> innerClassNames = java.util.Map.of();
+
+    /** 语句发射器,用于发射 lambda 块体等需要语句级别输出的表达式 */
+    private StatementEmitter stmtEmitter;
 
     /**
      * 构造表达式发射器,无导入信息.
@@ -162,6 +166,15 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
      */
     public void setInnerClassNames(java.util.Map<String, String> names) {
         this.innerClassNames = names != null ? names : java.util.Map.of();
+    }
+
+    /**
+     * 设置语句发射器,用于发射 lambda 块体等需要语句级别输出的表达式.
+     *
+     * @param stmtEmitter 语句发射器
+     */
+    public void setStmtEmitter(StatementEmitter stmtEmitter) {
+        this.stmtEmitter = stmtEmitter;
     }
 
     /**
@@ -464,8 +477,35 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             // 表达式体 lambda
             emit(lambda.bodyExpr());
         } else if (lambda.bodyBlock() != null) {
-            // 块体 lambda — 委托给语句发射器通过访问者模式处理
-            w.write("{ /* lambda block */ }");
+            // 块体 lambda — 输出实际代码块内容
+            BlockStatement body = lambda.bodyBlock();
+            List<Statement> stmts = body.statements();
+            if (stmts.isEmpty()) {
+                w.write("{}");
+            } else if (stmts.size() == 1) {
+                // 单条语句:内联为简洁的 { stmt } 形式
+                w.write("{ ");
+                if (stmtEmitter != null) {
+                    stmtEmitter.emit(stmts.get(0));
+                } else {
+                    w.write("/* no emitter */");
+                }
+                w.write(" }");
+            } else {
+                // 多条语句:展开为多行块
+                w.write("{").newLine();
+                w.indent();
+                if (stmtEmitter != null) {
+                    for (Statement stmt : stmts) {
+                        stmtEmitter.emit(stmt);
+                    }
+                } else {
+                    w.write("/* no emitter */");
+                    w.newLine();
+                }
+                w.dedent();
+                w.write("}");
+            }
         } else {
             w.write("{}");
         }

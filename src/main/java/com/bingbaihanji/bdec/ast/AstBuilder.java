@@ -176,9 +176,12 @@ public class AstBuilder {
 
         // 构建字段声明
         for (FieldModel field : classFile.fields()) {
-            // 跳过 JVM 合成的 this$X 字段(非静态内部类的外围实例引用),
-            // 也跳过其他 ACC_SYNTHETIC 字段(编译器合成,不应出现在源码中)
-            if ((field.accessFlags() & 0x1000) != 0) {
+            // 跳过 ACC_SYNTHETIC 字段,但保留内部类的 this$X 外围引用字段,
+            // 因为内部类作为独立顶层类输出时需要 this$X 字段来访问外围成员.
+            // 若移除该字段,外围字段访问(如 counter)会因作用域原因而无法编译.
+            boolean isSynthetic = (field.accessFlags() & 0x1000) != 0;
+            boolean isOuterThis = field.name().startsWith("this$");
+            if (isSynthetic && !isOuterThis) {
                 continue;
             }
             Expression init = parseFieldInitializer(field);
@@ -209,13 +212,10 @@ public class AstBuilder {
             String methodName = resolveMethodName(method.name(), simpleName,
                     classFile.accessFlags());
 
-            // 对于非静态内部类的构造函数,去除编译器合成的首个参数
-            //(外围 this$0 引用).该参数在 Java 源码中并不存在.
-            if (isNonStaticInner && "<init>".equals(method.name())
-                    && paramNames.length > 0 && paramTypes.length > 0) {
-                paramNames = java.util.Arrays.copyOfRange(paramNames, 1, paramNames.length);
-                paramTypes = java.util.Arrays.copyOfRange(paramTypes, 1, paramTypes.length);
-            }
+            // 对于非静态内部类的构造函数,保留外围 this$0 引用参数.
+            // 因为内部类目前以独立顶层类形式输出,this$0 字段和参数都需要保留
+            // 以确保字段访问(如 this$0.counter)能正确编译.
+            // 未来若实现内部类源码嵌套,可移除此逻辑.
 
             // 从泛型签名中提取方法级类型参数
             List<String> methodTypeParams = method.signature() != null

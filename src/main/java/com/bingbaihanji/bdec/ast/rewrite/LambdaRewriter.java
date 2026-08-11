@@ -4,10 +4,17 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.CastExpr;
+import com.bingbaihanji.bdec.ast.expr.CondExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
@@ -63,15 +70,98 @@ public class LambdaRewriter implements RewriteRule {
 
     /**
      * 若方法体为单条 "return expr;" 语句,则提取其中的表达式.
+     * 也尝试将 boolean if-else-return 模式折叠为表达式:
+     * <pre>
+     *   if (cond) { return true; } return false;  →  return cond;
+     *   if (cond) { return false; } return true;  →  return !cond;
+     * </pre>
      * 若方法体包含多条语句或不是简单 return 语句,则返回 null.
      */
     private static Expression extractReturnExpr(BlockStatement body) {
         List<Statement> stmts = body.statements();
+        // 单条 return expr; 直接提取
         if (stmts.size() == 1 && stmts.get(0) instanceof ReturnStatement rs
                 && rs.value() != null) {
             return rs.value();
         }
+        // boolean if-else-return 折叠:if (cond) { return true; } return false;
+        Expression collapsed = collapseBooleanIfReturn(stmts);
+        if (collapsed != null) {
+            return collapsed;
+        }
         return null;
+    }
+
+    /**
+     * 识别并折叠 boolean if-else-return 模式.
+     * 模式1:if (cond) { return true; } return false; → cond
+     * 模式2:if (cond) { return false; } return true; → !cond
+     * 模式3:if (cond) { return true; } else { return false; } → cond
+     * 模式4:if (cond) { return false; } else { return true; } → !cond
+     */
+    private static Expression collapseBooleanIfReturn(List<Statement> stmts) {
+        // 模式1/2:两条语句(if + trailing return)
+        if (stmts.size() == 2
+                && stmts.get(0) instanceof IfStatement ifStmt
+                && ifStmt.elseBranch() == null
+                && stmts.get(1) instanceof ReturnStatement trailingReturn) {
+            ReturnStatement thenRet = getSingleReturnFromBlock(ifStmt.thenBranch());
+            if (thenRet == null) return null;
+            return tryCollapseBoolean(ifStmt.condition(), thenRet, trailingReturn);
+        }
+        // 模式3/4:单条 if-else 语句
+        if (stmts.size() == 1
+                && stmts.get(0) instanceof IfStatement ifStmt
+                && ifStmt.elseBranch() != null) {
+            ReturnStatement thenRet = getSingleReturnFromBlock(ifStmt.thenBranch());
+            ReturnStatement elseRet = getSingleReturnFromBlock(ifStmt.elseBranch());
+            if (thenRet == null || elseRet == null) return null;
+            return tryCollapseBoolean(ifStmt.condition(), thenRet, elseRet);
+        }
+        return null;
+    }
+
+    /** 从语句块中提取单条 return 语句,块内必须有且仅有一条 return */
+    private static ReturnStatement getSingleReturnFromBlock(Statement s) {
+        if (s instanceof ReturnStatement rs && rs.value() != null) {
+            return rs;
+        }
+        if (s instanceof BlockStatement bs && bs.statements().size() == 1
+                && bs.statements().get(0) instanceof ReturnStatement rs
+                && rs.value() != null) {
+            return rs;
+        }
+        return null;
+    }
+
+    /**
+     * 尝试折叠 boolean 模式:thenRet 和 trailingRet 必须为一个 true 一个 false.
+     * @return cond 或 !cond,或 null
+     */
+    private static Expression tryCollapseBoolean(Expression cond,
+                                                  ReturnStatement thenRet, ReturnStatement trailingRet) {
+        boolean thenIsTrue = isBooleanLiteral(thenRet.value(), true);
+        boolean thenIsFalse = isBooleanLiteral(thenRet.value(), false);
+        boolean otherIsTrue = isBooleanLiteral(trailingRet.value(), true);
+        boolean otherIsFalse = isBooleanLiteral(trailingRet.value(), false);
+
+        // then=true, other=false → cond (then 分支是 true,所以条件为真时执行 then)
+        if (thenIsTrue && otherIsFalse) {
+            return cond;
+        }
+        // then=false, other=true → !cond
+        if (thenIsFalse && otherIsTrue) {
+            return new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                    com.bingbaihanji.bdec.ast.expr.UnaryOperator.NOT, cond);
+        }
+        return null;
+    }
+
+    private static boolean isBooleanLiteral(Expression e, boolean expected) {
+        if (e instanceof LitExpr lit && lit.value() instanceof Boolean b) {
+            return b.booleanValue() == expected;
+        }
+        return false;
     }
 
     /**
@@ -189,6 +279,12 @@ public class LambdaRewriter implements RewriteRule {
                             ? rewriteStatement(i.elseBranch(), bootstrapMethods, cfm, ctx)
                             : null);
         }
+        if (s instanceof VariableDeclaration vd && vd.initializer() != null) {
+            Expression newInit = rewriteExpr(vd.initializer(), bootstrapMethods, cfm, ctx);
+            if (newInit != vd.initializer()) {
+                return new VariableDeclaration(vd.type(), vd.name(), newInit);
+            }
+        }
         return s;
     }
 
@@ -202,6 +298,76 @@ public class LambdaRewriter implements RewriteRule {
                 && lambda.bodyExpr() instanceof VarExpr ve
                 && ve.name().startsWith("/* lambda")) {
             return buildLambdaBody(lambda, ve.name(), cfm, ctx);
+        }
+
+        // 递归处理赋值表达式:lhs = rhs (lambda 可能出现在 rhs 中)
+        if (e instanceof AssignExpr assign) {
+            Expression newTarget = rewriteExpr(assign.target(), bootstrapMethods, cfm, ctx);
+            Expression newValue = rewriteExpr(assign.value(), bootstrapMethods, cfm, ctx);
+            if (newTarget != assign.target() || newValue != assign.value()) {
+                return new AssignExpr(newTarget, newValue);
+            }
+            return e;
+        }
+
+        // 递归处理类型转换:(Type) expr
+        if (e instanceof CastExpr cast) {
+            Expression newOperand = rewriteExpr(cast.operand(), bootstrapMethods, cfm, ctx);
+            if (newOperand != cast.operand()) {
+                return new CastExpr(cast.targetType(), newOperand);
+            }
+            return e;
+        }
+
+        // 递归处理三元表达式:cond ? trueExpr : falseExpr
+        if (e instanceof CondExpr cond) {
+            Expression newCond = rewriteExpr(cond.condition(), bootstrapMethods, cfm, ctx);
+            Expression newTrue = rewriteExpr(cond.trueExpr(), bootstrapMethods, cfm, ctx);
+            Expression newFalse = rewriteExpr(cond.falseExpr(), bootstrapMethods, cfm, ctx);
+            if (newCond != cond.condition() || newTrue != cond.trueExpr()
+                    || newFalse != cond.falseExpr()) {
+                return new CondExpr(newCond, newTrue, newFalse);
+            }
+            return e;
+        }
+
+        // 递归处理二元表达式
+        if (e instanceof BinExpr bin) {
+            Expression newLeft = rewriteExpr(bin.left(), bootstrapMethods, cfm, ctx);
+            Expression newRight = rewriteExpr(bin.right(), bootstrapMethods, cfm, ctx);
+            if (newLeft != bin.left() || newRight != bin.right()) {
+                return new BinExpr(bin.operator(), newLeft, newRight);
+            }
+            return e;
+        }
+
+        // 递归处理一元表达式
+        if (e instanceof UnExpr un) {
+            Expression newOp = rewriteExpr(un.operand(), bootstrapMethods, cfm, ctx);
+            if (newOp != un.operand()) {
+                return new UnExpr(un.operator(), newOp);
+            }
+            return e;
+        }
+
+        // 递归处理字段访问
+        if (e instanceof FieldAccessExpr fa) {
+            Expression newTarget = fa.target() != null
+                    ? rewriteExpr(fa.target(), bootstrapMethods, cfm, ctx) : null;
+            if (newTarget != fa.target()) {
+                return new FieldAccessExpr(newTarget, fa.fieldName());
+            }
+            return e;
+        }
+
+        // 递归处理数组访问
+        if (e instanceof ArrayAccessExpr aa) {
+            Expression newArray = rewriteExpr(aa.array(), bootstrapMethods, cfm, ctx);
+            Expression newIndex = rewriteExpr(aa.index(), bootstrapMethods, cfm, ctx);
+            if (newArray != aa.array() || newIndex != aa.index()) {
+                return new ArrayAccessExpr(newArray, newIndex);
+            }
+            return e;
         }
 
         if (e instanceof InvocationExpr inv) {
