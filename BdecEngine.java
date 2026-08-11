@@ -84,6 +84,7 @@ public class BdecEngine implements Decompiler {
                     new StringConcatRewriter(), new TextBlockRewriter(),
                     new ForEachRewriter(), new TryResourceRewriter(),
                     new SwitchExprRewriter(), new PatternMatchRewriter(),
+                    new RecordPatternRewriter(),
                     new TernaryRewriter(), new BoxingRewriter(),
                     new StringSwitchRewriter(),
                     new EnumSwitchRewriter(),
