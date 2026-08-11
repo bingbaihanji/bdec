@@ -88,6 +88,10 @@ public final class BlockReducer {
     /** 当前正在处理的 LinearIr(在 reduce() 开始时设置,用于字段/局部变量名冲突检测) */
     private LinearIr currentIr = null;
 
+    /** 跨组全局变量使用计数,防止 per-group 内联仅因组内 load 计数为 1
+     *  而内联变量,但该变量在其他组中仍有引用. */
+    private Map<Variable, Integer> globalVarUseCount = Map.of();
+
     public BlockReducer() {this(true);}
 
     public BlockReducer(boolean isInstanceMethod) {
@@ -1328,7 +1332,8 @@ public final class BlockReducer {
                         loadCount++;
                     }
                 }
-                if (loadCount == 1 && isSimpleValue(source)) {
+                if (loadCount == 1 && isSimpleValue(source)
+                        && globalVarUseCount.getOrDefault(v, 0) == 1) {
                     for (IrInstruction other : allInsns) {
                         if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
                                 && other.operands().getFirst() instanceof Variable lv
@@ -1402,15 +1407,25 @@ public final class BlockReducer {
         return null;
     }
 
-    /** 扫描所有组以查找最靠前的 CONDITION(最后回退方案). */
+    /** 扫描所有组和全部 IR 指令以查找最靠前的 CONDITION.
+     *  组内查找和全局 IR 扫描一起执行,确保找到最早的条件指令. */
     private Expression extractConditionFromAllGroups(List<BlockGroup> groups, LinearIr ir) {
         IrInstruction best = null;
+        // 从所有组中扫描
         for (BlockGroup g : groups) {
             for (IrInstruction insn : g.allIrInstructions(ir)) {
                 if (insn.opcode() == IrOpcode.CONDITION) {
                     if (best == null || insn.sourceOffset() < best.sourceOffset()) {
                         best = insn;
                     }
+                }
+            }
+        }
+        // 直接从全部 IR 指令扫描(捕获未被包含在任何组中的 CONDITION)
+        for (IrInstruction insn : ir.instructions()) {
+            if (insn.opcode() == IrOpcode.CONDITION) {
+                if (best == null || insn.sourceOffset() < best.sourceOffset()) {
+                    best = insn;
                 }
             }
         }
@@ -1586,7 +1601,8 @@ public final class BlockReducer {
                         loadCount++;
                     }
                 }
-                if (loadCount == 1 && isSimpleValue(source)) {
+                if (loadCount == 1 && isSimpleValue(source)
+                        && globalVarUseCount.getOrDefault(v, 0) == 1) {
                     // 检查唯一的 LOAD 是否被消费
                     for (IrInstruction other : allInsns) {
                         if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
@@ -3227,6 +3243,7 @@ public final class BlockReducer {
 
         currentVarStoreSource = Map.copyOf(varStoreSource);
         currentStoresToSkip = Set.copyOf(storesToSkip);
+        globalVarUseCount = Map.copyOf(varUseCount);
     }
 
     /**
