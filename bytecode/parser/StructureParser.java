@@ -124,6 +124,8 @@ class StructureParser {
             int maxStack = 0, maxLocals = 0;
             String signature = "";
             java.util.Map<Integer, String> localVarNames = new java.util.HashMap<>();
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.LocalVariableEntry> lvtEntries
+                    = new java.util.ArrayList<>();
 
             int attrCount = in.readUnsignedShort();
             for (int a = 0; a < attrCount; a++) {
@@ -172,10 +174,13 @@ class StructureParser {
                                 int lvtDescIdx = in.readUnsignedShort();
                                 int index = in.readUnsignedShort();
                                 String varName = ConstantPoolParser.utf8(pool, lvtNameIdx);
-                                // 捕获所有 LVT 条目,而不仅仅是 start_pc==0 的条目.
-                                // putIfAbsent 确保最早作用域的变量名(即参数名)优先.
+                                String varDesc = ConstantPoolParser.utf8(pool, lvtDescIdx);
+                                // 存储作用域感知条目,用于按字节码偏移量查找
                                 if (varName != null && !varName.isEmpty()) {
                                     localVarNames.putIfAbsent(index, varName);
+                                    lvtEntries.add(new com.bingbaihanji.bdec.bytecode.model
+                                            .LocalVariableEntry(startPc, length, varName,
+                                            index, varDesc));
                                 }
                             }
                         } else {
@@ -187,7 +192,8 @@ class StructureParser {
                 }
             }
             methods.add(new MethodModel(accessFlags, name, desc, returnType, paramTypes,
-                    instructions, handlers, maxStack, maxLocals, signature, localVarNames));
+                    instructions, handlers, maxStack, maxLocals, signature,
+                    localVarNames, lvtEntries));
         }
         return methods;
     }
