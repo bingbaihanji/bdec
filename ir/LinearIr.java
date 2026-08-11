@@ -37,8 +37,9 @@ public class LinearIr {
     /** 变量列表 */
     private final List<Variable> variables;
 
-    /** 源偏移量到IR指令的映射(用于虚拟块的回退查找) */
-    private Map<Integer, IrInstruction> offsetToInstruction;
+    /** 源偏移量到IR指令列表的映射(用于合并/虚拟块的查找).
+     *  每个字节码偏移量可能对应多条IR指令,因此存储为列表. */
+    private Map<Integer, List<IrInstruction>> offsetToInstructions;
 
     /** 是否已进行SSA优化 */
     private boolean ssaOptimized;
@@ -78,43 +79,58 @@ public class LinearIr {
     /**
      * 获取指定基本块内的所有指令.
      *
+     * <p>同时使用两种查找策略并合并结果(按指令ID去重):
+     * <ol>
+     *   <li>blockId查找——对原始CFG块最准确,包含合成指令(sourceOffset=-1)</li>
+     *   <li>偏移量查找——处理CFG折叠合并的块,其ID可能与原始IR blockId不匹配</li>
+     * </ol>
+     * </p>
+     *
      * @param block 基本块
      * @return 该基本块内的指令列表
      */
     public List<IrInstruction> instructionsOf(BasicBlock block) {
-        List<IrInstruction> result = blockInstructions.get(block.id());
-        if (result != null) {
-            return result;
+        Set<Integer> seen = new HashSet<>();
+        List<IrInstruction> result = new ArrayList<>();
+
+        // 策略1:blockId查找——对原始CFG块最准确
+        List<IrInstruction> byBlockId = blockInstructions.get(block.id());
+        if (byBlockId != null) {
+            for (IrInstruction insn : byBlockId) {
+                if (seen.add(insn.id())) {
+                    result.add(insn);
+                }
+            }
         }
-        // 回退方案:对于CFG折叠期间创建的虚拟块,通过源字节码偏移量查找IR指令.
-        // 当foldLoop/foldIf将基本块替换为虚拟块时,虚拟块的ID与原始块的ID
-        // 不匹配,因此blockInstructions映射查找会失败.
+
+        // 策略2:偏移量查找——捕获foldSequences合并块中
+        // 来自被吸收子块(b2)的额外指令
         if (!block.instructions().isEmpty()) {
             buildOffsetMap();
-            result = new ArrayList<>();
-            Set<Integer> visited = new HashSet<>();
             for (var instr : block.instructions()) {
                 int offset = instr.offset();
-                if (visited.add(offset)) {
-                    IrInstruction irInsn = offsetToInstruction.get(offset);
-                    if (irInsn != null) {
-                        result.add(irInsn);
+                List<IrInstruction> irInsns = offsetToInstructions.get(offset);
+                if (irInsns != null) {
+                    for (IrInstruction insn : irInsns) {
+                        if (seen.add(insn.id())) {
+                            result.add(insn);
+                        }
                     }
                 }
             }
         }
-        return result != null ? result : List.of();
+
+        return result;
     }
 
-    /** 惰性构建源偏移量到IR指令的映射 */
+    /** 惰性构建源偏移量到IR指令列表的映射 */
     private void buildOffsetMap() {
-        if (offsetToInstruction == null) {
-            offsetToInstruction = new HashMap<>();
+        if (offsetToInstructions == null) {
+            offsetToInstructions = new HashMap<>();
             for (IrInstruction insn : instructions) {
                 int offset = insn.sourceOffset();
-                if (!offsetToInstruction.containsKey(offset)) {
-                    offsetToInstruction.put(offset, insn);
-                }
+                offsetToInstructions.computeIfAbsent(offset,
+                        k -> new ArrayList<>()).add(insn);
             }
         }
     }
@@ -150,6 +166,6 @@ public class LinearIr {
                     k -> new ArrayList<>()).add(insn);
         }
         // 使偏移量缓存失效(指令已变更)
-        offsetToInstruction = null;
+        offsetToInstructions = null;
     }
 }
