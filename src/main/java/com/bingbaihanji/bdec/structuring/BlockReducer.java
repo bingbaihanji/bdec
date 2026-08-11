@@ -3080,13 +3080,23 @@ public final class BlockReducer {
         if (excType != null && excType.contains("/")) {
             excType = excType.substring(excType.lastIndexOf('/') + 1);
         }
-        // 将处理器指令翻译为 catch 体.
-        // 如果处理器块不含 IR 指令(如空的 catch 子句),translateGroup 可能返回 null,
-        // 此时用空 BlockStatement 兜底.
-        BlockGroup handlerGroup = new BlockGroup(info.handlerBlock());
-        Statement handlerBody = translateGroup(handlerGroup, ir);
-        if (handlerBody == null) {
-            handlerBody = new BlockStatement(List.of());
+        // 若处理器创建了新的异常对象(如 record 模式匹配的 MatchException),
+        // 则这是编译器生成的基础设施,而非用户代码.
+        // 此时生成最小化的空 catch 体以保持代码可编译,
+        // 而非尝试翻译包含无作用域变量的原始处理器指令.
+        Statement handlerBody;
+        if (containsNewInstruction(handlerInsns)) {
+            // 编译器生成的 record 模式匹配处理器——用简单的 throw e 保持可编译
+            handlerBody = new BlockStatement(List.of(
+                    new com.bingbaihanji.bdec.ast.stmt.ThrowStatement(
+                            new VarExpr("e"))));
+        } else {
+            // 用户编写的 catch 子句——正常翻译处理器指令
+            BlockGroup handlerGroup = new BlockGroup(info.handlerBlock());
+            handlerBody = translateGroup(handlerGroup, ir);
+            if (handlerBody == null) {
+                handlerBody = new BlockStatement(List.of());
+            }
         }
         catchClauses.add(new TryStatement.CatchClause(
                 excType != null ? excType : "Exception",

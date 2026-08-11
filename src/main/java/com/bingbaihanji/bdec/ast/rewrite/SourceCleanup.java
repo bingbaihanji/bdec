@@ -192,8 +192,12 @@ public class SourceCleanup implements RewriteRule {
         if (s instanceof TryStatement t) {
             List<TryStatement.CatchClause> cc = new ArrayList<>();
             for (var c : t.catchClauses()) {
+                // 将 catch 子句的异常变量名纳入已声明集合,
+                // 防止自动声明逻辑在 catch 体内重复声明该变量
+                Set<String> extParams = new HashSet<>(paramNames);
+                extParams.add(c.varName());
                 cc.add(new TryStatement.CatchClause(c.exceptionType(), c.varName(),
-                        fix(c.body(), nonVoid, retType, fieldNames, paramNames)));
+                        fix(c.body(), nonVoid, retType, fieldNames, extParams)));
             }
             return new TryStatement(fix(t.tryBody(), nonVoid, retType, fieldNames, paramNames), cc,
                     t.finallyBody() != null
@@ -233,6 +237,7 @@ public class SourceCleanup implements RewriteRule {
         } else if (s instanceof TryStatement t) {
             collectDeclared(t.tryBody(), out);
             for (var c : t.catchClauses()) {
+                out.add(c.varName()); // catch clause parameter is a declared variable
                 collectDeclared(c.body(), out);
             }
             if (t.finallyBody() != null) {
