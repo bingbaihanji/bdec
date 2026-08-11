@@ -328,7 +328,7 @@ public final class IrBuilder {
         if (hasExceptionEdge && !predStates.get(0).stack().isEmpty()) {
             // 异常处理器:保留异常引用在栈上
             mergedStack = new ArrayDeque<>(predStates.get(0).stack());
-        } else if (!hasExceptionEdge && predStates.size() >= 2) {
+        } else if (!hasExceptionEdge) {
             // 多前驱普通汇合:检查所有前驱推送的值深度是否相同.
             // 若相同则创建stack-PHI节点.
             boolean allSameDepth = true;
@@ -1007,10 +1007,9 @@ public final class IrBuilder {
                 if (classIdx > 0 && classIdx < cp.length) {
                     declaringClass = ConstantPoolParser.className(cp, classIdx);
                 }
-                if (natIdx > 0 && natIdx < cp.length
-                        && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
-                    String desc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
-                    methodName = ConstantPoolParser.utf8(cp, nat.nameIndex());
+                if (natIdx > 0 && natIdx < cp.length && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType(int nameIndex, int descriptorIndex)) {
+                    String desc = ConstantPoolParser.utf8(cp, descriptorIndex);
+                    methodName = ConstantPoolParser.utf8(cp, nameIndex);
                     paramTypes = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(desc);
                     argCount = paramTypes.length;
                     returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(desc);
@@ -1096,13 +1095,14 @@ public final class IrBuilder {
         if (cpIdx > 0 && cpIdx < cp.length) {
             try {
                 ConstantPoolEntry entry = cp[cpIdx];
-                if (entry instanceof ConstantPoolEntry.CpInvokeDynamic indy) {
-                    bootstrapIdx = indy.bootstrapMethodAttrIndex();
-                    int natIdx = indy.nameAndTypeIndex();
+                if (entry instanceof ConstantPoolEntry.CpInvokeDynamic(int bootstrapMethodAttrIndex, int natIdx)) {
+                    bootstrapIdx = bootstrapMethodAttrIndex;
                     if (natIdx > 0 && natIdx < cp.length
-                            && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
-                        descriptor = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
-                        methodName = ConstantPoolParser.utf8(cp, nat.nameIndex());
+                            && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType(
+                            int nameIndex, int descriptorIndex
+                    )) {
+                        descriptor = ConstantPoolParser.utf8(cp, descriptorIndex);
+                        methodName = ConstantPoolParser.utf8(cp, nameIndex);
                         var params = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(descriptor);
                         argCount = params.length;
                         returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(descriptor);
@@ -1165,12 +1165,10 @@ public final class IrBuilder {
         }
 
         ConstantPoolEntry implHandleEntry = cp[implHandleIdx];
-        if (!(implHandleEntry instanceof ConstantPoolEntry.CpMethodHandle implHandle)) {
+        if (!(implHandleEntry instanceof ConstantPoolEntry.CpMethodHandle(int refKind, int refIdx))) {
             return;
         }
 
-        int refKind = implHandle.referenceKind();
-        int refIdx = implHandle.referenceIndex();
         annotProps.put("implKind", refKind);
 
         if (refIdx <= 0 || refIdx >= cp.length) {
@@ -1180,12 +1178,12 @@ public final class IrBuilder {
         ConstantPoolEntry refEntry = cp[refIdx];
         int classIdx = -1;
         int natIdx = -1;
-        if (refEntry instanceof ConstantPoolEntry.CpMethodRef mr) {
-            classIdx = mr.classIndex();
-            natIdx = mr.nameAndTypeIndex();
-        } else if (refEntry instanceof ConstantPoolEntry.CpInterfaceMethodRef imr) {
-            classIdx = imr.classIndex();
-            natIdx = imr.nameAndTypeIndex();
+        if (refEntry instanceof ConstantPoolEntry.CpMethodRef(int classIndex, int nameAndTypeIndex)) {
+            classIdx = classIndex;
+            natIdx = nameAndTypeIndex;
+        } else if (refEntry instanceof ConstantPoolEntry.CpInterfaceMethodRef(int classIndex, int nameAndTypeIndex)) {
+            classIdx = classIndex;
+            natIdx = nameAndTypeIndex;
         } else {
             return;
         }

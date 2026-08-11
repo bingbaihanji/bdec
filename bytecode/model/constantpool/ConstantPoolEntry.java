@@ -106,45 +106,35 @@ public sealed interface ConstantPoolEntry
     }
 
     /** 字段引用常量(tag=9),包含类索引和名称与类型索引. */
-    record CpFieldRef(int classIndex,
-
-                      int nameAndTypeIndex) implements ConstantPoolEntry {
+    record CpFieldRef(int classIndex, int nameAndTypeIndex) implements ConstantPoolEntry {
 
         @Override
         public int tag() {return 9;}
     }
 
     /** 方法引用常量(tag=10),包含类索引和名称与类型索引. */
-    record CpMethodRef(int classIndex,
-
-                       int nameAndTypeIndex) implements ConstantPoolEntry {
+    record CpMethodRef(int classIndex, int nameAndTypeIndex) implements ConstantPoolEntry {
 
         @Override
         public int tag() {return 10;}
     }
 
     /** 接口方法引用常量(tag=11),包含类索引和名称与类型索引. */
-    record CpInterfaceMethodRef(int classIndex,
-
-                                int nameAndTypeIndex) implements ConstantPoolEntry {
+    record CpInterfaceMethodRef(int classIndex, int nameAndTypeIndex) implements ConstantPoolEntry {
 
         @Override
         public int tag() {return 11;}
     }
 
     /** 名称与类型描述符常量(tag=12),包含名称索引和描述符索引. */
-    record CpNameAndType(int nameIndex,
-
-                         int descriptorIndex) implements ConstantPoolEntry {
+    record CpNameAndType(int nameIndex, int descriptorIndex) implements ConstantPoolEntry {
 
         @Override
         public int tag() {return 12;}
     }
 
     /** 方法句柄常量(tag=15),包含引用种类索引和引用索引. */
-    record CpMethodHandle(int referenceKind,
-
-                          int referenceIndex) implements ConstantPoolEntry {
+    record CpMethodHandle(int referenceKind, int referenceIndex) implements ConstantPoolEntry {
 
         @Override
         public int tag() {return 15;}
@@ -158,18 +148,14 @@ public sealed interface ConstantPoolEntry
     }
 
     /** 动态常量(tag=17),包含引导方法属性索引和名称与类型索引. */
-    record CpDynamic(int bootstrapMethodAttrIndex,
-
-                     int nameAndTypeIndex) implements ConstantPoolEntry {
+    record CpDynamic(int bootstrapMethodAttrIndex, int nameAndTypeIndex) implements ConstantPoolEntry {
 
         @Override
         public int tag() {return 17;}
     }
 
     /** 动态调用点常量(tag=18),包含引导方法属性索引和名称与类型索引. */
-    record CpInvokeDynamic(int bootstrapMethodAttrIndex,
-
-                           int nameAndTypeIndex) implements ConstantPoolEntry {
+    record CpInvokeDynamic(int bootstrapMethodAttrIndex, int nameAndTypeIndex) implements ConstantPoolEntry {
 
         @Override
         public int tag() {return 18;}

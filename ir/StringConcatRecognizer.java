@@ -179,10 +179,6 @@ public final class StringConcatRecognizer {
         if (e instanceof BinExpr bin && bin.operator() == BinaryOperator.ADD) {
             return true;
         }
-        if (e instanceof InvocationExpr inv
-                && isStringType(inv.returnType())) {
-            return true;
-        }
-        return false;
+        return e instanceof InvocationExpr inv && isStringType(inv.returnType());
     }
 }

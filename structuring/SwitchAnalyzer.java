@@ -13,6 +13,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -66,7 +67,7 @@ public final class SwitchAnalyzer {
             }
 
             boolean isTableSwitch = block.lastInstruction() != null
-                    && block.lastInstruction().opcode() == 170; // TABLESWITCH 操作码
+                    && Objects.requireNonNull(block.lastInstruction()).opcode() == 170; // TABLESWITCH 操作码
 
             results.add(new SwitchInfo(block, caseBodies, defaultBody, isTableSwitch));
         }

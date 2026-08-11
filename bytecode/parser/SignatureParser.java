@@ -40,7 +40,6 @@ public final class SignatureParser {
         if (signature == null || signature.isEmpty() || !signature.startsWith("<")) {
             return params;
         }
-
         int i = 1; // 跳过 '<'
         while (i < signature.length() && signature.charAt(i) != '>') {
             // 读取类型参数名称直到冒号
@@ -52,15 +51,22 @@ public final class SignatureParser {
             params.add(name);
             // 跳过类边界与接口边界描述
             i = colon + 1;
-            // 跳过边界:L...; 或 T...;
+            // 跳过边界:L...; 或 T...; 或 [ (数组)
             while (i < signature.length() && signature.charAt(i) != ':'
                     && signature.charAt(i) != '>') {
-                if (signature.charAt(i) == 'L') {
-                    i = signature.indexOf(';', i) + 1;
-                } else if (signature.charAt(i) == 'T') {
-                    i = signature.indexOf(';', i) + 1;
+                char c = signature.charAt(i);
+                if (c == 'L' || c == 'T') {
+                    int semi = signature.indexOf(';', i);
+                    if (semi < 0) {
+                        i = signature.length();
+                        break;
+                    }
+                    i = semi + 1;
+                } else if (c == '[') {
+                    i++; // 跳过'[', 后续一定是 L...; 或基元类型, 由下一次迭代处理
                 } else {
-                    i++;
+                    // 不是类型签名的一部分 → 下一个类型参数即将开始
+                    break;
                 }
             }
             // 跳过 ':' 分隔符
@@ -84,6 +90,53 @@ public final class SignatureParser {
      */
     public static List<String> extractMethodTypeParams(String signature) {
         return extractTypeParams(signature); // 格式相同:以 <...> 开头
+    }
+
+    /**
+     * 将方法签名解析为参数类型数组和返回类型.
+     * 例如 {@code (TT;TU;)V} → params=[typevar(T), typevar(U)], returnType=void.
+     *
+     * @param signature 方法签名属性字符串(如 {@code <T:Ljava/lang/Object;>(TT;TU;)V})
+     * @return {@code [paramTypes..., returnType]},解析失败返回 {@code null}
+     */
+    public static JavaType[] parseMethodSignature(String signature) {
+        if (signature == null || signature.isEmpty()) {
+            return null;
+        }
+        try {
+            // 跳过开头的类型参数声明(如 <T:Ljava/lang/Object;>)
+            int i = 0;
+            if (signature.charAt(0) == '<') {
+                int depth = 1;
+                i = 1;
+                while (i < signature.length() && depth > 0) {
+                    char c = signature.charAt(i);
+                    if (c == '<') depth++;
+                    else if (c == '>') depth--;
+                    i++;
+                }
+            }
+            if (i >= signature.length() || signature.charAt(i) != '(') {
+                return null;
+            }
+            i++; // 跳过 '('
+            List<JavaType> types = new ArrayList<>();
+            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+            // 解析参数类型
+            while (i < signature.length() && signature.charAt(i) != ')') {
+                i = parseTypeToJavaType(signature, i, ref);
+                types.add(ref.get());
+            }
+            i++; // 跳过 ')'
+            // 解析返回类型
+            if (i < signature.length()) {
+                i = parseTypeToJavaType(signature, i, ref);
+                types.add(ref.get());
+            }
+            return types.toArray(new JavaType[0]);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
