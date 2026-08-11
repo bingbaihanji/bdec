@@ -771,7 +771,15 @@ public final class BlockReducer {
 
             // if-else:构建包含 then 和 else 体的完整 IfStatement
             if (ifInfo != null) {
-                Expression cond = simplifyCondition(extractCondition(group, ir));
+                // 优先从组内提取条件;回退方案依次尝试 IfInfo 头部块及全部组
+                Expression rawCond = extractCondition(group, ir);
+                if (rawCond == null && ifInfo != null) {
+                    rawCond = extractConditionFromHeader(ifInfo.header(), ir);
+                }
+                if (rawCond == null && ifInfo != null) {
+                    rawCond = extractConditionFromAllGroups(groups, ir);
+                }
+                Expression cond = simplifyCondition(rawCond);
 
                 // 翻译头部组中的非条件语句.
                 // 当包含 if-header 的组中也包含在条件之前执行的代码时
@@ -1382,6 +1390,31 @@ public final class BlockReducer {
             }
         }
         return null;
+    }
+
+    /** 从 IfInfo 头部块直接提取条件(处理 CFG 块与 IR 块编号不匹配). */
+    private Expression extractConditionFromHeader(BasicBlock header, LinearIr ir) {
+        for (IrInstruction insn : ir.instructionsOf(header)) {
+            if (insn.opcode() == IrOpcode.CONDITION) {
+                return translateExpr(insn);
+            }
+        }
+        return null;
+    }
+
+    /** 扫描所有组以查找最靠前的 CONDITION(最后回退方案). */
+    private Expression extractConditionFromAllGroups(List<BlockGroup> groups, LinearIr ir) {
+        IrInstruction best = null;
+        for (BlockGroup g : groups) {
+            for (IrInstruction insn : g.allIrInstructions(ir)) {
+                if (insn.opcode() == IrOpcode.CONDITION) {
+                    if (best == null || insn.sourceOffset() < best.sourceOffset()) {
+                        best = insn;
+                    }
+                }
+            }
+        }
+        return best != null ? translateExpr(best) : null;
     }
 
     /** 简化常见的布尔冗余模式:
