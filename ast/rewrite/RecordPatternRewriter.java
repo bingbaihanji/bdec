@@ -99,11 +99,15 @@ public class RecordPatternRewriter extends AstTransformer implements RewriteRule
                 Statement recPat = buildRecordPatternFromBody(
                         new VarExpr(testExprName), recordTypeName, afterIf);
                 if (recPat != null) {
-                    // 构建: if (obj instanceof RecordType(comps)) { userCode }
-                    // recPat 是新的 IfStatement,替换 if+extraction
-                    // 跳过 guard if 及其后的 extraction 语句
-                    skipCount = 1 + afterIf.size(); // 跳过所有
-                    // recPat 本身含 then 体(用户代码)
+                    skipCount = 1 + afterIf.size();
+                    replacement = recPat;
+                }
+            } else if ("else-extract".equals(mode)) {
+                // 提取代码在 else 体中: if (!(obj instanceof T)) { return; } else { cast+extract }
+                List<Statement> elseStmts = flattenBlock(ifStmt.elseBranch());
+                Statement recPat = buildRecordPatternFromBody(
+                        new VarExpr(testExprName), recordTypeName, elseStmts);
+                if (recPat != null) {
                     replacement = recPat;
                 }
             } else if ("direct".equals(mode)) {
@@ -136,37 +140,84 @@ public class RecordPatternRewriter extends AstTransformer implements RewriteRule
      *  <li>if (!(obj instanceof RecordType)) { return; } (守卫,提取代码在后面)</li>
      *  <li>if (obj instanceof RecordType) { extraction... } (提取在 then 体中)</li>
      *  </ol>
+     *  条件可以是 InstanceOfExpr 或 BinExpr(INSTANCEOF, left, right).
      *  @return [testExpressionName, recordTypeName, "guard"|"direct"] 或 null */
     private String[] matchIfGuard(IfStatement ifStmt) {
         Expression cond = ifStmt.condition();
-        Expression testExpr = null;
-        String recordTypeName = null;
-        String mode = null;
 
-        // 模式A: !(obj instanceof RecordType) + return → 提取代码在 if 之后
-        if (cond instanceof UnExpr un && un.operator() == UnaryOperator.NOT
-                && un.operand() instanceof InstanceOfExpr ioe) {
-            if (ifStmt.elseBranch() != null) return null;
-            if (!isJustReturn(ifStmt.thenBranch())) return null;
-            testExpr = ioe.operand();
-            recordTypeName = simplifyTypeName(ioe.targetType().internalName());
-            mode = "guard";
-        }
-        // 模式B: obj instanceof RecordType + 提取代码在 then 体中
-        if (cond instanceof InstanceOfExpr ioe) {
-            if (ifStmt.elseBranch() != null) {
-                // 检查 else 是否仅为 return
-                if (!isJustReturn(ifStmt.elseBranch())) return null;
+        // 从条件中提取测试表达式和类型名
+        InstanceofMatch match = extractInstanceofMatch(cond);
+        if (match == null) return null;
+
+        Expression testExpr = match.testExpr;
+        String recordTypeName = match.typeName;
+        boolean isNegated = isNegatedInstanceof(cond);
+
+        String mode;
+        if (isNegated) {
+            // 模式A1: if (!(obj instanceof T)) { return; } — 守卫,提取在后
+            if (ifStmt.elseBranch() == null) {
+                if (!isJustReturn(ifStmt.thenBranch())) return null;
+                mode = "guard";
             }
-            testExpr = ioe.operand();
-            recordTypeName = simplifyTypeName(ioe.targetType().internalName());
+            // 模式A2: if (!(obj instanceof T)) { return; } else { extraction... }
+            else if (isJustReturn(ifStmt.thenBranch())) {
+                mode = "else-extract";
+            } else {
+                return null;
+            }
+        } else {
+            // 模式B: if (obj instanceof T) { extraction... } [else { return; }]
+            if (ifStmt.elseBranch() != null && !isJustReturn(ifStmt.elseBranch())) {
+                return null;
+            }
             mode = "direct";
         }
 
-        if (testExpr == null || recordTypeName == null || mode == null) return null;
-
         String testExprName = testExpr instanceof VarExpr v ? v.name() : "obj";
         return new String[]{testExprName, recordTypeName, mode};
+    }
+
+    // 提取 instanceof 条件的临时结果
+    private static class InstanceofMatch {
+        final Expression testExpr;
+        final String typeName;
+        InstanceofMatch(Expression e, String t) { this.testExpr = e; this.typeName = t; }
+    }
+
+    /** 从条件表达式中提取 instanceof 的测试表达式和类型名 */
+    private InstanceofMatch extractInstanceofMatch(Expression cond) {
+        if (cond == null) return null;
+
+        // BinExpr(INSTANCEOF, left, right) — right 为 VarExpr(类型名)
+        if (cond instanceof BinExpr be && be.operator() == BinaryOperator.INSTANCEOF
+                && be.right() instanceof VarExpr typeVar) {
+            return new InstanceofMatch(be.left(), typeVar.name());
+        }
+
+        // InstanceOfExpr
+        if (cond instanceof InstanceOfExpr ioe) {
+            return new InstanceofMatch(ioe.operand(),
+                    simplifyTypeName(ioe.targetType().internalName()));
+        }
+
+        // UnExpr(NOT, ...) — 递归检查内部
+        if (cond instanceof UnExpr un && un.operator() == UnaryOperator.NOT) {
+            return extractInstanceofMatch(un.operand());
+        }
+
+        return null;
+    }
+
+    /** 条件是否被否定: !(obj instanceof T) */
+    private boolean isNegatedInstanceof(Expression cond) {
+        if (cond instanceof UnExpr un && un.operator() == UnaryOperator.NOT) {
+            Expression inner = un.operand();
+            return inner instanceof BinExpr be
+                    && be.operator() == BinaryOperator.INSTANCEOF
+                    || inner instanceof InstanceOfExpr;
+        }
+        return false;
     }
 
     // ── 记录模式构建(遵循 Vineflower identifyIfRecordPatternMatch) ──
@@ -288,32 +339,45 @@ public class RecordPatternRewriter extends AstTransformer implements RewriteRule
         return varName;
     }
 
-    /** 检测组件声明:Type temp = castVar.comp(); → Type real = temp; */
+    /** 检测组件声明:Type temp = castVar.comp(); → Type real = temp;
+     *  可以是 VariableDeclaration 或 ExpressionStatement(AssignExpr) */
     private ComponentMatch tryMatchComponent(List<Statement> stmts, int idx,
                                               String castVarName) {
         if (idx >= stmts.size()) return null;
 
+        // 从语句中提取初始值表达式和变量名
+        Expression initializer = null;
+        String tempName = null;
+        com.bingbaihanji.bdec.type.JavaType tempType = null;
+
         Statement first = stmts.get(idx);
-        if (!(first instanceof VariableDeclaration vd)) return null;
-        if (vd.initializer() == null) return null;
+        if (first instanceof VariableDeclaration vd) {
+            initializer = vd.initializer();
+            tempName = vd.name();
+            tempType = vd.type();
+        } else if (first instanceof ExpressionStatement es
+                && es.expression() instanceof AssignExpr assign
+                && assign.target() instanceof VarExpr tv) {
+            initializer = assign.value();
+            tempName = tv.name();
+        }
+
+        if (initializer == null || tempName == null) return null;
 
         // 检查初始值:castVar.comp()
-        String compName = tryMatchComponentCall(vd.initializer(), castVarName);
+        String compName = tryMatchComponentCall(initializer, castVarName);
         if (compName == null) return null;
 
-        String realName = vd.name();
-        com.bingbaihanji.bdec.type.JavaType realType = vd.type();
+        String realName = tempName;
+        com.bingbaihanji.bdec.type.JavaType realType = tempType;
         int endIdx = idx + 1;
 
         // Vineflower pseudo stack: 检查下一个语句是否为 realVar = tempVar;
-        // 其中 tempVar 仅在此处使用
         if (endIdx < stmts.size()) {
             Statement next = stmts.get(endIdx);
-            String delegated = tryMatchDelegateAssign(next, vd.name());
+            String delegated = tryMatchDelegateAssign(next, tempName);
             if (delegated != null) {
-                // 使用真实变量名和类型
                 realName = delegated;
-                // 从 VariableDeclaration 获取真实类型
                 if (next instanceof VariableDeclaration nvd) {
                     realType = nvd.type();
                 }
