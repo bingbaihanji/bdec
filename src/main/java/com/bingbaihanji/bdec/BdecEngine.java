@@ -264,15 +264,25 @@ public class BdecEngine implements Decompiler {
             }
 
             // 仅处理当前类的内部类
+            // 成员内部类:outerClass 指向外围类
+            // 局部类和匿名类:outerClass 为 null,通过名称前缀判断归属
             String outerName = ice.outerClass();
-            if (outerName == null || !outerName.equals(classFile.internalName())) {
+            boolean isMemberOfThis = outerName != null
+                    && outerName.equals(classFile.internalName());
+            boolean isInnerOfThis = outerName == null
+                    && innerName.startsWith(classFile.internalName() + "$");
+            if (!isMemberOfThis && !isInnerOfThis) {
                 continue;
             }
 
-            // 跳过匿名类和局部类(名称以 $数字 开头)
-            int lastSlash = innerName.lastIndexOf('/');
-            String simple = lastSlash >= 0 ? innerName.substring(lastSlash + 1) : innerName;
-            if (isAnonymousOrLocalClass(simple)) {
+            // 匿名类的 inner_name_index 为 0(null),无源码友好名称.
+            // 将其作为嵌套类型反编译(使用字节码名称如 TestClass2$1),
+            // 以确保类型引用可解析.后续改进将实现匿名类体内联.
+            // 例外:枚举常量的匿名类体由 EnumRewriter 处理,不在此反编译.
+            boolean isAnonymous = ice.simpleName() == null
+                    || ice.simpleName().isEmpty();
+            if (isAnonymous && (classFile.accessFlags() & 0x4000) != 0) {
+                // 跳过枚举外围类中的匿名类(由 EnumRewriter 处理)
                 continue;
             }
 

@@ -159,6 +159,16 @@ public class AstBuilder {
         boolean isNonStaticInner = classFile.fields().stream()
                 .anyMatch(f -> (f.accessFlags() & 0x1000) != 0
                         && f.name().startsWith("this$"));
+        // Java 21+ 局部类可能不包含 this$0 字段(通过 requireNonNull 验证后丢弃),
+        // 通过检查构造函数的 LVT 中 slot 1 是否名为 this$X 来检测
+        if (!isNonStaticInner) {
+            isNonStaticInner = classFile.methods().stream()
+                    .filter(m -> "<init>".equals(m.name()) && !m.isStatic())
+                    .anyMatch(m -> {
+                        String slot1 = m.localVarNames().get(1);
+                        return slot1 != null && slot1.startsWith("this$");
+                    });
+        }
 
         // 缓存类的泛型类型参数,用于后续方法签名解析,避免重复解析
         List<String> classTypeParams = SignatureParser.extractTypeParams(
@@ -305,16 +315,22 @@ public class AstBuilder {
         java.util.Collections.sort(importList);
 
         // 构建内部类友好名称映射:简单内部名称(如 TestClass2$StaticNested) → 友好名称(如 StaticNested).
-        // 仅限成员内部类(不以 $数字 开头),匿名/局部类保留字节码名称以确保类路径解析.
+        // 匿名类(无友好名称)也添加到映射中,键和值均为字节码名称,以确保
+        // ExpressionEmitter.typeName() 能将其解析为文件内的简单名称.
         java.util.Map<String, String> innerNames = new java.util.HashMap<>();
         for (var ice : classFile.innerClasses()) {
-            if (ice.simpleName() != null && !ice.simpleName().isEmpty()
-                    && ice.innerClass() != null) {
-                String rawSimple = simpleName(ice.innerClass());
-                // 仅对成员内部类使用友好名称(跳过匿名类如 TestClass2$1 和局部类如 TestClass2$1LocalClass)
-                if (!isAnonymousClassRef(rawSimple) && !rawSimple.equals(ice.simpleName())) {
+            if (ice.innerClass() == null) {
+                continue;
+            }
+            String rawSimple = simpleName(ice.innerClass());
+            if (ice.simpleName() != null && !ice.simpleName().isEmpty()) {
+                // 命名内部类(成员/局部):使用友好名称
+                if (!rawSimple.equals(ice.simpleName())) {
                     innerNames.put(rawSimple, ice.simpleName());
                 }
+            } else if (isAnonymousClassRef(rawSimple)) {
+                // 匿名类:键和值均为字节码名称,确保简单名称引用
+                innerNames.put(rawSimple, rawSimple);
             }
         }
 

@@ -1,0 +1,193 @@
+package com.bytecode.test;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+
+public class TestClass2 {
+    private int counter;
+    public TestClass2() {
+        this.counter = 0;
+    }
+    public static Object genericMethod(Object t) {
+        return t;
+    }
+    public static void wildcardMethod(List list) {
+        for (Object element : list) {
+            System.out.println((Number) element);
+        }
+        return;
+    }
+    public static void main(String[] args) {
+        com.bytecode.test.TestClass2 tc = new com.bytecode.test.TestClass2();
+        tc.localClassDemo();
+        tc.anonymousDemo();
+        tc.enumDemo();
+        tc.recordDemo();
+        tc.sealedDemo();
+        System.out.println(tc.patternSwitch(Integer.valueOf(5)));
+        System.out.println(tc.textBlockDemo());
+        tc.unnamedDemo();
+        tc.varDemo();
+        tc.streamDemo();
+        tc.annotatedMethod("test");
+        return;
+    }
+    public void localClassDemo() {
+        LocalClass lc = new LocalClass();
+        lc.run();
+        return;
+    }
+    public void anonymousDemo() {
+        TestClass2$1 a = new TestClass2$1();
+        a.methodA();
+        TestClass2$2 bc = new TestClass2$2(0, "anon");
+        bc.abstractMethod();
+        return;
+    }
+    public void enumDemo() {
+        com.bytecode.test.EnumDemo e = EnumDemo.ONE;
+        System.out.println(e.getValue());
+        e.action();
+        return;
+    }
+    public void recordDemo() {
+        com.bytecode.test.RecordDemo r = new com.bytecode.test.RecordDemo("Alice", 25);
+        try {
+            if (true) {
+                return;
+            }
+             else {
+                com.bytecode.test.RecordDemo var3 = (com.bytecode.test.RecordDemo) obj;
+                return var3.name();
+                String var6 = var3.name();
+                String name = var6;
+                return var3.age();
+                var6 = var3.age();
+                int var7 = var6;
+                if (1 == 0) {
+                    int var6 = 0;
+                    int age = var6;
+                    int name = 0;
+                    makeConcatWithConstants(name, age);
+                }
+            }
+        }
+         catch (Throwable e) {
+            String var3 = var3.name();
+            throw new MatchException(var3.toString(), var3);
+        }
+    }
+    public void sealedDemo() {
+        com.bytecode.test.SealedChild1 sp = new com.bytecode.test.SealedChild1();
+        sp.sealedMethod();
+        if (!(sp instanceof com.bytecode.test.SealedChild1)) {
+            System.out.println("Is SealedChild1");
+            return;
+        }
+    }
+    public void annotatedMethod(String param) {
+        System.out.println(param);
+        return;
+    }
+    public String patternSwitch(Object obj) {
+        Object var2 = obj;
+        int var3 = 1;
+        if ((Integer) var2.intValue() > 0) {
+        }
+        Integer i = (Integer) var2;
+        return "positive int";
+    }
+    public String textBlockDemo() {
+        return "Line 1\nLine 2\nLine 3\n";
+    }
+    public void unnamedDemo() {
+        try {
+            int add = 10 / 0;
+        }
+         catch (Exception e) {
+            System.out.println("Exception caught, but variable unused");
+        }
+        System.out.println("Exception caught, but variable unused");
+    }
+    public void varDemo() {
+        ArrayList list = new ArrayList();
+        list.add("var");
+        HashMap map = new HashMap();
+        Entry entry = Map.entry("key", Integer.valueOf(123));
+        return;
+    }
+    public void streamDemo() {
+        (new String[3])[0] = "hello";
+        (new String[3])[1] = "world";
+        (new String[3])[2] = "java";
+        List words = Arrays.asList(new String[3]);
+        words.stream();
+    }
+
+    class LocalClass {
+        LocalClass() {
+        }
+        public void run() {
+            System.out.println("LocalClass");
+            return;
+        }
+    }
+
+    class TestClass2$1 implements InterfaceA {
+        TestClass2$1() {
+        }
+        public void methodA() {
+            System.out.println("Anonymous InterfaceA");
+            return;
+        }
+    }
+
+    class TestClass2$2 extends BaseClass {
+        TestClass2$2(int id, String name) {
+            super(id, name);
+        }
+        public void abstractMethod() {
+            System.out.println("Anonymous BaseClass");
+            return;
+        }
+    }
+
+    class InnerClass {
+        private final String name;
+        public InnerClass(String name) {
+            this.name = name;
+        }
+        public void display() {
+        }
+    }
+
+    class GenericClass<T, U> {
+        private T first;
+        private U second;
+        public GenericClass(T first, U second) {
+            this.first = first;
+            this.second = second;
+        }
+        public T getFirst() {
+            return first;
+        }
+        public U getSecond() {
+            return second;
+        }
+    }
+
+    class StaticNested {
+        private int value;
+        public StaticNested(int value) {
+            this.value = value;
+        }
+        public void print() {
+        }
+    }
+}
+
