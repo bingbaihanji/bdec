@@ -407,10 +407,16 @@ public final class BlockReducer {
             boolean addedReturn = false;
             for (Statement child : bs.statements()) {
                 if (child instanceof ExpressionStatement es) {
-                    if (isVoidExpr(es.expression()) || isAssignExpr(es.expression())) {
-                        result.add(child); // 保留 void/赋值表达式原样
+                    Expression e = es.expression();
+                    // 保留 void 方法调用、赋值、非 void 方法调用(其结果可能
+                    // 被后续 STORE 消费)和字段访问原样,不包装为 return.
+                    // 只有简单值(常量、变量、转换)才包装为 return.
+                    if (isVoidExpr(e) || isAssignExpr(e)
+                            || e instanceof InvocationExpr
+                            || e instanceof FieldAccessExpr) {
+                        result.add(child); // 保留原样
                     } else {
-                        result.add(new ReturnStatement(boolLiteral(es.expression(), isBoolRet)));
+                        result.add(new ReturnStatement(boolLiteral(e, isBoolRet)));
                         addedReturn = true;
                     }
                 } else if (child instanceof BlockStatement inner) {
@@ -656,6 +662,15 @@ public final class BlockReducer {
                 // 异常处理器是 JVM 伪影(monitorexit 重试),
                 // 而非真正的 Java 源码 catch/finally.
                 if (containsSynchronizedStatement(tryBody)) {
+                    continue;
+                }
+
+                // 跳过 MatchException 模式匹配处理器的 try-catch 包装.
+                // 记录模式/类型模式生成的 MatchException 处理器
+                // (NEW MatchException + THROW)会导致 try 体被分割,
+                // INVOKE 与 STORE 指令被拆分到不同基本块中产生死代码.
+                // 直接输出 try 体以保持指令对的完整性.
+                if (isMatchExceptionHandler(tci, ir)) {
                     continue;
                 }
 
@@ -2668,6 +2683,41 @@ public final class BlockReducer {
             }
         }
         return hasMonitorExit && hasThrow;
+    }
+
+    /**
+     * 检测 TryCatchInfo 是否表示 MatchException 模式匹配处理器.
+     *
+     * <p>记录模式/类型模式 switch 在字节码中生成 MatchException 处理器,
+     * 其形式为:NEW MatchException + INVOKE <init> + THROW.
+     * 这些处理器是编译器合成的,不是真正的 Java catch 子句.
+     *
+     * <p>若将此类处理器包装为 try-catch,会导致 try 体中的 INVOKE 和 STORE
+     * 指令被拆分到不同基本块中,产生死代码(return 后跟随未执行语句).
+     * 直接跳过 try-catch 包装,使 INVOKE+STORE 保持在一起.
+     */
+    private boolean isMatchExceptionHandler(TryCatchInfo info, LinearIr ir) {
+        List<IrInstruction> handlerInsns = collectHandlerInstructions(info, ir);
+        if (handlerInsns.isEmpty()) {
+            return false;
+        }
+        // 检查是否包含 NEW 指令(创建异常对象)
+        boolean hasNew = false;
+        boolean hasThrow = false;
+        for (IrInstruction insn : handlerInsns) {
+            if (insn.opcode() == IrOpcode.NEW) {
+                // 检查创建的异常类型是否为 MatchException
+                JavaType rt = insn.resultType();
+                if (rt != null && rt.internalName() != null
+                        && rt.internalName().contains("MatchException")) {
+                    hasNew = true;
+                }
+            }
+            if (insn.opcode() == IrOpcode.THROW) {
+                hasThrow = true;
+            }
+        }
+        return hasNew && hasThrow;
     }
 
     /** 从 synchronized try-catch 中提取监视器对象名称 */
