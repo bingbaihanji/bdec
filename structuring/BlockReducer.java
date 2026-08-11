@@ -25,6 +25,7 @@ import com.bingbaihanji.bdec.ir.Value;
 import com.bingbaihanji.bdec.ir.Variable;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
+import com.bingbaihanji.bdec.type.TypeResolver;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -1889,9 +1890,17 @@ public final class BlockReducer {
         // 从语义注解中读取已解析的引导方法信息
         String implName = getIndyAnnotation(insn, "implName");
         String implOwner = getIndyAnnotation(insn, "implOwner");
+        String implDescriptor = getIndyAnnotation(insn, "implDescriptor");
 
         // 从操作数构建参数列表(捕获变量 + 工厂参数 → lambda 参数)
         List<LambdaExpr.Param> params = buildIndyParams(operands);
+
+        // 当 INDY 操作数无法提供参数信息时(无捕获变量的 lambda),
+        // 使用实现方法描述符生成带类型的参数占位符,
+        // 确保 LambdaRewriter.buildLambdaBody 能正确替换
+        if (params.isEmpty() && implDescriptor != null && !implDescriptor.isEmpty()) {
+            params = buildParamsFromDescriptor(implDescriptor);
+        }
 
         // 检测方法引用模式(名称包含 "::" 或以 "new" 开头)
         if (mName.contains("::")) {
@@ -1954,6 +1963,24 @@ public final class BlockReducer {
                 }
             }
             params.add(new LambdaExpr.Param(pName, pt));
+        }
+        return params;
+    }
+
+    /**
+     * 从实现方法描述符构建带类型的参数占位符.
+     * 用于无捕获变量的 lambda,此时 INDY 操作数为空,
+     * 无法从操作数推导参数类型.此方法从实现方法描述符(如 "(II)I")
+     * 中解析出参数类型,为每个参数创建带类型和通用名称的占位符.
+     *
+     * @param methodDescriptor 实现方法的 JVM 描述符(如 "(II)I")
+     * @return 参数列表,仅含类型和通用名称(arg0,arg1,...)
+     */
+    private static List<LambdaExpr.Param> buildParamsFromDescriptor(String methodDescriptor) {
+        List<LambdaExpr.Param> params = new ArrayList<>();
+        JavaType[] paramTypes = TypeResolver.parseMethodParameterTypes(methodDescriptor);
+        for (int i = 0; i < paramTypes.length; i++) {
+            params.add(new LambdaExpr.Param("arg" + i, paramTypes[i]));
         }
         return params;
     }

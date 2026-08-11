@@ -1197,6 +1197,9 @@ public final class IrBuilder {
                 && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
             String implName = ConstantPoolParser.utf8(cp, nat.nameIndex());
             annotProps.put("implName", implName);
+            // 提取实现方法描述符,供 BlockReducer 生成正确的 lambda 参数占位符
+            String implDesc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
+            annotProps.put("implDescriptor", implDesc);
         }
     }
 
