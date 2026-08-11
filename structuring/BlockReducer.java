@@ -93,10 +93,15 @@ public final class BlockReducer {
      *  而内联变量,但该变量在其他组中仍有引用. */
     private Map<Variable, Integer> globalVarUseCount = Map.of();
 
+    /** INDY 指令翻译器,将 invokedynamic 模式转换为 LambdaExpr */
+    private final IndyTranslator indyTranslator;
+
     public BlockReducer() {this(true);}
 
     public BlockReducer(boolean isInstanceMethod) {
         this.isInstanceMethod = isInstanceMethod;
+        this.indyTranslator = new IndyTranslator(
+                this::getIndyAnnotation, this::valueToExpr);
     }
 
     /** 判断指令是否产生副作用,从而应成为一条语句 */
@@ -1979,7 +1984,7 @@ public final class BlockReducer {
     }
 
     /** 从 INDY 注解属性中获取字符串值 */
-    private String getIndyAnnotation(IrInstruction insn, String key) {
+    String getIndyAnnotation(IrInstruction insn, String key) {
         for (com.bingbaihanji.bdec.semantic.SemanticAnnotation ann : insn.annotations()) {
             if (ann.is(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
                 String val = ann.getString(key);
@@ -2240,7 +2245,7 @@ public final class BlockReducer {
             case INVOKE -> {
                 // Invokedynamic(lambda / 方法引用):改为生成 LambdaExpr
                 if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
-                    yield translateIndyInvoke(insn);
+                    yield indyTranslator.translate(insn);
                 }
 
                 List<Expression> args = new ArrayList<>();
