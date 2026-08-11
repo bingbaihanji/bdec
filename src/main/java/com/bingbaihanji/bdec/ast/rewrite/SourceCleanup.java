@@ -143,16 +143,19 @@ public class SourceCleanup implements RewriteRule {
                             ve.name(), null), s));
         }
         if (s instanceof BlockStatement bs) {
+            // 截断 return/throw 之后的死代码(记录模式去糖化后可能遗留)
+            List<Statement> stmts = truncateAfterTerminator(bs.statements());
+
             List<Statement> cleaned = new ArrayList<>();
             Set<String> seen = new HashSet<>();
             // 第一趟:收集当前块(含嵌套块)中所有已声明的变量名
             Set<String> allDeclared = new HashSet<>();
-            collectDeclared(bs, allDeclared);
+            collectDeclared(new BlockStatement(stmts), allDeclared);
             // 将字段名也加入已声明集合,避免自动声明时遮蔽字段
             allDeclared.addAll(fieldNames);
             // 将参数名也加入已声明集合,避免重复声明参数
             allDeclared.addAll(paramNames);
-            for (Statement c : bs.statements()) {
+            for (Statement c : stmts) {
                 // 修复模式3:重复变量声明 → 转换为赋值语句
                 if (c instanceof VariableDeclaration vd) {
                     if (!seen.add(vd.name()) && vd.initializer() != null) {
@@ -214,6 +217,24 @@ public class SourceCleanup implements RewriteRule {
      */
     private boolean isVoid(InvocationExpr inv) {
         return inv.returnType() != null && inv.returnType().kind() == TypeKind.VOID;
+    }
+
+    /**
+     * 截断 return/throw 之后的死代码.
+     *
+     * <p>记录模式去糖化和 MatchException 处理器抑制后,return 语句后
+     * 可能遗留不可达语句,导致类型不匹配和重复声明错误.
+     */
+    private static List<Statement> truncateAfterTerminator(List<Statement> stmts) {
+        for (int i = 0; i < stmts.size(); i++) {
+            Statement s = stmts.get(i);
+            if (s instanceof ReturnStatement || s instanceof ThrowStatement) {
+                if (i + 1 < stmts.size()) {
+                    return new ArrayList<>(stmts.subList(0, i + 1));
+                }
+            }
+        }
+        return stmts;
     }
 
     /**
