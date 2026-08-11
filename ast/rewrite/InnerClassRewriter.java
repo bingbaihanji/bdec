@@ -81,62 +81,21 @@ public class InnerClassRewriter extends AstTransformer implements RewriteRule {
     // ── 重写 transform 方法 ──
 
     @Override
-    protected Statement transformBlock(BlockStatement s) {
-        // 构造函数体:移除 this.this$0 = this$0; 赋值
-        if (isNonStaticInner && outerThisFieldName != null) {
-            List<Statement> filtered = new ArrayList<>();
-            for (Statement stmt : s.statements()) {
-                if (isOuterThisAssignment(stmt)) {
-                    continue; // 跳过合成的 this$0 字段赋值
-                }
-                filtered.add(stmt);
-            }
-            if (filtered.size() != s.statements().size()) {
-                // 有过滤,但仍需递归处理剩余语句
-                return new BlockStatement(transformStmtList(filtered));
-            }
-        }
-        return super.transformBlock(s);
-    }
-
-    @Override
     protected Expression transformFieldAccess(FieldAccessExpr e) {
         if (isNonStaticInner && outerThisFieldName != null) {
-            // this$0.outerField → outerField(直接访问)
+            // this$0.outerField → outerField(直接访问外围字段)
+            // 例如:this$0.counter → counter
             if (e.target() instanceof VarExpr v
                     && outerThisFieldName.equals(v.name())) {
                 return new VarExpr(e.fieldName());
             }
-            // this.this$0 → 跳过(透传为 this)
-            if (e.target() instanceof VarExpr v && "this".equals(v.name())
-                    && outerThisFieldName.equals(e.fieldName())) {
-                return new VarExpr("this");
-            }
+            // 注意:不将 this.this$0 重写为 this,因为在赋值左侧时
+            // this = X 是非法Java代码.this$0 字段初始化需要保留为
+            // this.this$0 = this$0 的形式.
         }
         return super.transformFieldAccess(e);
     }
 
-    @Override
-    protected Expression transformAssign(AssignExpr e) {
-        // this.this$0 = outerThis → 移除(在构造函数中由 outerThisAssignment 过滤)
-        // 在其他上下文中,转换为无操作
-        if (isNonStaticInner && outerThisFieldName != null
-                && e.target() instanceof FieldAccessExpr fa
-                && fa.target() instanceof VarExpr vt && "this".equals(vt.name())
-                && outerThisFieldName.equals(fa.fieldName())) {
-            return e.value(); // 仅返回 rhs,剥离赋值
-        }
-        return super.transformAssign(e);
-    }
-
-    // ── 辅助方法 ──
-
-    private boolean isOuterThisAssignment(Statement s) {
-        if (!(s instanceof ExpressionStatement es)) return false;
-        if (!(es.expression() instanceof AssignExpr assign)) return false;
-        if (!(assign.target() instanceof FieldAccessExpr fa)) return false;
-        if (!(fa.target() instanceof VarExpr vt) || !"this".equals(vt.name()))
-            return false;
-        return outerThisFieldName.equals(fa.fieldName());
-    }
+    // 注意:不再过滤 this.this$0 = this$0 赋值,因为 this$0 字段和构造函数参数
+    // 都被 AstBuilder 保留,字段需要被初始化.此赋值在构造函数中产生且是必需的.
 }

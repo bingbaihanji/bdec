@@ -2335,9 +2335,9 @@ public final class BlockReducer {
                             ctorArgs.add(valueToExpr(op));
                         }
                     }
-                    // 去除内部类/局部类/匿名类构造函数的隐式外围实例(this)参数
-                    ctorArgs = stripEnclosingThis(insn.resultType(), ctorArgs);
                     // NewExpr 构造函数为 (type, dimensions, constructorArgs)
+                    // 注意:不再调用 stripEnclosingThis,因为 AstBuilder 保留了 this$0
+                    // 构造函数参数,调用处需传递 this 以保持一致性
                     yield new NewExpr(insn.resultType(), List.of(), ctorArgs);
                 }
                 // NewExpr 构造函数为 (type, dimensions, constructorArgs)
@@ -2452,31 +2452,7 @@ public final class BlockReducer {
     /** 将 Value(Variable / ConstantValue / InstructionRef)转为 Expression.
      *  对于 InstructionRef,递归翻译引用的指令以构建正确的表达式树. */
     private Expression valueToExpr(Value v) {
-        return switch (v) {
-            case Variable var -> {
-                // 检查此变量的值是否已从 STORE 内联.
-                // 处理:x = 42; ... use(x) → 42
-                Value storeSource = currentVarStoreSource.get(var);
-                if (storeSource != null) {
-                    yield valueToExpr(storeSource);
-                }
-                yield varToExpr(var);
-            }
-            case ConstantValue cv -> {
-                Object val = cv.value();
-                if (val == null) {
-                    yield new VarExpr("null");
-                }
-                yield new LitExpr(val, cv.type());
-            }
-            case InstructionRef ref -> {
-                // 递归翻译引用的指令以构建表达式树
-                IrInstruction def = ref.instruction();
-                Expression expr = translateExpr(def);
-                yield expr != null ? expr : new VarExpr("tmp" + def.id());
-            }
-            default -> new VarExpr("varUnresolved");
-        };
+        return ExpressionTranslator.valueToExpr(v, currentVarStoreSource, this::translateExpr);
     }
 
     /** 检测复合赋值模式:{@code x = x OP y} → {@code x OP= y}.
@@ -2521,49 +2497,13 @@ public final class BlockReducer {
      *  使用变量名(优先从 LocalVariableTable 获取,回退到 "var" + originalIndex).
      *  代表 slot-0 临时值的版本化变量与 {@code this} 进行区分. */
     private VarExpr varToExpr(Variable var) {
-        String name = var.name();
-        // 在实例方法中,slot 0 version 0 是 'this'
-        if (isInstanceMethod && var.slot() == 0 && var.version() == 0) {
-            return new VarExpr("this");
-        }
-        // 对于 LVT 命名的变量,始终使用该名称
-        if (name != null && !name.startsWith("var")) {
-            return new VarExpr(name);
-        }
-        // 回退:区分相同 slot 下的不同版本
-        if (var.version() > 0) {
-            return new VarExpr("var" + var.slot());
-        }
-        return new VarExpr(name != null ? name : "var" + var.slot());
+        return ExpressionTranslator.varToExpr(var, isInstanceMethod);
     }
 
     /** 将 CONST IR 转为 LitExpr */
+    /** 将 CONST IR 转为 LitExpr */
     private Expression constToExpr(IrInstruction insn) {
-        if (!insn.operands().isEmpty() && insn.operands().getFirst() instanceof ConstantValue(
-                Object v, JavaType type
-        )) {
-            // 类字面量常量(来自 LDC):输出为 ClassName.class
-            if (v instanceof String s && isClassType(type)) {
-                String simpleName = simplifyClassName(s);
-                return new FieldAccessExpr(new VarExpr(simpleName), "class");
-            }
-            if (v instanceof String s) {
-                return new LitExpr(s, JavaType.classType("java/lang/String"));
-            }
-            // 检查来自 TypeAwareConstantFolder 的布尔注解
-            if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.BOOLEAN_RETURN)) {
-                var ann = insn.getAnnotation(com.bingbaihanji.bdec.semantic.SemanticTag.BOOLEAN_RETURN);
-                if (ann != null) {
-                    return new LitExpr(ann.getBoolean(
-                            com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_BOOLEAN_VALUE),
-                            JavaType.BOOLEAN);
-                }
-            }
-            // 保留 ConstantValue 的类型以实现正确的输出.
-            // 直接传递 v——null 由 emitLiteral() 处理为关键字 "null".
-            return new LitExpr(v, type);
-        }
-        return new VarExpr("/* const */");
+        return ExpressionTranslator.constToExpr(insn);
     }
 
     /** 检查是否有局部变量与给定字段名相同,这将在剥离 "this." 前缀时造成歧义 */
