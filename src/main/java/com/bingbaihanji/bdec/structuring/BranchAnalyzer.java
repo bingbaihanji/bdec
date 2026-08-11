@@ -22,16 +22,17 @@ import java.util.Set;
  *   <li>If-Then:S1 == F 或 S2 == F(仅一个分支,无 else)</li>
  *   <li>If-Else:两个后继均不等于 F,且两者最终都能到达 F</li>
  * </ul>
+ *
+ * <p><b>条件取反:</b>CFG 中 TRUE_BRANCH 边指向跳转目标(字节码条件为真时执行的位置),
+ * FALSE_BRANCH 边指向直落路径(字节码条件为假时执行的位置).
+ * CONDITION IR 指令已将 ifeq 翻译为 {@code !(value)} 等形式.
+ * 当 then 体来自 FALSE_BRANCH 路径时,表示"条件为假时执行的代码",
+ * 因此需要对 CONDITION 再次取反以产生正确的 Java 语义.
  */
 public final class BranchAnalyzer {
 
     /**
      * 分析控制流图中的条件分支结构.
-     *
-     * @param graph       控制流图
-     * @param domTree     支配树(保留参数,供扩展使用)
-     * @param postDomTree 后支配树
-     * @return 检测到的 IfInfo 列表
      */
     public List<IfInfo> analyze(ControlFlowGraph graph, DominatorTree domTree,
                                 PostDominatorTree postDomTree) {
@@ -46,10 +47,24 @@ public final class BranchAnalyzer {
                 continue;
             }
 
-            // 仅处理条件分支块(启发式:具有 TRUE_BRANCH/FALSE_BRANCH 类型的边)
-            boolean hasCond = graph.outgoingOf(block).stream()
-                    .anyMatch(e -> e.kind() == EdgeKind.TRUE_BRANCH || e.kind() == EdgeKind.FALSE_BRANCH);
-            if (!hasCond) {
+            // 通过边类型识别 true 和 false 分支
+            BasicBlock trueTarget = null, falseTarget = null;
+            for (var edge : graph.outgoingOf(block)) {
+                if (edge.kind() == EdgeKind.TRUE_BRANCH) {
+                    trueTarget = edge.target();
+                } else if (edge.kind() == EdgeKind.FALSE_BRANCH) {
+                    falseTarget = edge.target();
+                }
+            }
+            if (trueTarget == null && falseTarget == null) {
+                continue;
+            }
+            // 用剩余的后继填补缺失的目标
+            for (BasicBlock s : succs) {
+                if (trueTarget == null && s != falseTarget) trueTarget = s;
+                if (falseTarget == null && s != trueTarget) falseTarget = s;
+            }
+            if (trueTarget == null || falseTarget == null) {
                 continue;
             }
 
@@ -58,35 +73,35 @@ public final class BranchAnalyzer {
                 continue;
             }
 
-            BasicBlock s1 = succs.get(0), s2 = succs.get(1);
+            Set<BasicBlock> thenBlocks, elseBlocks;
+            boolean negateCondition = false;
 
-            if (s2 == follow) {
-                // 第二个后继直接到合并点 → s1 是 then 体(if-then,无 else)
-                Set<BasicBlock> thenBlocks = collectBranch(s1, follow, graph);
-                results.add(new IfInfo(block, follow, thenBlocks, Set.of()));
-            } else if (s1 == follow) {
-                // 第一个后继直接到合并点 → s2 是 then 体(if-then,无 else)
-                Set<BasicBlock> thenBlocks = collectBranch(s2, follow, graph);
-                results.add(new IfInfo(block, follow, thenBlocks, Set.of()));
+            if (trueTarget == follow) {
+                // 跳转目标直达 follow → false 分支(直落)是 then 体
+                // CONDITION 已将 ifeq 翻译为 !(值),但 then 体在 CONDITION 为假时执行,
+                // 因此需要取反:!(!(值)) = 值
+                thenBlocks = collectBranch(falseTarget, follow, graph);
+                elseBlocks = Set.of();
+                negateCondition = true;
+            } else if (falseTarget == follow) {
+                // 直落路径直达 follow → true 分支(跳转)是 then 体
+                // 不需要取反,因为 then 体在 CONDITION 为真时执行
+                thenBlocks = collectBranch(trueTarget, follow, graph);
+                elseBlocks = Set.of();
             } else {
-                // 两个后继都不到合并点 → if-else
-                Set<BasicBlock> thenBlocks = collectBranch(s1, follow, graph);
-                Set<BasicBlock> elseBlocks = collectBranch(s2, follow, graph);
-                results.add(new IfInfo(block, follow, thenBlocks, elseBlocks));
+                // 两个后继都不直达 follow → if-else
+                thenBlocks = collectBranch(trueTarget, follow, graph);
+                elseBlocks = collectBranch(falseTarget, follow, graph);
             }
+
+            results.add(new IfInfo(block, follow, thenBlocks, elseBlocks, negateCondition));
         }
         return results;
     }
 
     /**
      * 收集从起始块到结束块(不含)之间的所有可达块.
-     *
-     * <p>仅沿非异常边遍历——处理器块绝不能被包含在 if/else 分支体中.
-     *
-     * @param start 起始基本块
-     * @param stop  结束基本块(不包含在结果中)
-     * @param graph 控制流图
-     * @return 可达块集合(保持插入顺序)
+     * 仅沿非异常边遍历——处理器块绝不能被包含在 if/else 分支体中.
      */
     private Set<BasicBlock> collectBranch(BasicBlock start, BasicBlock stop,
                                           ControlFlowGraph graph) {
@@ -98,7 +113,6 @@ public final class BranchAnalyzer {
             if (curr == stop || !result.add(curr)) {
                 continue;
             }
-            // 仅沿非异常边遍历——处理器块绝不能被包含在 if/else 分支体中
             for (var edge : graph.outgoingOf(curr)) {
                 if (edge.kind() == EdgeKind.EXCEPTION) {
                     continue;
