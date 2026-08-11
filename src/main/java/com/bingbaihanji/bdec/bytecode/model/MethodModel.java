@@ -23,7 +23,8 @@ import java.util.Map;
  * @param maxStack          操作数栈最大深度
  * @param maxLocals         局部变量表最大槽位数
  * @param signature         方法级泛型签名属性,若无则为空字符串
- * @param localVarNames     局部变量索引到变量名的映射(来自 LVT 属性)
+ * @param localVarNames     局部变量索引到变量名的映射(来自 LVT 属性,保留用于向后兼容)
+ * @param localVarEntries   作用域感知的局部变量表条目列表(用于按字节码偏移量查找变量名)
  */
 public record MethodModel(
         int accessFlags,
@@ -36,7 +37,8 @@ public record MethodModel(
         int maxStack,
         int maxLocals,
         String signature,
-        Map<Integer, String> localVarNames
+        Map<Integer, String> localVarNames,
+        List<LocalVariableEntry> localVarEntries
 ) {
 
     /** 向后兼容的构造函数,不含签名与局部变量表信息. */
@@ -47,7 +49,7 @@ public record MethodModel(
                        int maxStack, int maxLocals) {
         this(accessFlags, name, descriptor, returnType, parameterTypes,
                 instructions, exceptionHandlers, maxStack, maxLocals, "",
-                Collections.emptyMap());
+                Collections.emptyMap(), Collections.emptyList());
     }
 
     /** 包含签名但不含局部变量表的构造函数. */
@@ -59,7 +61,26 @@ public record MethodModel(
                        String signature) {
         this(accessFlags, name, descriptor, returnType, parameterTypes,
                 instructions, exceptionHandlers, maxStack, maxLocals, signature,
-                Collections.emptyMap());
+                Collections.emptyMap(), Collections.emptyList());
+    }
+
+    /**
+     * 按字节码偏移量查找局部变量名(作用域感知).
+     *
+     * <p>遍历局部变量表条目,返回在给定偏移量处第一个匹配的槽位名称.
+     * 若该偏移量处无匹配条目,回退到 {@code localVarNames} 映射.
+     *
+     * @param slot 局部变量槽位索引
+     * @param pc   字节码偏移量
+     * @return 变量名,若未找到则返回 {@code null}
+     */
+    public String lookupVarName(int slot, int pc) {
+        for (LocalVariableEntry entry : localVarEntries) {
+            if (entry.slot() == slot && entry.covers(pc)) {
+                return entry.name();
+            }
+        }
+        return localVarNames.get(slot);
     }
 
     /**

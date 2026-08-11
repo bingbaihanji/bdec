@@ -51,6 +51,7 @@ public final class IrBuilder {
 
     /** 当前方法的局部变量表名称(槽位 → 名称),在 simulateBlock 时设置. */
     private java.util.Map<Integer, String> currentLvtNames = java.util.Collections.emptyMap();
+    private MethodModel currentMethod = null;
 
     /** 来自类文件的引导方法列表,用于 invokedynamic 的解析. */
     private List<BootstrapMethodEntry> currentBootstrapMethods = java.util.Collections.emptyList();
@@ -385,6 +386,7 @@ public final class IrBuilder {
                                      ConstantPoolEntry[] cp,
                                      java.util.Map<Integer, String> lvtNames) {
         this.currentLvtNames = lvtNames;
+        this.currentMethod = method;
         Deque<Value> stack = new ArrayDeque<>(entry.stack());
         Value[] locals = entry.locals().clone();
 
@@ -680,7 +682,7 @@ public final class IrBuilder {
         JavaType type = loadType(op);
         Value v = locals[idx];
         if (v == null) {
-            v = lookupReadVar(variables, idx, type);
+            v = lookupReadVar(variables, idx, type, offset);
         }
         // 确保变量携带其局部变量表名称(即使来自前驱帧状态)
         if (v instanceof Variable var && currentLvtNames.containsKey(idx)
@@ -723,7 +725,7 @@ public final class IrBuilder {
         int idx = varIndex(insn, op);
         Value val = stack.pop();
         // 每次存储都创建一个新版本——防止"this"槽位混淆
-        Variable var = createWriteVar(variables, idx, val.type());
+        Variable var = createWriteVar(variables, idx, val.type(), offset);
         // 将新Variable存入locals数组确保后续LOAD找到Variable而非原始InstructionRef.
         // 这能防止错误的表达式展开,例如:
         // "n = cap - 1 | cap - 1 >>> 1" → "n = n | n >>> 1"(错误!)
@@ -744,8 +746,8 @@ public final class IrBuilder {
         int idx = varIndex(insn, Opcode.IINC);
         int incr = insn.rawOperands().size() > 1 ? insn.rawOperands().get(1) : 0;
         // IINC读取当前值并写入新值——创建新版本变量
-        Variable readVar = lookupReadVar(variables, idx, JavaType.INT);
-        Variable writeVar = createWriteVar(variables, idx, JavaType.INT);
+        Variable readVar = lookupReadVar(variables, idx, JavaType.INT, offset);
+        Variable writeVar = createWriteVar(variables, idx, JavaType.INT, offset);
         // 更新locals数组以便同一块内后续LOAD看到新版本
         if (idx < locals.length) {
             locals[idx] = writeVar;
@@ -1503,7 +1505,8 @@ public final class IrBuilder {
      * 同时将isParameter标志从版本0传播到所有新版本,防止BlockReducer
      * 为参数重赋值(如"int dest = 0"遮盖了参数"int[] dest")生成VariableDeclaration.
      */
-    private Variable createWriteVar(List<Variable> variables, int slot, JavaType type) {
+    private Variable createWriteVar(List<Variable> variables, int slot, JavaType type,
+                                      int offset) {
         int maxVersion = 0;
         boolean isParam = false;
         for (Variable v : variables) {
@@ -1520,9 +1523,15 @@ public final class IrBuilder {
         // 向前传播局部变量表名称以便新版本保留原始参数名.
         // 但是跳过实例方法中的槽位0:'this'仅版本0有效;
         // 对槽位0的写入是一个重用该槽位的不同变量.
-        if (currentLvtNames.containsKey(slot)
+        // 使用作用域感知查找:优先按 PC 查找 LVT 条目,
+        // 回退到 flat map(向后兼容旧 MethodModel)
+        String lvtName = currentMethod.lookupVarName(slot, offset);
+        if (lvtName == null) {
+            lvtName = currentLvtNames.get(slot);
+        }
+        if (lvtName != null
                 && !(slot == 0 && maxVersion > 0)) {
-            v.setName(currentLvtNames.get(slot));
+            v.setName(lvtName);
         }
         variables.add(v);
         return v;
@@ -1532,7 +1541,8 @@ public final class IrBuilder {
      * 获取指定槽位最新版本的变量(用于LOAD指令).
      * 如果尚无该槽位的变量,则创建版本0的新变量,并应用局部变量表名称.
      */
-    private Variable lookupReadVar(List<Variable> variables, int slot, JavaType type) {
+    private Variable lookupReadVar(List<Variable> variables, int slot, JavaType type,
+                                   int offset) {
         Variable latest = null;
         for (Variable v : variables) {
             if (v.slot() == slot && (latest == null || v.version() > latest.version())) {
@@ -1542,10 +1552,14 @@ public final class IrBuilder {
         if (latest != null) {
             return latest;
         }
-        // 首次访问:创建版本0,如有局部变量表名称则应用
+        // 首次访问:创建版本0,使用作用域感知查找 LVT 名称
         Variable v = new Variable(slot, 0, type, false, slot);
-        if (currentLvtNames.containsKey(slot)) {
-            v.setName(currentLvtNames.get(slot));
+        String lvtName = currentMethod.lookupVarName(slot, offset);
+        if (lvtName == null) {
+            lvtName = currentLvtNames.get(slot);
+        }
+        if (lvtName != null) {
+            v.setName(lvtName);
         }
         variables.add(v);
         return v;
