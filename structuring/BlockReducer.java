@@ -256,6 +256,57 @@ public final class BlockReducer {
         return result;
     }
 
+    /** 去除内部类/局部类/匿名类构造函数的隐式外围实例(this)参数.
+     *  在 Java 源码中,{@code new InnerClass()} 不需要显式传递 this,
+     *  而字节码中内部类构造函数会包含外围实例作为第一个参数. */
+    private static List<Expression> stripEnclosingThis(JavaType targetType, List<Expression> args) {
+        if (args.isEmpty()) {
+            return args;
+        }
+        // 仅对内部类/局部类/匿名类(名称含 $)进行处理
+        String internal = targetType.internalName();
+        if (internal == null) {
+            return args;
+        }
+        int lastSlash = internal.lastIndexOf('/');
+        String simple = lastSlash >= 0 ? internal.substring(lastSlash + 1) : internal;
+        if (!simple.contains("$")) {
+            return args; // 非内部类,不处理
+        }
+        // 第一个参数若是 this 引用,则是隐含的外围实例,予以去除
+        Expression first = args.getFirst();
+        if (first instanceof VarExpr v && "this".equals(v.name())) {
+            List<Expression> filtered = new ArrayList<>(args);
+            filtered.removeFirst();
+            return filtered;
+        }
+        return args;
+    }
+
+    /** 检查指令列表中是否包含 NEW 指令(对象创建).
+     *  用于区分 catch 子句(创建新异常)与 finally 块(重新抛出原始异常). */
+    private static boolean containsNewInstruction(List<IrInstruction> insns) {
+        for (IrInstruction i : insns) {
+            if (i.opcode() == IrOpcode.NEW) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 检查处理器基本块中是否包含 NEW 指令(用于区分 catch 与 finally). */
+    private static boolean handlerBlockContainsNew(BasicBlock handlerBlock, LinearIr ir) {
+        if (handlerBlock == null || ir == null) {
+            return false;
+        }
+        for (IrInstruction i : ir.instructionsOf(handlerBlock)) {
+            if (i.opcode() == IrOpcode.NEW) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 判断值是否简单到可以内联(常量或基本表达式) */
     private static boolean isSimpleValue(Value v) {
         if (v instanceof ConstantValue) {
@@ -551,8 +602,11 @@ public final class BlockReducer {
             //   [finally 体副本] [返回值]
             // 我们希望生成:try { return value; } finally { ... }
             // 正常退出路径中重复的 finally 代码将被剥离.
-            boolean isFinally = tci.catchType() == null
-                    || "java/lang/Throwable".equals(tci.catchType());
+            // 例外:若处理器块包含 NEW 指令(如 MatchException 处理器),
+            // 则不是 finally 模式,而是普通 catch 子句.
+            boolean isFinally = (tci.catchType() == null
+                    || "java/lang/Throwable".equals(tci.catchType()))
+                    && !handlerBlockContainsNew(tci.handlerBlock(), ir);
 
             // 收集正常退出组(位于 try 范围之后,处理器之前)
             int normalExitEnd = lastTryGroup;
@@ -2207,6 +2261,8 @@ public final class BlockReducer {
                             ctorArgs.add(valueToExpr(op));
                         }
                     }
+                    // 去除内部类/局部类/匿名类构造函数的隐式外围实例(this)参数
+                    ctorArgs = stripEnclosingThis(insn.resultType(), ctorArgs);
                     // NewExpr 构造函数为 (type, dimensions, constructorArgs)
                     yield new NewExpr(insn.resultType(), List.of(), ctorArgs);
                 }
@@ -2912,8 +2968,11 @@ public final class BlockReducer {
         List<IrInstruction> handlerInsns = collectHandlerInstructions(info, ir);
 
         // 检查是否为 finally 模式:catch-all + 以 THROW 结尾
+        // 但若处理器创建了新的异常对象(含 NEW 指令),则是 catch 子句
+        //(如 record 模式匹配的 MatchException),而非 finally
         boolean isFinally = isCatchAll && !handlerInsns.isEmpty()
-                && handlerInsns.getLast().opcode() == IrOpcode.THROW;
+                && handlerInsns.getLast().opcode() == IrOpcode.THROW
+                && !containsNewInstruction(handlerInsns);
 
         if (isFinally) {
             // 提取 finally 体:所有处理器指令去除最后的 THROW.
