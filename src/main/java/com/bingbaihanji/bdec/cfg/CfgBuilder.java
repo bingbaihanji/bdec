@@ -195,7 +195,9 @@ public final class CfgBuilder {
                     edges.add(ControlFlowEdge.gotoEdge(block, target));
                 }
             } else if (last.mnemonic().startsWith("if")) {
-                // 条件分支:创建真分支和假分支边
+                // 条件分支:创建真分支和假分支边.
+                // 真分支 → 跳转目标:当比较结果为 true 时执行跳转
+                // 假分支 → 直落(下一条指令):当比较结果为 false 时继续
                 BasicBlock trueTarget = offsetToBlock.get(last.jumpTargets()[0]);
                 BasicBlock falseTarget = (i + 1 < blocks.size()) ? blocks.get(i + 1) : exit;
                 if (trueTarget != null) {
