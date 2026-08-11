@@ -1,8 +1,10 @@
 package com.bingbaihanji.bdec.structuring;
 
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.Value;
 import com.bingbaihanji.bdec.ir.Variable;
@@ -155,13 +157,65 @@ public final class IndyTranslator {
         if ("<init>".equals(implName)) {
             return LambdaExpr.methodRef(simplifyClassName(implOwner), "new", funcType);
         }
-        // 方法引用
-        String owner = simplifyClassName(implOwner);
-        if (!operands.isEmpty() && operands.getFirst() instanceof Variable v
-                && v.name() != null && !"this".equals(v.name())) {
-            owner = v.name();
-        }
+        // 方法引用:优先使用捕获的接收器作为 owner
+        // 例如 System.out::println → implOwner=PrintStream,但接收器是 System.out
+        String owner = resolveMethodRefOwner(implOwner, operands);
         return LambdaExpr.methodRef(owner, implName, funcType);
+    }
+
+    /**
+     * 解析方法引用的 owner 字符串.
+     *
+     * <p>对于绑定的方法引用(如 System.out::println),捕获的接收器(第一个操作数)
+     * 决定了显示名称.对于非绑定的方法引用(如 String::toUpperCase),使用实现类名.
+     *
+     * @param implOwner 实现方法所属类的内部名称(如 java/io/PrintStream)
+     * @param operands  INDY 动态参数(包含绑定的接收器或 lambda 参数)
+     * @return 方法引用 owner 的显示字符串
+     */
+    private String resolveMethodRefOwner(String implOwner, List<Value> operands) {
+        if (operands.isEmpty()) {
+            return simplifyClassName(implOwner);
+        }
+        Value first = operands.getFirst();
+        // 变量:直接使用变量名(但不包括 this,因为 this 是隐式的)
+        if (first instanceof Variable v
+                && v.name() != null && !"this".equals(v.name())) {
+            return v.name();
+        }
+        // 非变量(InstructionRef 来自 GETSTATIC/GETFIELD 等):
+        // 将值转换为表达式,提取字符串表示
+        // 例如:GETSTATIC System.out → "System.out"
+        if (!(first instanceof Variable)) {
+            try {
+                Expression expr = expressionSource.valueToExpr(first);
+                String exprStr = exprToString(expr);
+                if (exprStr != null) {
+                    return exprStr;
+                }
+            } catch (Exception ignored) {
+                // 转换失败时回退到类名
+            }
+        }
+        return simplifyClassName(implOwner);
+    }
+
+    /** 将简单表达式转为方法引用 owner 所需的字符串表示 */
+    private static String exprToString(Expression e) {
+        if (e instanceof VarExpr v) {
+            return v.name();
+        }
+        if (e instanceof FieldAccessExpr fa) {
+            String target = fa.target() != null ? exprToString(fa.target()) : null;
+            if (target != null) {
+                return target + "." + fa.fieldName();
+            }
+            return fa.fieldName();
+        }
+        if (e instanceof InvocationExpr inv) {
+            return inv.methodName();
+        }
+        return null;
     }
 
     /** 回退:将 INDY 当作普通方法调用处理 */
