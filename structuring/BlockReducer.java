@@ -1669,14 +1669,7 @@ public final class BlockReducer {
                 continue;
             }
 
-            // 跳过合成的 this$X 字段存储(非静态内部类的外围实例引用).
-            // ACC_SYNTHETIC this$0 字段在 AstBuilder 中已被过滤,
-            // 但其赋值语句仍需在 BlockReducer 中抑制.
-            if (insn.opcode() == IrOpcode.FIELD_STORE
-                    && insn.nameHint() != null
-                    && insn.nameHint().startsWith("this$")) {
-                continue;
-            }
+            // this$X 字段现在保留在输出中,其存储操作也需保留
 
             // 跳过对 java.lang.Object 的隐式 super() 调用.
             // 在字节码中每个构造函数都以 INVOKESPECIAL Object.<init>() 开始,
