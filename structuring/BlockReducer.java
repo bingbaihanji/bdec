@@ -846,6 +846,15 @@ public final class BlockReducer {
                     }
                 }
 
+                // 当 then 体来自 false 分支(trueTarget==follow)时,
+                // CONDITION 需要取反以产生正确的 Java 语义.
+                // 例如:ifeq→CONDITION 翻译为 !(值),但 then 体是 false 分支
+                // (值!=0 时的代码),因此需要再次取反以还原为原始 boolean 值.
+                if (ifInfo.negateCondition() && cond != null) {
+                    cond = new UnExpr(UnaryOperator.NOT, cond);
+                    cond = simplifyCondition(cond);
+                }
+
                 s = new IfStatement(cond != null ? cond : new com.bingbaihanji.bdec.ast.expr.LitExpr(true, JavaType.BOOLEAN),
                         thenBody != null ? thenBody : new BlockStatement(List.of()),
                         elseBody);
@@ -1068,10 +1077,15 @@ public final class BlockReducer {
             // 若某一后继即为 follow,则是 if-then(无 else)
             // 若两个后继均不是 follow,则两个分支最终都到达 follow → if-else
             Set<BasicBlock> thenBlocks, elseBlocks;
+            boolean negateCondition = false;
             if (trueTarget == follow) {
-                // true 分支直达 follow → false 分支是 "then" 体
+                // true 分支(跳转目标)直达 follow → false 分支(直落)是 "then" 体
+                // 需要取反条件:CONDITION 已经将 ifeq 翻译为 !(值),但
+                // then 体是来自 false 分支的代码,应执行 CONDITION 为假时的操作.
+                // 因此需再次取反:!(CONDITION) = 原始 boolean 值.
                 thenBlocks = collectReachableBlocks(falseTarget, follow, graph);
                 elseBlocks = Set.of();
+                negateCondition = true;
             } else if (falseTarget == follow) {
                 // false 分支直达 follow → true 分支是 "then" 体
                 thenBlocks = collectReachableBlocks(trueTarget, follow, graph);
@@ -1081,7 +1095,7 @@ public final class BlockReducer {
                 thenBlocks = collectReachableBlocks(trueTarget, follow, graph);
                 elseBlocks = collectReachableBlocks(falseTarget, follow, graph);
             }
-            return new IfInfo(b, follow, thenBlocks, elseBlocks);
+            return new IfInfo(b, follow, thenBlocks, elseBlocks, negateCondition);
         }
         return null;
     }
