@@ -82,7 +82,7 @@ public final class RequireNonNullEliminator {
                 String declaringClass = dcAnn != null
                         ? dcAnn.getString(SemanticAnnotation.KEY_DECLARING_CLASS)
                         : null;
-                if (declaringClass == null || !REQUIRE_NON_NULL_CLASS.equals(declaringClass)) {
+                if (!REQUIRE_NON_NULL_CLASS.equals(declaringClass)) {
                     // 不是 Objects.requireNonNull,可能是其他类的同名方法,跳过
                     continue;
                 }

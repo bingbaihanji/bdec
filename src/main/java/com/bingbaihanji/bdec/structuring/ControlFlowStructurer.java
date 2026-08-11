@@ -80,12 +80,9 @@ public class ControlFlowStructurer {
         }
         // 记录 try-catch 入口(以第一个 try 块为键,而非处理器)
         for (TryCatchInfo tci : tryCatchInfos) {
-            BasicBlock tryEntry = tci.tryBlocks().stream()
+            tci.tryBlocks().stream()
                     .min(Comparator.comparingInt(BasicBlock::startOffset))
-                    .orElse(null);
-            if (tryEntry != null) {
-                tryCatchAnns.put(tryEntry, tci);
-            }
+                    .ifPresent(tryEntry -> tryCatchAnns.put(tryEntry, tci));
         }
         // 从预折叠分析中记录 if/else 和循环注解.
         // 这些注解由 BlockReducer 直接用于构建 IfStatement/LoopStatement.

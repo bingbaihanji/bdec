@@ -91,6 +91,16 @@ public class LambdaRewriter implements RewriteRule {
         return new BlockStatement(stmts);
     }
 
+    /** 检测表达式是否为孤立的 lambda 占位符(不应作为独立语句存在的 lambda) */
+    private static boolean isOrphanLambda(Expression e) {
+        if (e instanceof LambdaExpr lambda && !lambda.isMethodRef()
+                && lambda.bodyExpr() instanceof VarExpr ve
+                && ve.name().startsWith("/* lambda")) {
+            return true;
+        }
+        return false;
+    }
+
     @Override
     public String name() {return "lambda";}
 
@@ -180,16 +190,6 @@ public class LambdaRewriter implements RewriteRule {
                             : null);
         }
         return s;
-    }
-
-    /** 检测表达式是否为孤立的 lambda 占位符(不应作为独立语句存在的 lambda) */
-    private static boolean isOrphanLambda(Expression e) {
-        if (e instanceof LambdaExpr lambda && !lambda.isMethodRef()
-                && lambda.bodyExpr() instanceof VarExpr ve
-                && ve.name().startsWith("/* lambda")) {
-            return true;
-        }
-        return false;
     }
 
     /** 重写表达式,将 lambda 占位符替换为反编译的 lambda 体 */

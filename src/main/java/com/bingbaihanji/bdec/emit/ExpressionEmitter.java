@@ -53,16 +53,6 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
     }
 
     /**
-     * 设置内部类名称映射,用于将字节码内部名称(如 TestClass2$1LocalClass)
-     * 解析为 Java 源码中的友好简单名称(如 LocalClass).
-     *
-     * @param names 内部名称到简单名称的映射
-     */
-    public void setInnerClassNames(java.util.Map<String, String> names) {
-        this.innerClassNames = names != null ? names : java.util.Map.of();
-    }
-
-    /**
      * 将二元运算符映射为其对应的 Java 符号字符串.
      *
      * @param op 二元运算符枚举
@@ -154,6 +144,26 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         };
     }
 
+    /** 检查简单类名是否为匿名类引用(如 TestClass2$1, Foo$2LocalClass) */
+    private static boolean isAnonymousClassName(String simpleName) {
+        int idx = simpleName.lastIndexOf('$');
+        if (idx >= 0 && idx + 1 < simpleName.length()) {
+            char c = simpleName.charAt(idx + 1);
+            return c >= '0' && c <= '9';
+        }
+        return false;
+    }
+
+    /**
+     * 设置内部类名称映射,用于将字节码内部名称(如 TestClass2$1LocalClass)
+     * 解析为 Java 源码中的友好简单名称(如 LocalClass).
+     *
+     * @param names 内部名称到简单名称的映射
+     */
+    public void setInnerClassNames(java.util.Map<String, String> names) {
+        this.innerClassNames = names != null ? names : java.util.Map.of();
+    }
+
     /**
      * 解析类型名称为最短有效形式:
      * <ul>
@@ -215,16 +225,6 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         }
         // 数组类型委托给类型自身的 displayName(递归处理)
         return type.displayName();
-    }
-
-    /** 检查简单类名是否为匿名类引用(如 TestClass2$1, Foo$2LocalClass) */
-    private static boolean isAnonymousClassName(String simpleName) {
-        int idx = simpleName.lastIndexOf('$');
-        if (idx >= 0 && idx + 1 < simpleName.length()) {
-            char c = simpleName.charAt(idx + 1);
-            return c >= '0' && c <= '9';
-        }
-        return false;
     }
 
     @Override

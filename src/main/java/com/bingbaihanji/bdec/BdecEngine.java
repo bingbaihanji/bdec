@@ -5,6 +5,7 @@ import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.rewrite.*;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
+import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
 import com.bingbaihanji.bdec.bytecode.parser.ClassFileReader;
 import com.bingbaihanji.bdec.cfg.CfgBuilder;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
@@ -24,8 +25,6 @@ import com.bingbaihanji.bdec.ir.TypeInference;
 import com.bingbaihanji.bdec.semantic.SemanticReconstructor;
 import com.bingbaihanji.bdec.structuring.ControlFlowStructurer;
 import com.bingbaihanji.bdec.structuring.StructuredMethod;
-
-import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -103,6 +102,16 @@ public class BdecEngine implements Decompiler {
     public BdecEngine(BdecConfig config, DiagnosticListener diagnostics) {
         this.config = config;
         this.diagnostics = diagnostics;
+    }
+
+    /** 检查简单类名是否为匿名类或局部类($ 后紧跟数字) */
+    private static boolean isAnonymousOrLocalClass(String simpleName) {
+        int idx = simpleName.lastIndexOf('$');
+        if (idx >= 0 && idx + 1 < simpleName.length()) {
+            char c = simpleName.charAt(idx + 1);
+            return c >= '0' && c <= '9';
+        }
+        return false;
     }
 
     @Override
@@ -233,9 +242,9 @@ public class BdecEngine implements Decompiler {
      * 在 Java 源码中没有直接的名称,需要特殊处理(内联匿名类体).</p>
      */
     private CompilationUnit decompileInnerClasses(CompilationUnit unit,
-                                                   ClassFileModel classFile,
-                                                   DecompileContext context,
-                                                   Set<String> processed) {
+                                                  ClassFileModel classFile,
+                                                  DecompileContext context,
+                                                  Set<String> processed) {
         // 防止无限递归
         if (!processed.add(classFile.internalName())) {
             return unit;
@@ -322,16 +331,6 @@ public class BdecEngine implements Decompiler {
 
         return new CompilationUnit(unit.packageName(), unit.imports(),
                 allTypes, unit.innerClassNames());
-    }
-
-    /** 检查简单类名是否为匿名类或局部类($ 后紧跟数字) */
-    private static boolean isAnonymousOrLocalClass(String simpleName) {
-        int idx = simpleName.lastIndexOf('$');
-        if (idx >= 0 && idx + 1 < simpleName.length()) {
-            char c = simpleName.charAt(idx + 1);
-            return c >= '0' && c <= '9';
-        }
-        return false;
     }
 
     /** 为内部类构建 CompilationUnit(仅类型声明,跳过源代码生成) */

@@ -34,11 +34,11 @@ public class LinearIr {
     /** 基本块ID到指令列表的映射 */
     private final Map<Integer, List<IrInstruction>> blockInstructions;
 
-    /** 源偏移量到IR指令的映射(用于虚拟块的回退查找) */
-    private Map<Integer, IrInstruction> offsetToInstruction;
-
     /** 变量列表 */
     private final List<Variable> variables;
+
+    /** 源偏移量到IR指令的映射(用于虚拟块的回退查找) */
+    private Map<Integer, IrInstruction> offsetToInstruction;
 
     /** 是否已进行SSA优化 */
     private boolean ssaOptimized;

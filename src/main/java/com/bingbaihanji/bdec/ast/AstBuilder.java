@@ -64,6 +64,17 @@ public class AstBuilder {
         return idx >= 0 ? internal.substring(idx + 1) : internal;
     }
 
+    /** 检查简单类名是否为匿名类引用(如 TestClass2$1, Foo$2LocalClass).
+     *  匿名类在 $ 后紧跟数字,在 Java 源码中不可作为类型名引用. */
+    private static boolean isAnonymousClassRef(String simpleName) {
+        int idx = simpleName.lastIndexOf('$');
+        if (idx >= 0 && idx + 1 < simpleName.length()) {
+            char c = simpleName.charAt(idx + 1);
+            return c >= '0' && c <= '9';
+        }
+        return false;
+    }
+
     /**
      * 从方法体的IR指令中收集类型引用,用于生成import语句.
      * 扫描静态方法调用的DECLARING_CLASS注解,new表达式,new数组和instanceof
@@ -143,8 +154,23 @@ public class AstBuilder {
         // 获取简单类名
         String simpleName = simpleName(classFile.internalName(), classFile.innerClasses());
 
+        // 检测当前类是否为非静态内部类(在过滤合成字段之前检查).
+        // 若为内部类,在构建构造函数时需去除编译器合成的外围实例引用参数.
+        boolean isNonStaticInner = classFile.fields().stream()
+                .anyMatch(f -> (f.accessFlags() & 0x1000) != 0
+                        && f.name().startsWith("this$"));
+
+        // 缓存类的泛型类型参数,用于后续方法签名解析,避免重复解析
+        List<String> classTypeParams = SignatureParser.extractTypeParams(
+                classFile.signature());
+
         // 构建字段声明
         for (FieldModel field : classFile.fields()) {
+            // 跳过 JVM 合成的 this$X 字段(非静态内部类的外围实例引用),
+            // 也跳过其他 ACC_SYNTHETIC 字段(编译器合成,不应出现在源码中)
+            if ((field.accessFlags() & 0x1000) != 0) {
+                continue;
+            }
             Expression init = parseFieldInitializer(field);
             // 若字段有泛型签名,则解析泛型类型参数以替代原始类型
             JavaType displayType = field.type();
@@ -169,8 +195,17 @@ public class AstBuilder {
         for (StructuredMethod sm : methods) {
             MethodModel method = sm.method();
             String[] paramNames = buildParameterNames(method);
+            JavaType[] paramTypes = method.parameterTypes();
             String methodName = resolveMethodName(method.name(), simpleName,
                     classFile.accessFlags());
+
+            // 对于非静态内部类的构造函数,去除编译器合成的首个参数
+            //(外围 this$0 引用).该参数在 Java 源码中并不存在.
+            if (isNonStaticInner && "<init>".equals(method.name())
+                    && paramNames.length > 0 && paramTypes.length > 0) {
+                paramNames = java.util.Arrays.copyOfRange(paramNames, 1, paramNames.length);
+                paramTypes = java.util.Arrays.copyOfRange(paramTypes, 1, paramTypes.length);
+            }
 
             // 从泛型签名中提取方法级类型参数
             List<String> methodTypeParams = method.signature() != null
@@ -178,20 +213,42 @@ public class AstBuilder {
                     ? SignatureParser.extractMethodTypeParams(method.signature())
                     : List.of();
 
+            // 使用泛型签名覆盖返回类型和参数类型(签名包含泛型类型变量,
+            // 而描述符仅包含原始类型 Object).仅当类声明了类型参数时才应用,
+            // 因为方法级类型变量名(如 <T>)与类型名字相同,无需额外处理.
+            JavaType returnType = method.returnType();
+            if (!classTypeParams.isEmpty()
+                    && method.signature() != null && !method.signature().isEmpty()) {
+                JavaType[] sigTypes = SignatureParser.parseMethodSignature(
+                        method.signature());
+                if (sigTypes != null && sigTypes.length == paramTypes.length + 1) {
+                    // sigTypes = [param0, param1, ..., returnType]
+                    // 仅当签名中的类型变量与类的类型参数匹配时才替换
+                    for (int si = 0; si < paramTypes.length; si++) {
+                        if (isClassTypeParam(sigTypes[si], classTypeParams)) {
+                            paramTypes[si] = sigTypes[si];
+                        }
+                    }
+                    if (isClassTypeParam(sigTypes[sigTypes.length - 1], classTypeParams)) {
+                        returnType = sigTypes[sigTypes.length - 1];
+                    }
+                }
+            }
+
             MethodDeclaration decl = new MethodDeclaration(
                     method.accessFlags(),
                     methodName,
-                    method.returnType(),
+                    returnType,
                     paramNames,
-                    method.parameterTypes(),
+                    paramTypes,
                     methodTypeParams,
                     sm.body()
             );
             members.add(decl);
 
             // 从方法签名中收集类型引用以生成import
-            collectImport(method.returnType(), imports, simpleName);
-            for (JavaType pt : method.parameterTypes()) {
+            collectImport(returnType, imports, simpleName);
+            for (JavaType pt : paramTypes) {
                 collectImport(pt, imports, simpleName);
             }
 
@@ -221,12 +278,10 @@ public class AstBuilder {
             collectImport(JavaType.classType(ifName), imports, simpleName);
         }
 
-        // 从类签名中提取泛型类型参数(如 "<E:Ljava/lang/Object;>" 解析为 ["E"])
-        List<String> typeParams = SignatureParser.extractTypeParams(classFile.signature());
-
+        // 使用缓存的泛型类型参数(已在类头部预先解析)
         TypeDeclaration td = new TypeDeclaration(
                 classFile.accessFlags(), simpleName, kind,
-                superName, interfaceNames, typeParams, members);
+                superName, interfaceNames, classTypeParams, members);
 
         // 构建import列表(过滤java.lang.*和同包类型)
         List<String> importList = new ArrayList<>();
@@ -354,6 +409,21 @@ public class AstBuilder {
     }
 
     /**
+     * 检查一个 JavaType 是否表示指定类类型参数列表中的类型变量.
+     * 类型变量在签名中以 {@code TName;} 格式出现,由 SignatureParser
+     * 解析为 {@code simpleName = 类型变量名} 的 CLASS 类型.
+     */
+    private static boolean isClassTypeParam(JavaType type, List<String> classTypeParams) {
+        if (type == null || classTypeParams.isEmpty()) {
+            return false;
+        }
+        // 类型变量在 SignatureParser 中被解析为 CLASS 类型,
+        // 并以内部名称作为类型变量名(如 "T","U")
+        String name = type.internalName();
+        return name != null && classTypeParams.contains(name);
+    }
+
+    /**
      * 为指定类型收集import条目(如果满足导入条件).
      * 仅当类型为CLASS类型且来自不同包(非当前类)时才添加到import集合中.
      *
@@ -378,16 +448,5 @@ public class AstBuilder {
                 imports.add(dotted);
             }
         }
-    }
-
-    /** 检查简单类名是否为匿名类引用(如 TestClass2$1, Foo$2LocalClass).
-     *  匿名类在 $ 后紧跟数字,在 Java 源码中不可作为类型名引用. */
-    private static boolean isAnonymousClassRef(String simpleName) {
-        int idx = simpleName.lastIndexOf('$');
-        if (idx >= 0 && idx + 1 < simpleName.length()) {
-            char c = simpleName.charAt(idx + 1);
-            return c >= '0' && c <= '9';
-        }
-        return false;
     }
 }

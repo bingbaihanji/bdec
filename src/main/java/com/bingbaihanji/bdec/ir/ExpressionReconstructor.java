@@ -51,8 +51,7 @@ public final class ExpressionReconstructor {
         }
 
         // 第二遍:内联仅使用一次的简单赋值
-        for (int i = 0; i < stmts.size(); i++) {
-            Statement s = stmts.get(i);
+        for (Statement s : stmts) {
             Statement processed = tryInline(s, inlineCandidates, useCount);
 
             // 如果是赋值给仅使用一次的临时变量,记录为内联候选而非输出

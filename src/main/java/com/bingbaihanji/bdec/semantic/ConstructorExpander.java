@@ -102,7 +102,7 @@ public final class ConstructorExpander {
      */
     private String resolveTargetClass(IrInstruction inv, ClassFileModel classFile) {
         String nameHint = inv.nameHint();
-        if (nameHint == null || !"<init>".equals(nameHint)) {
+        if (!"<init>".equals(nameHint)) {
             return null;
         }
 
