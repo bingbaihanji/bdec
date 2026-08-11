@@ -243,26 +243,23 @@ public class SourceCleanup implements RewriteRule {
      * @param s   待遍历的语句
      * @param out 输出集合,收集到的变量名将添加至此
      */
+    /**
+     * 收集当前作用域中直接声明的变量名.
+     *
+     * <p>仅收集 BlockStatement 的直接 VariableDeclaration 子节点.
+     * 不递归进入嵌套控制流结构(try/if/loop 体)中的声明,
+     * 因为这些声明在 Java 作用域规则下对外部不可见,
+     * 递归的 fix() 调用会独立处理嵌套作用域.
+     */
     private void collectDeclared(Statement s, Set<String> out) {
         if (s instanceof VariableDeclaration vd) {
             out.add(vd.name());
         } else if (s instanceof BlockStatement bs) {
-            bs.statements().forEach(c -> collectDeclared(c, out));
-        } else if (s instanceof IfStatement i) {
-            collectDeclared(i.thenBranch(), out);
-            if (i.elseBranch() != null) {
-                collectDeclared(i.elseBranch(), out);
-            }
-        } else if (s instanceof LoopStatement l) {
-            collectDeclared(l.body(), out);
-        } else if (s instanceof TryStatement t) {
-            collectDeclared(t.tryBody(), out);
-            for (var c : t.catchClauses()) {
-                out.add(c.varName()); // catch clause parameter is a declared variable
-                collectDeclared(c.body(), out);
-            }
-            if (t.finallyBody() != null) {
-                collectDeclared(t.finallyBody(), out);
+            for (Statement c : bs.statements()) {
+                if (c instanceof VariableDeclaration vd) {
+                    out.add(vd.name());
+                }
+                // 不递归进入嵌套的 if/loop/try 体
             }
         }
     }
