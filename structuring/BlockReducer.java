@@ -398,7 +398,7 @@ public final class BlockReducer {
      * (处理没有自身 RETURN 的分支中的孤立的 CONST).
      *  跳过 void 表达式(例如孤立的 lock.unlock() 调用)以避免
      *  "void cannot be converted to int" 编译错误. */
-    private static Statement wrapAsReturn(Statement s, boolean isBoolRet) {
+    private static Statement wrapAsReturn(Statement s, boolean isBoolRet, boolean isVoidRet) {
         if (s instanceof BlockStatement bs) {
             if (hasReturnStmt(s)) {
                 return s; // 已有 RETURN
@@ -420,7 +420,7 @@ public final class BlockReducer {
                         addedReturn = true;
                     }
                 } else if (child instanceof BlockStatement inner) {
-                    Statement wrapped = wrapAsReturn(inner, isBoolRet);
+                    Statement wrapped = wrapAsReturn(inner, isBoolRet, isVoidRet);
                     result.add(wrapped);
                     if (hasReturnStmt(wrapped)) {
                         addedReturn = true;
@@ -433,10 +433,16 @@ public final class BlockReducer {
                 }
             }
             // 如果未添加任何 return,追加一个合成 return 以确保方法可编译
+            // void 方法使用 return; (无值),boolean 方法使用 return false;,其他使用 return null;
             if (!addedReturn) {
-                result.add(new ReturnStatement(isBoolRet
-                        ? new com.bingbaihanji.bdec.ast.expr.LitExpr(false, JavaType.BOOLEAN)
-                        : new com.bingbaihanji.bdec.ast.expr.LitExpr(null, JavaType.classType("java/lang/Object"))));
+                if (isVoidRet) {
+                    result.add(new ReturnStatement(null));
+                } else {
+                    result.add(new ReturnStatement(isBoolRet
+                            ? new com.bingbaihanji.bdec.ast.expr.LitExpr(false, JavaType.BOOLEAN)
+                            : new com.bingbaihanji.bdec.ast.expr.LitExpr(null,
+                                    JavaType.classType("java/lang/Object"))));
+                }
             }
             if (result.isEmpty()) {
                 return new BlockStatement(List.of());
@@ -448,7 +454,10 @@ public final class BlockReducer {
         }
         if (s instanceof ExpressionStatement es) {
             if (isVoidExpr(es.expression()) || isAssignExpr(es.expression())) {
-                // 对赋值表达式,追加一个合成 null return 以满足编译器
+                // 对 void 方法使用 return;(无值),否则追加合成 null/0/false return
+                if (isVoidRet) {
+                    return new BlockStatement(List.of(s, new ReturnStatement(null)));
+                }
                 return new BlockStatement(List.of(
                         s,
                         new ReturnStatement(isBoolRet
@@ -831,16 +840,18 @@ public final class BlockReducer {
                 boolean elseHasReturn = hasReturnStmt(elseBody);
                 boolean isBoolRet = ir.method().returnType() != null
                         && ir.method().returnType().kind() == TypeKind.BOOLEAN;
+                boolean isVoidRet = ir.method().returnType() != null
+                        && ir.method().returnType().kind() == TypeKind.VOID;
 
                 if (thenHasReturn != elseHasReturn) {
                     if (thenHasReturn) {
                         thenBody = stripOrphanExprs(thenBody);
                         if (elseBody != null) {
-                            elseBody = wrapAsReturn(elseBody, isBoolRet);
+                            elseBody = wrapAsReturn(elseBody, isBoolRet, isVoidRet);
                         }
                     } else {
                         if (thenBody != null) {
-                            thenBody = wrapAsReturn(thenBody, isBoolRet);
+                            thenBody = wrapAsReturn(thenBody, isBoolRet, isVoidRet);
                         }
                         elseBody = stripOrphanExprs(elseBody);
                     }
@@ -1157,15 +1168,17 @@ public final class BlockReducer {
             boolean elseHasReturn = hasReturnStmt(elseBody);
             boolean isBoolRet = ir.method().returnType() != null
                     && ir.method().returnType().kind() == TypeKind.BOOLEAN;
+            boolean isVoidRet = ir.method().returnType() != null
+                    && ir.method().returnType().kind() == TypeKind.VOID;
             if (thenHasReturn != elseHasReturn) {
                 if (thenHasReturn) {
                     thenBody = stripOrphanExprs(thenBody);
                     if (elseBody != null) {
-                        elseBody = wrapAsReturn(elseBody, isBoolRet);
+                        elseBody = wrapAsReturn(elseBody, isBoolRet, isVoidRet);
                     }
                 } else {
                     if (thenBody != null) {
-                        thenBody = wrapAsReturn(thenBody, isBoolRet);
+                        thenBody = wrapAsReturn(thenBody, isBoolRet, isVoidRet);
                     }
                     elseBody = stripOrphanExprs(elseBody);
                 }
