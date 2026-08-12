@@ -177,7 +177,7 @@ class StructureParser {
                                 String varDesc = ConstantPoolParser.utf8(pool, lvtDescIdx);
                                 // 存储作用域感知条目,用于按字节码偏移量查找
                                 if (varName != null && !varName.isEmpty()) {
-                                    localVarNames.putIfAbsent(index, varName);
+                                    localVarNames.put(index, varName); // 最后出现的名称优先,作用域感知查找处理消歧
                                     lvtEntries.add(new com.bingbaihanji.bdec.bytecode.model
                                             .LocalVariableEntry(startPc, length, varName,
                                             index, varDesc));
