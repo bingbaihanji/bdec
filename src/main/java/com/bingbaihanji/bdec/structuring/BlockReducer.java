@@ -2224,17 +2224,23 @@ public final class BlockReducer {
 
                     BinaryOperator cmpOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
 
-                    if (leftIsBool && rightIsZero) {
+                    // 布尔+0 简化:仅当布尔值不来自 COMPARE 时适用.
+                    // COMPARE+CONDITION 需要保留原始比较运算符(如 GT),
+                    // 由下方的 COMPARE 合并逻辑处理.
+                    boolean leftFromCompare = leftOp instanceof InstructionRef ref
+                            && ref.instruction().opcode() == IrOpcode.COMPARE;
+                    boolean rightFromCompare = rightOp instanceof InstructionRef ref
+                            && ref.instruction().opcode() == IrOpcode.COMPARE;
+
+                    if (leftIsBool && rightIsZero && !leftFromCompare) {
                         Expression varExpr = valueToExpr(leftOp);
                         if (cmpOp == BinaryOperator.EQ) {
-                            // boolean == 0 → !boolean (IFEQ)
                             yield new UnExpr(UnaryOperator.NOT, varExpr);
                         } else if (cmpOp == BinaryOperator.NE) {
-                            // boolean != 0 → boolean (IFNE)
                             yield varExpr;
                         }
                     }
-                    if (rightIsBool && leftIsZero) {
+                    if (rightIsBool && leftIsZero && !rightFromCompare) {
                         Expression varExpr = valueToExpr(rightOp);
                         if (cmpOp == BinaryOperator.EQ) {
                             yield new UnExpr(UnaryOperator.NOT, varExpr);
