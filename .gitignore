@@ -1,0 +1,29 @@
+# ---- Maven / build output ----
+target/
+
+# ---- IDE ----
+.idea/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+.vscode/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Local tooling state ----
+# Claude Code 本地配置(如需将技能/设置共享给贡献者,可选择性取消忽略)
+.claude/
+# xcodemap 工具本地数据
+.xcodemap/
+
+# ---- Misc ----
+*.log
+*.tmp
+__pycache__/
+*.pyc
