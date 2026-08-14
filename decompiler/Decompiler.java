@@ -2,6 +2,7 @@ package com.bingbaihanji.bdec.decompiler;
 
 import com.bingbaihanji.bdec.BdecConfig;
 import com.bingbaihanji.bdec.BdecResult;
+import com.bingbaihanji.bdec.BuildInfo;
 import com.bingbaihanji.bdec.DecompileContext;
 
 import java.nio.file.Path;
@@ -24,7 +25,7 @@ public interface Decompiler extends AutoCloseable {
      * @return 引擎名称,例如 "bdec-core"
      */
     default String getName() {
-        return "bdec";
+        return BuildInfo.NAME;
     }
 
     /**
@@ -33,7 +34,7 @@ public interface Decompiler extends AutoCloseable {
      * @return 语义化版本号
      */
     default String getVersion() {
-        return "1.0.0";
+        return BuildInfo.VERSION;
     }
 
     /**

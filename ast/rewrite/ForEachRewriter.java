@@ -43,6 +43,9 @@ public class ForEachRewriter implements RewriteRule {
     public String name() {return "for-each";}
 
     @Override
+    public RewriteRuleKind kind() {return RewriteRuleKind.FOR_EACH;}
+
+    @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
         List<TypeDeclaration> types = new ArrayList<>();
         for (TypeDeclaration td : unit.types()) {
@@ -56,15 +59,12 @@ public class ForEachRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(),
-                        md.body() != null ? rewriteBlock(md.body()) : null));
+                members.add(withBody(md, md.body() != null ? rewriteBlock(md.body()) : null));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /** 递归重写语句块,检测 for-each 模式 */
@@ -133,6 +133,25 @@ public class ForEachRewriter implements RewriteRule {
                         candidate.iterableExpr,
                         result.body);
 
+                // 元素类型合并:循环体中元素变量全部被转型为同一类型 T
+                //(如 println((String) element))时,把 T 提升为元素变量类型
+                // 并移除转型——还原 for (String item : list) 形式.
+                String elemName = ((com.bingbaihanji.bdec.ast.expr.VarExpr) result.elementVar).name();
+                com.bingbaihanji.bdec.type.JavaType elemType = findCastType(result.body, elemName);
+                if (System.getenv("BDEC_DEBUG_TMP") != null) {
+                    System.err.println("[FEDBG] elemName=" + elemName + " elemType=" + elemType);
+                }
+                if (elemType != null) {
+                    forEach = new LoopStatement(LoopStatement.LoopKind.FOR_EACH,
+                            forEach.initExpr(), forEach.condition(), forEach.incrExpr(),
+                            stripCasts(result.body, elemName),
+                            result.elementVar, elemType);
+                    if (System.getenv("BDEC_DEBUG_TMP") != null) {
+                        System.err.println("[FEDBG] built forEachVarType="
+                                + forEach.forEachVarType());
+                    }
+                }
+
                 // 用增强 for-each 循环替换 Iterator 声明和 while 循环
                 stmts.remove(i + 1);
                 stmts.remove(i);
@@ -143,6 +162,164 @@ public class ForEachRewriter implements RewriteRule {
         } while (changed);
 
         return new BlockStatement(stmts);
+    }
+
+    /** 若循环体中元素变量的所有引用均转型为同一类型,返回该类型;
+     *  存在未转型引用或转型目标不一致时返回 null. */
+    private com.bingbaihanji.bdec.type.JavaType findCastType(Statement body, String elemName) {
+        com.bingbaihanji.bdec.type.JavaType result = null;
+        boolean found = false;
+        for (Statement st : flatten(body)) {
+            com.bingbaihanji.bdec.type.JavaType t = findCastTypeInStmt(st, elemName);
+            if (t == UNCAST_MARKER) {
+                return null; // 存在未转型的使用——无法合并
+            }
+            if (t != null) {
+                if (found && !result.descriptor().equals(t.descriptor())) {
+                    return null; // 转型目标不一致
+                }
+                result = t;
+                found = true;
+            }
+        }
+        return found ? result : null;
+    }
+
+    /** 未转型引用的哨兵(调用方按 null 处理) */
+    private static final com.bingbaihanji.bdec.type.JavaType UNCAST_MARKER =
+            com.bingbaihanji.bdec.type.JavaType.INT;
+
+    /** 语句中元素变量的转型目标类型;无引用返回 null,未转型返回哨兵 */
+    private com.bingbaihanji.bdec.type.JavaType findCastTypeInStmt(Statement st, String elemName) {
+        if (st instanceof ExpressionStatement es) {
+            return findCastTypeInExpr(es.expression(), elemName);
+        }
+        if (st instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement rs && rs.value() != null) {
+            return findCastTypeInExpr(rs.value(), elemName);
+        }
+        if (st instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd && vd.initializer() != null) {
+            return findCastTypeInExpr(vd.initializer(), elemName);
+        }
+        return null;
+    }
+
+    private com.bingbaihanji.bdec.type.JavaType findCastTypeInExpr(Expression e, String elemName) {
+        if (e == null) {
+            return null;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.CastExpr cast
+                && cast.operand() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
+                && elemName.equals(v.name())) {
+            return cast.targetType();
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
+                && elemName.equals(v.name())) {
+            return UNCAST_MARKER;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.BinExpr b) {
+            com.bingbaihanji.bdec.type.JavaType l = findCastTypeInExpr(b.left(), elemName);
+            if (l == UNCAST_MARKER) {
+                return UNCAST_MARKER;
+            }
+            com.bingbaihanji.bdec.type.JavaType r = findCastTypeInExpr(b.right(), elemName);
+            if (r == UNCAST_MARKER) {
+                return UNCAST_MARKER;
+            }
+            if (l != null && r != null && !l.descriptor().equals(r.descriptor())) {
+                return UNCAST_MARKER;
+            }
+            return l != null ? l : r;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
+            com.bingbaihanji.bdec.type.JavaType acc = null;
+            if (inv.target() != null) {
+                acc = findCastTypeInExpr(inv.target(), elemName);
+                if (acc == UNCAST_MARKER) {
+                    return UNCAST_MARKER;
+                }
+            }
+            for (Expression a : inv.arguments()) {
+                com.bingbaihanji.bdec.type.JavaType t = findCastTypeInExpr(a, elemName);
+                if (t == UNCAST_MARKER) {
+                    return UNCAST_MARKER;
+                }
+                if (t != null) {
+                    if (acc != null && !acc.descriptor().equals(t.descriptor())) {
+                        return UNCAST_MARKER;
+                    }
+                    acc = t;
+                }
+            }
+            return acc;
+        }
+        return null;
+    }
+
+    /** 移除循环体中对元素变量的转型 */
+    private Statement stripCasts(Statement s, String elemName) {
+        if (s instanceof BlockStatement bs) {
+            List<Statement> stmts = new ArrayList<>();
+            for (Statement c : bs.statements()) {
+                stmts.add(stripCasts(c, elemName));
+            }
+            return new BlockStatement(stmts);
+        }
+        if (s instanceof ExpressionStatement es) {
+            return new ExpressionStatement(stripCastsInExpr(es.expression(), elemName));
+        }
+        if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement rs && rs.value() != null) {
+            return new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
+                    stripCastsInExpr(rs.value(), elemName));
+        }
+        if (s instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd && vd.initializer() != null) {
+            return new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(vd.type(), vd.name(),
+                    stripCastsInExpr(vd.initializer(), elemName));
+        }
+        if (s instanceof com.bingbaihanji.bdec.ast.stmt.IfStatement i) {
+            return new com.bingbaihanji.bdec.ast.stmt.IfStatement(
+                    stripCastsInExpr(i.condition(), elemName),
+                    stripCasts(i.thenBranch(), elemName),
+                    i.elseBranch() != null ? stripCasts(i.elseBranch(), elemName) : null);
+        }
+        return s;
+    }
+
+    private Expression stripCastsInExpr(Expression e, String elemName) {
+        if (e == null) {
+            return null;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.CastExpr cast
+                && cast.operand() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
+                && elemName.equals(v.name())) {
+            return v;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.BinExpr b) {
+            return new com.bingbaihanji.bdec.ast.expr.BinExpr(b.operator(),
+                    stripCastsInExpr(b.left(), elemName),
+                    stripCastsInExpr(b.right(), elemName));
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
+            List<Expression> args = new ArrayList<>();
+            for (Expression a : inv.arguments()) {
+                args.add(stripCastsInExpr(a, elemName));
+            }
+            return new com.bingbaihanji.bdec.ast.expr.InvocationExpr(
+                    inv.target() != null ? stripCastsInExpr(inv.target(), elemName) : null,
+                    inv.methodName(), args, inv.returnType());
+        }
+        return e;
+    }
+
+    /** 将语句展开为扁平列表 */
+    private List<Statement> flatten(Statement s) {
+        if (s instanceof BlockStatement bs) {
+            List<Statement> result = new ArrayList<>();
+            for (Statement c : bs.statements()) {
+                result.addAll(flatten(c));
+            }
+            return result;
+        }
+        return List.of(s);
     }
 
     /** 匹配:{@code Iterator iter = collection.iterator();}
@@ -393,7 +570,8 @@ public class ForEachRewriter implements RewriteRule {
         }
         if (e instanceof CastExpr cast) {
             return new CastExpr(cast.targetType(),
-                    replaceNextInExpr(cast.operand(), iterVar, replacement));
+                    replaceNextInExpr(cast.operand(), iterVar, replacement),
+                    cast.typeAnnotations());
         }
         return e;
     }

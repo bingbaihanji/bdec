@@ -28,8 +28,8 @@ public class LinearIr {
     /** 关联的控制流图 */
     private final ControlFlowGraph cfg;
 
-    /** IR指令列表(不可变) */
-    private final List<IrInstruction> instructions;
+    /** IR指令列表(由优化 pass 通过 {@link #replaceInstructions} 整体替换) */
+    private List<IrInstruction> instructions;
 
     /** 基本块ID到指令列表的映射 */
     private final Map<Integer, List<IrInstruction>> blockInstructions;
@@ -151,14 +151,7 @@ public class LinearIr {
      * @param newInstructions 新的指令列表
      */
     public void replaceInstructions(List<IrInstruction> newInstructions) {
-        java.lang.reflect.Field insnsField;
-        try {
-            insnsField = LinearIr.class.getDeclaredField("instructions");
-            insnsField.setAccessible(true);
-            insnsField.set(this, List.copyOf(newInstructions));
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to replace instructions", e);
-        }
+        this.instructions = List.copyOf(newInstructions);
         // 重建基本块到指令的映射
         blockInstructions.clear();
         for (IrInstruction insn : newInstructions) {

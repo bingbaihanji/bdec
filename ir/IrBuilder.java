@@ -8,6 +8,7 @@ import com.bingbaihanji.bdec.bytecode.opcode.Opcode;
 import com.bingbaihanji.bdec.bytecode.parser.ConstantPoolParser;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
+import com.bingbaihanji.bdec.cfg.EdgeKind;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 
@@ -46,11 +47,6 @@ public final class IrBuilder {
     /** 下一条指令的ID计数器 */
     private int nextInsnId = 0;
 
-    /** 下一个变量的ID计数器 */
-    private int nextVarId = 0;
-
-    /** 当前方法的局部变量表名称(槽位 → 名称),在 simulateBlock 时设置. */
-    private java.util.Map<Integer, String> currentLvtNames = java.util.Collections.emptyMap();
     private MethodModel currentMethod = null;
 
     /** 来自类文件的引导方法列表,用于 invokedynamic 的解析. */
@@ -131,17 +127,24 @@ public final class IrBuilder {
             slot++;
         }
         if (method.parameterTypes() != null) {
+            int paramIdx = 0;
             for (JavaType pt : method.parameterTypes()) {
                 if (slot < maxLocals) {
                     Variable pv = new Variable(slot, 0, pt, true, slot);
-                    // 如果有局部变量表名称则使用
+                    // 如果有局部变量表名称则使用;
+                    // 否则使用 "param"+索引 作为回退,与 AstBuilder 的
+                    // buildParameterNames 保持一致——否则条件/表达式中
+                    // 的参数引用会显示为未声明的 varN.
                     String lvtName = method.localVarNames().get(slot);
                     if (lvtName != null) {
                         pv.setName(lvtName);
+                    } else {
+                        pv.setName("param" + paramIdx);
                     }
                     variables.add(pv);
                     initLocals[slot] = pv;
                     slot++;
+                    paramIdx++;
                     // long和double在JVM中占用两个槽位
                     if (pt.kind() == com.bingbaihanji.bdec.type.TypeKind.LONG
                             || pt.kind() == com.bingbaihanji.bdec.type.TypeKind.DOUBLE) {
@@ -156,8 +159,25 @@ public final class IrBuilder {
             if (entry == null) {
                 entry = initialFrame.copy();
             }
-            FrameState exit = simulateBlock(block, entry, allInstructions, variables, cfg, method, constantPool,
-                    method.localVarNames());
+            // 异常处理器入口:JVM 在栈顶隐式压入异常对象.
+            // 若不补上,处理器首条 astore 弹出空栈,STORE 指令丢失,
+            // catch 体内的引用会错误解析为槽位上的过期变量.
+            boolean isHandlerEntry = cfg.incomingOf(block).stream()
+                    .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
+            if (isHandlerEntry) {
+                String catchType = null;
+                for (var r : cfg.exceptionRanges()) {
+                    if (r.handlerBlock() == block) {
+                        catchType = r.catchType();
+                        break;
+                    }
+                }
+                JavaType exType = catchType != null
+                        ? JavaType.classType(catchType)
+                        : JavaType.classType("java/lang/Throwable");
+                entry.stack().push(new Variable(-1, 0, exType, false, -1));
+            }
+            FrameState exit = simulateBlock(block, entry, allInstructions, variables, cfg, method, constantPool);
             blockOutputs.put(block, exit);
         }
 
@@ -383,9 +403,7 @@ public final class IrBuilder {
                                      List<IrInstruction> instructions,
                                      List<Variable> variables,
                                      ControlFlowGraph cfg, MethodModel method,
-                                     ConstantPoolEntry[] cp,
-                                     java.util.Map<Integer, String> lvtNames) {
-        this.currentLvtNames = lvtNames;
+                                     ConstantPoolEntry[] cp) {
         this.currentMethod = method;
         Deque<Value> stack = new ArrayDeque<>(entry.stack());
         Value[] locals = entry.locals().clone();
@@ -513,7 +531,7 @@ public final class IrBuilder {
                 case IFNULL, IFNONNULL -> handleNullCheck(op, stack, instructions, offset, blockId);
                 case GOTO, GOTO_W -> {
                 } // 控制流图处理这些
-                case MULTIANEWARRAY -> handleMultiNewArray(insn, stack, instructions, offset, blockId);
+                case MULTIANEWARRAY -> handleMultiNewArray(insn, stack, instructions, cp, offset, blockId);
                 case ATHROW -> instructions.add(new IrInstruction(nextId(), IrOpcode.THROW,
                         JavaType.VOID, List.of(stack.pop()), offset, blockId, op.code(), null));
 
@@ -660,15 +678,25 @@ public final class IrBuilder {
     private void handleLdc(Instruction insn, Deque<Value> stack, ConstantPoolEntry[] cp,
                            List<IrInstruction> instructions, int offset, int blockId) {
         int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
-        ConstantValue cv = cpIdx > 0 && cpIdx < cp.length
-                ? cpValue(cp[cpIdx], cp)
-                : new ConstantValue("?", JavaType.classType("java/lang/Object"));
+        Value value = null;
+        if (cpIdx > 0 && cpIdx < cp.length) {
+            ConstantPoolEntry entry = cp[cpIdx];
+            if (entry instanceof ConstantPoolEntry.CpDynamic dyn) {
+                // 动态常量(condy):识别标准引导方法并预解析为可渲染表达式
+                value = BootstrapResolver.resolveCondy(dyn, cp, currentBootstrapMethods);
+            } else {
+                value = ConstantPoolResolver.cpValue(entry, cp);
+            }
+        }
+        if (value == null) {
+            value = new ConstantValue("?", JavaType.classType("java/lang/Object"));
+        }
         // 发射CONST IR指令使值能通过InstructionRef链引用
         IrInstruction constInsn = new IrInstruction(nextId(), IrOpcode.CONST,
-                cv.type(), List.of(cv), offset, blockId);
+                value.type(), List.of(value), offset, blockId);
         instructions.add(constInsn);
-        constInsn.setResultValue(new InstructionRef(constInsn, cv.type()));
-        stack.push(new InstructionRef(constInsn, cv.type()));
+        constInsn.setResultValue(new InstructionRef(constInsn, value.type()));
+        stack.push(new InstructionRef(constInsn, value.type()));
     }
 
     /**
@@ -682,12 +710,32 @@ public final class IrBuilder {
         JavaType type = loadType(op);
         Value v = locals[idx];
         if (v == null) {
-            v = lookupReadVar(variables, idx, type, offset);
+            v = VariableFactory.lookupReadVar(variables, idx, type, offset, currentMethod);
         }
-        // 确保变量携带其局部变量表名称(即使来自前驱帧状态)
-        if (v instanceof Variable var && currentLvtNames.containsKey(idx)
-                && (var.name() == null || var.name().startsWith("var"))) {
-            var.setName(currentLvtNames.get(idx));
+        // 确保变量携带其 LVT 名称(即使来自前驱帧状态).
+        // 仅在变量完全未命名时设置(首次命名优先):
+        // Variable 对象跨作用域共享,以使用处偏移重命名会把
+        // 槽位复用后的前一个变量(如 res)错误改名为后一个变量(如 e).
+        if (v instanceof Variable var) {
+            if (var.name() == null) {
+                String lvtName = currentMethod.lookupVarName(idx, offset);
+                if (lvtName != null) {
+                    var.setName(lvtName);
+                }
+            }
+            if (var.genericType() == null) {
+                String lvttSig = currentMethod.lookupVarTypeSignature(idx, offset, var.name());
+                if (lvttSig != null) {
+                    try {
+                        JavaType gen = com.bingbaihanji.bdec.bytecode.parser.SignatureParser
+                                .parseGenericType(lvttSig);
+                        if (gen != null) {
+                            var.setGenericType(gen);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
         }
         emitLoad(v, instructions, offset, blockId);
         stack.push(v);
@@ -725,7 +773,7 @@ public final class IrBuilder {
         int idx = varIndex(insn, op);
         Value val = stack.pop();
         // 每次存储都创建一个新版本——防止"this"槽位混淆
-        Variable var = createWriteVar(variables, idx, val.type(), offset);
+        Variable var = VariableFactory.createWriteVar(variables, idx, val.type(), offset, currentMethod);
         // 将新Variable存入locals数组确保后续LOAD找到Variable而非原始InstructionRef.
         // 这能防止错误的表达式展开,例如:
         // "n = cap - 1 | cap - 1 >>> 1" → "n = n | n >>> 1"(错误!)
@@ -746,8 +794,8 @@ public final class IrBuilder {
         int idx = varIndex(insn, Opcode.IINC);
         int incr = insn.rawOperands().size() > 1 ? insn.rawOperands().get(1) : 0;
         // IINC读取当前值并写入新值——创建新版本变量
-        Variable readVar = lookupReadVar(variables, idx, JavaType.INT, offset);
-        Variable writeVar = createWriteVar(variables, idx, JavaType.INT, offset);
+        Variable readVar = VariableFactory.lookupReadVar(variables, idx, JavaType.INT, offset, currentMethod);
+        Variable writeVar = VariableFactory.createWriteVar(variables, idx, JavaType.INT, offset, currentMethod);
         // 更新locals数组以便同一块内后续LOAD看到新版本
         if (idx < locals.length) {
             locals[idx] = writeVar;
@@ -823,8 +871,8 @@ public final class IrBuilder {
                                  List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                  int offset, int blockId) {
         Value obj = (op == Opcode.GETFIELD && !stack.isEmpty()) ? stack.pop() : null;
-        String fieldName = resolveFieldName(insn, cp);
-        JavaType fieldType = resolveFieldType(insn, cp);
+        String fieldName = ConstantPoolResolver.resolveFieldName(insn, cp);
+        JavaType fieldType = ConstantPoolResolver.resolveFieldType(insn, cp);
         IrInstruction fi = IrInstruction.fieldLoad(nextId(), obj,
                 fieldType, offset, blockId, fieldName);
         instructions.add(fi);
@@ -833,7 +881,7 @@ public final class IrBuilder {
         // 对于静态字段访问(GETSTATIC),标记声明类信息,
         // 以便BlockReducer输出System.out而非仅out
         if (op == Opcode.GETSTATIC) {
-            String declaringClass = resolveFieldDeclaringClass(insn, cp);
+            String declaringClass = ConstantPoolResolver.resolveFieldDeclaringClass(insn, cp);
             if (declaringClass != null) {
                 fi.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
                         com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS,
@@ -857,119 +905,8 @@ public final class IrBuilder {
         }
         Value val = stack.pop();
         Value obj = (op == Opcode.PUTFIELD && !stack.isEmpty()) ? stack.pop() : null;
-        String fieldName = resolveFieldName(insn, cp);
+        String fieldName = ConstantPoolResolver.resolveFieldName(insn, cp);
         instructions.add(IrInstruction.fieldStore(nextId(), obj, val, offset, blockId, fieldName));
-    }
-
-    /**
-     * 通过字段引用指令从常量池解析字段类型.
-     */
-    private JavaType resolveFieldType(Instruction insn, ConstantPoolEntry[] cp) {
-        if (insn.rawOperands().isEmpty()) {
-            return JavaType.classType("java/lang/Object");
-        }
-        int cpIdx = insn.rawOperands().get(0);
-        if (cpIdx <= 0 || cpIdx >= cp.length) {
-            return JavaType.classType("java/lang/Object");
-        }
-        try {
-            ConstantPoolEntry entry = cp[cpIdx];
-            int natIdx = switch (entry) {
-                case ConstantPoolEntry.CpFieldRef fr -> fr.nameAndTypeIndex();
-                default -> -1;
-            };
-            if (natIdx > 0 && natIdx < cp.length
-                    && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
-                String desc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
-                return com.bingbaihanji.bdec.type.TypeResolver.parseFieldType(desc);
-            }
-        } catch (Exception ignored) {
-            // 解析失败则返回默认类型
-        }
-        return JavaType.classType("java/lang/Object");
-    }
-
-    /**
-     * 通过字段引用指令从常量池解析字段名.
-     */
-    private String resolveFieldName(Instruction insn, ConstantPoolEntry[] cp) {
-        if (insn.rawOperands().isEmpty()) {
-            return null;
-        }
-        int cpIdx = insn.rawOperands().get(0);
-        if (cpIdx <= 0 || cpIdx >= cp.length) {
-            return null;
-        }
-        try {
-            ConstantPoolEntry entry = cp[cpIdx];
-            int natIdx = switch (entry) {
-                case ConstantPoolEntry.CpFieldRef fr -> fr.nameAndTypeIndex();
-                default -> -1;
-            };
-            if (natIdx > 0 && natIdx < cp.length
-                    && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
-                return ConstantPoolParser.utf8(cp, nat.nameIndex());
-            }
-        } catch (Exception ignored) {
-            // 解析失败则返回 null
-        }
-        return null;
-    }
-
-    /**
-     * 解析字段引用指令的声明类名(用于GETSTATIC指令).
-     */
-    private String resolveFieldDeclaringClass(Instruction insn, ConstantPoolEntry[] cp) {
-        if (insn.rawOperands().isEmpty()) {
-            return null;
-        }
-        int cpIdx = insn.rawOperands().get(0);
-        if (cpIdx <= 0 || cpIdx >= cp.length) {
-            return null;
-        }
-        try {
-            ConstantPoolEntry entry = cp[cpIdx];
-            int classIdx = switch (entry) {
-                case ConstantPoolEntry.CpFieldRef fr -> fr.classIndex();
-                default -> -1;
-            };
-            if (classIdx > 0 && classIdx < cp.length) {
-                return ConstantPoolParser.className(cp, classIdx);
-            }
-        } catch (Exception ignored) {
-            // 解析失败则返回 null
-        }
-        return null;
-    }
-
-    // ── 方法调用 ───────────────────────────────────────────────────
-
-    /**
-     * 通过方法引用指令从常量池解析方法名.
-     */
-    private String resolveMethodName(Instruction insn, ConstantPoolEntry[] cp) {
-        if (insn.rawOperands().isEmpty()) {
-            return null;
-        }
-        int cpIdx = insn.rawOperands().get(0);
-        if (cpIdx <= 0 || cpIdx >= cp.length) {
-            return null;
-        }
-        try {
-            ConstantPoolEntry entry = cp[cpIdx];
-            int natIdx = switch (entry) {
-                case ConstantPoolEntry.CpMethodRef mr -> mr.nameAndTypeIndex();
-                case ConstantPoolEntry.CpInterfaceMethodRef imr -> imr.nameAndTypeIndex();
-                default -> -1;
-            };
-            if (natIdx > 0 && natIdx < cp.length
-                    && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
-                return ConstantPoolParser.utf8(cp, nat.nameIndex());
-            }
-        } catch (Exception ignored) {
-            // 解析失败则返回 null
-        }
-        return null;
     }
 
     // ── InvokeDynamic ─────────────────────────────────────────────
@@ -1009,7 +946,9 @@ public final class IrBuilder {
                 if (classIdx > 0 && classIdx < cp.length) {
                     declaringClass = ConstantPoolParser.className(cp, classIdx);
                 }
-                if (natIdx > 0 && natIdx < cp.length && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType(int nameIndex, int descriptorIndex)) {
+                if (natIdx > 0 && natIdx < cp.length && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType(
+                        int nameIndex, int descriptorIndex
+                )) {
                     String desc = ConstantPoolParser.utf8(cp, descriptorIndex);
                     methodName = ConstantPoolParser.utf8(cp, nameIndex);
                     paramTypes = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(desc);
@@ -1045,6 +984,11 @@ public final class IrBuilder {
                 }
             }
         }
+
+        // 对已知泛型方法尝试从实参推断返回类型的泛型参数.
+        // 例如 Arrays.asList(String[]) → List<String>
+        returnType = BootstrapResolver.inferGenericReturnType(declaringClass, methodName,
+                returnType, args);
 
         IrInstruction inv = IrInstruction.invoke(nextId(), receiver, args, returnType,
                 offset, blockId, methodName);
@@ -1134,10 +1078,19 @@ public final class IrBuilder {
                 && bootstrapIdx < currentBootstrapMethods.size()) {
             try {
                 BootstrapMethodEntry bsm = currentBootstrapMethods.get(bootstrapIdx);
-                resolveBootstrapMethod(bsm, cp, annotProps);
+                BootstrapResolver.resolveBootstrapMethod(bsm, cp, annotProps);
             } catch (Exception ignored) {
                 // 引导方法解析为尽力而为
             }
+        }
+
+        // 使用实现方法描述符重建带泛型参数的函数式接口类型.
+        // 注意:samDescriptor 来自 MethodType 常量,类型的泛型参数被擦除.
+        // implDescriptor 来自实现方法引用,保留正确的泛型参数.
+        String implDesc = (String) annotProps.get("implDescriptor");
+        if (implDesc != null && !implDesc.isEmpty()
+                && returnType.kind() == TypeKind.CLASS) {
+            returnType = BootstrapResolver.buildGenericFunctionalType(returnType, implDesc);
         }
 
         inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
@@ -1146,62 +1099,6 @@ public final class IrBuilder {
         if (returnType.kind() != TypeKind.VOID) {
             inv.setResultValue(new InstructionRef(inv, returnType));
             stack.push(new InstructionRef(inv, returnType));
-        }
-    }
-
-    /**
-     * 解析引导方法参数,提取实现方法句柄.
-     * 对于LambdaMetafactory模式,argument[1]为lambda体/方法引用目标的方法句柄.
-     */
-    private void resolveBootstrapMethod(BootstrapMethodEntry bsm, ConstantPoolEntry[] cp,
-                                        java.util.Map<String, Object> annotProps) {
-        java.util.List<Integer> arguments = bsm.arguments();
-        if (arguments.size() < 2) {
-            return;
-        }
-
-        // 参数1为实现方法句柄
-        int implHandleIdx = arguments.get(1);
-        if (implHandleIdx <= 0 || implHandleIdx >= cp.length) {
-            return;
-        }
-
-        ConstantPoolEntry implHandleEntry = cp[implHandleIdx];
-        if (!(implHandleEntry instanceof ConstantPoolEntry.CpMethodHandle(int refKind, int refIdx))) {
-            return;
-        }
-
-        annotProps.put("implKind", refKind);
-
-        if (refIdx <= 0 || refIdx >= cp.length) {
-            return;
-        }
-
-        ConstantPoolEntry refEntry = cp[refIdx];
-        int classIdx = -1;
-        int natIdx = -1;
-        if (refEntry instanceof ConstantPoolEntry.CpMethodRef(int classIndex, int nameAndTypeIndex)) {
-            classIdx = classIndex;
-            natIdx = nameAndTypeIndex;
-        } else if (refEntry instanceof ConstantPoolEntry.CpInterfaceMethodRef(int classIndex, int nameAndTypeIndex)) {
-            classIdx = classIndex;
-            natIdx = nameAndTypeIndex;
-        } else {
-            return;
-        }
-
-        if (classIdx > 0) {
-            String implOwner = ConstantPoolParser.className(cp, classIdx);
-            annotProps.put("implOwner", implOwner);
-        }
-
-        if (natIdx > 0 && natIdx < cp.length
-                && cp[natIdx] instanceof ConstantPoolEntry.CpNameAndType nat) {
-            String implName = ConstantPoolParser.utf8(cp, nat.nameIndex());
-            annotProps.put("implName", implName);
-            // 提取实现方法描述符,供 BlockReducer 生成正确的 lambda 参数占位符
-            String implDesc = ConstantPoolParser.utf8(cp, nat.descriptorIndex());
-            annotProps.put("implDescriptor", implDesc);
         }
     }
 
@@ -1248,11 +1145,12 @@ public final class IrBuilder {
             default -> JavaType.INT; // 10 = T_INT
         };
         Value size = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
+        JavaType arrayType = JavaType.array(elementType, 1);
         IrInstruction na = new IrInstruction(nextId(), IrOpcode.NEW_ARRAY,
-                elementType, List.of(size), offset, blockId, insn.opcode(), null);
+                arrayType, List.of(size), offset, blockId, insn.opcode(), null);
         instructions.add(na);
-        na.setResultValue(new InstructionRef(na, na.resultType()));
-        stack.push(new InstructionRef(na, na.resultType()));
+        na.setResultValue(new InstructionRef(na, arrayType));
+        stack.push(new InstructionRef(na, arrayType));
     }
 
     /**
@@ -1262,12 +1160,13 @@ public final class IrBuilder {
                                 List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                                 int offset, int blockId) {
         Value size = !stack.isEmpty() ? stack.pop() : new ConstantValue(0, JavaType.INT);
-        JavaType elementType = resolveClassType(insn, cp);
+        JavaType elementType = ConstantPoolResolver.resolveClassType(insn, cp);
+        JavaType arrayType = JavaType.array(elementType, 1);
         IrInstruction na = new IrInstruction(nextId(), IrOpcode.NEW_ARRAY,
-                elementType, List.of(size), offset, blockId, op.code(), null);
+                arrayType, List.of(size), offset, blockId, op.code(), null);
         instructions.add(na);
-        na.setResultValue(new InstructionRef(na, na.resultType()));
-        stack.push(new InstructionRef(na, na.resultType()));
+        na.setResultValue(new InstructionRef(na, arrayType));
+        stack.push(new InstructionRef(na, arrayType));
     }
 
     /**
@@ -1275,11 +1174,32 @@ public final class IrBuilder {
      */
     private void handleMultiNewArray(Instruction insn, Deque<Value> stack,
                                      List<IrInstruction> instructions,
+                                     ConstantPoolEntry[] cp,
                                      int offset, int blockId) {
         // MULTIANEWARRAY操作数格式:[cp_index, dimensions]
         int dims = 1;
         if (insn.rawOperands().size() > 1) {
             dims = insn.rawOperands().get(1);
+        }
+        // 解析数组类型:常量池索引指向数组描述符(如 "[[I" 表示 int[][]),
+        // 保留元素类型(修复 new int[2][4] 被降级为 new Object[2][4] 的问题).
+        JavaType arrayType = JavaType.classType("java/lang/Object");
+        if (!insn.rawOperands().isEmpty()) {
+            int cpIdx = insn.rawOperands().get(0);
+            if (cpIdx > 0 && cpIdx < cp.length) {
+                String desc = ConstantPoolParser.className(cp, cpIdx);
+                if (desc != null && !desc.startsWith("<")) {
+                    int rank = 0;
+                    while (rank < desc.length() && desc.charAt(rank) == '[') {
+                        rank++;
+                    }
+                    if (rank > 0) {
+                        JavaType base = com.bingbaihanji.bdec.type.TypeResolver
+                                .parseFieldDescriptor(desc.substring(rank));
+                        arrayType = JavaType.array(base, rank);
+                    }
+                }
+            }
         }
         // 从栈中弹出各维度大小
         List<Value> sizes = new ArrayList<>();
@@ -1287,7 +1207,7 @@ public final class IrBuilder {
             sizes.addFirst(stack.pop());
         }
         IrInstruction na = new IrInstruction(nextId(), IrOpcode.NEW_ARRAY,
-                JavaType.classType("java/lang/Object"), sizes, offset, blockId);
+                arrayType, sizes, offset, blockId);
         instructions.add(na);
         na.setResultValue(new InstructionRef(na, na.resultType()));
         stack.push(new InstructionRef(na, na.resultType()));
@@ -1359,7 +1279,7 @@ public final class IrBuilder {
         }
         Value v = stack.pop();
         // 从常量池解析目标类型
-        JavaType targetType = resolveClassType(insn, cp);
+        JavaType targetType = ConstantPoolResolver.resolveClassType(insn, cp);
         IrInstruction c = IrInstruction.cast(nextId(), v, targetType, offset, blockId, op.code());
         instructions.add(c);
         c.setResultValue(new InstructionRef(c, c.resultType()));
@@ -1377,26 +1297,12 @@ public final class IrBuilder {
             return;
         }
         Value obj = stack.pop(); // 保留对象作为操作数
-        JavaType targetType = resolveClassType(insn, cp);
+        JavaType targetType = ConstantPoolResolver.resolveClassType(insn, cp);
         IrInstruction io = new IrInstruction(nextId(), IrOpcode.INSTANCE_OF,
                 JavaType.INT, List.of(obj), offset, blockId, op.code(), targetType.internalName());
         io.setResultValue(new InstructionRef(io, JavaType.INT));
         instructions.add(io);
         stack.push(new InstructionRef(io, JavaType.INT));
-    }
-
-    /**
-     * 从引用常量池的指令(checkcast,instanceof,anewarray)中解析类类型.
-     */
-    private JavaType resolveClassType(Instruction insn, ConstantPoolEntry[] cp) {
-        int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
-        if (cpIdx > 0 && cpIdx < cp.length) {
-            String className = ConstantPoolParser.className(cp, cpIdx);
-            if (className != null) {
-                return JavaType.classType(className);
-            }
-        }
-        return JavaType.classType("java/lang/Object");
     }
 
     // ── 分支 ──────────────────────────────────────────────────────
@@ -1486,97 +1392,6 @@ public final class IrBuilder {
     }
 
     /**
-     * 获取或创建指定槽位和类型的变量(版本0).
-     */
-    private Variable getOrCreateVar(List<Variable> variables, int slot, JavaType type, boolean isParam) {
-        for (Variable v : variables) {
-            if (v.slot() == slot && v.version() == 0) {
-                return v;
-            }
-        }
-        Variable v = new Variable(slot, 0, type, isParam, slot);
-        variables.add(v);
-        return v;
-    }
-
-    /**
-     * 为STORE操作创建一个新版本的变量(槽位正在被写入).
-     * 这防止槽位0('this')与存储到槽位0的临时变量相混淆.
-     * 同时将isParameter标志从版本0传播到所有新版本,防止BlockReducer
-     * 为参数重赋值(如"int dest = 0"遮盖了参数"int[] dest")生成VariableDeclaration.
-     */
-    private Variable createWriteVar(List<Variable> variables, int slot, JavaType type,
-                                      int offset) {
-        int maxVersion = 0;
-        boolean isParam = false;
-        for (Variable v : variables) {
-            if (v.slot() == slot) {
-                maxVersion = Math.max(maxVersion, v.version());
-                // 将isParameter从版本0传播到所有新版本.
-                // 这防止BlockReducer为参数重赋值生成VariableDeclaration.
-                if (v.isParameter() && v.version() == 0) {
-                    isParam = true;
-                }
-            }
-        }
-        Variable v = new Variable(slot, maxVersion + 1, type, isParam, slot);
-        // 向前传播局部变量表名称以便新版本保留原始参数名.
-        // 但是跳过实例方法中的槽位0:'this'仅版本0有效;
-        // 对槽位0的写入是一个重用该槽位的不同变量.
-        // 使用作用域感知查找:优先按 PC 查找 LVT 条目,
-        // 回退到 flat map(向后兼容旧 MethodModel)
-        String lvtName = currentMethod.lookupVarName(slot, offset);
-        if (lvtName == null) {
-            lvtName = currentLvtNames.get(slot);
-        }
-        if (lvtName != null
-                && !(slot == 0 && maxVersion > 0)) {
-            v.setName(lvtName);
-        }
-        variables.add(v);
-        return v;
-    }
-
-    /**
-     * 获取指定槽位最新版本的变量(用于LOAD指令).
-     * 如果尚无该槽位的变量,则创建版本0的新变量,并应用局部变量表名称.
-     */
-    private Variable lookupReadVar(List<Variable> variables, int slot, JavaType type,
-                                   int offset) {
-        Variable latest = null;
-        for (Variable v : variables) {
-            if (v.slot() == slot && (latest == null || v.version() > latest.version())) {
-                latest = v;
-            }
-        }
-        if (latest != null) {
-            return latest;
-        }
-        // 首次访问:创建版本0,使用作用域感知查找 LVT 名称
-        Variable v = new Variable(slot, 0, type, false, slot);
-        String lvtName = currentMethod.lookupVarName(slot, offset);
-        if (lvtName == null) {
-            lvtName = currentLvtNames.get(slot);
-        }
-        if (lvtName != null) {
-            v.setName(lvtName);
-        }
-        variables.add(v);
-        return v;
-    }
-
-    /**
-     * 将值转换为Variable,如果不是Variable则创建新变量.
-     */
-    @SuppressWarnings("unused")
-    private Variable asVar(Value v, List<Variable> variables, int slot) {
-        if (v instanceof Variable var) {
-            return var;
-        }
-        return getOrCreateVar(variables, slot, v.type(), false);
-    }
-
-    /**
      * 发射LOAD IR指令(如果值是Variable类型).
      */
     private void emitLoad(Value v, List<IrInstruction> instructions, int offset, int blockId) {
@@ -1585,25 +1400,6 @@ public final class IrBuilder {
             instructions.add(load);
             load.setResultValue(new InstructionRef(load, v.type()));
         }
-    }
-
-    /**
-     * 将常量池条目转换为对应的ConstantValue.
-     */
-    private ConstantValue cpValue(ConstantPoolEntry entry, ConstantPoolEntry[] pool) {
-        return switch (entry) {
-            case ConstantPoolEntry.CpInteger i -> new ConstantValue(i.value(), JavaType.INT);
-            case ConstantPoolEntry.CpFloat f -> new ConstantValue(f.value(), JavaType.FLOAT);
-            case ConstantPoolEntry.CpLong l -> new ConstantValue(l.value(), JavaType.LONG);
-            case ConstantPoolEntry.CpDouble d -> new ConstantValue(d.value(), JavaType.DOUBLE);
-            case ConstantPoolEntry.CpString s -> new ConstantValue(
-                    ConstantPoolParser.utf8(pool, s.stringIndex()),
-                    JavaType.classType("java/lang/String"));
-            case ConstantPoolEntry.CpClass c -> new ConstantValue(
-                    ConstantPoolParser.utf8(pool, c.nameIndex()),
-                    JavaType.classType("java/lang/Class"));
-            default -> new ConstantValue("<cp:" + entry.tag() + ">", JavaType.classType("java/lang/Object"));
-        };
     }
 
     /**

@@ -4,8 +4,10 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +33,7 @@ import java.util.List;
 public class InnerClassRewriter extends AstTransformer implements RewriteRule {
 
     private boolean isNonStaticInner = false;
+
     private String outerThisFieldName = null;
 
     @Override
@@ -53,15 +56,12 @@ public class InnerClassRewriter extends AstTransformer implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md && md.body() != null) {
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(),
-                        md.returnType(), md.parameterNames(), md.parameterTypes(),
-                        transformMethodBody(md.body())));
+                members.add(withBody(md, transformMethodBody(md.body())));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /** 检测类是否为非静态内部类(包含 this$ 合成字段) */
@@ -82,17 +82,11 @@ public class InnerClassRewriter extends AstTransformer implements RewriteRule {
 
     @Override
     protected Expression transformFieldAccess(FieldAccessExpr e) {
-        if (isNonStaticInner && outerThisFieldName != null) {
-            // this$0.outerField → outerField(直接访问外围字段)
-            // 例如:this$0.counter → counter
-            if (e.target() instanceof VarExpr v
-                    && outerThisFieldName.equals(v.name())) {
-                return new VarExpr(e.fieldName());
-            }
-            // 注意:不将 this.this$0 重写为 this,因为在赋值左侧时
-            // this = X 是非法Java代码.this$0 字段初始化需要保留为
-            // this.this$0 = this$0 的形式.
-        }
+        // 注意:不重写 this$0.outerField → outerField.
+        // 内部类当前作为独立顶层类输出(保留 this$0 字段与构造参数),
+        // 直接字段名在内部类中不存在,会把外围字段访问错误地变成
+        // 未声明局部变量(SourceCleanup 会补 "int counter = 0" 造成语义错误).
+        // 保留 this$0.outerField 形式,语义与字节码一致.
         return super.transformFieldAccess(e);
     }
 

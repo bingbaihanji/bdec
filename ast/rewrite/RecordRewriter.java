@@ -54,16 +54,21 @@ public class RecordRewriter implements RewriteRule {
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
         List<TypeDeclaration> types = new ArrayList<>();
+        Set<String> collectedImports = new HashSet<>();
         for (TypeDeclaration td : unit.types()) {
-            types.add(rewriteType(td));
+            types.add(rewriteType(td, unit, collectedImports));
         }
-        return new CompilationUnit(unit.packageName(), unit.imports(), types, unit.innerClassNames());
+        return new CompilationUnit(unit.packageName(),
+                com.bingbaihanji.bdec.util.TypeText.mergeImports(
+                        unit.imports(), collectedImports),
+                types, unit.innerClassNames());
     }
 
     /**
      * 重写类型声明.若为 record 类,则转换为 record 声明.
      */
-    private TypeDeclaration rewriteType(TypeDeclaration td) {
+    private TypeDeclaration rewriteType(TypeDeclaration td, CompilationUnit unit,
+                                        Set<String> collectedImports) {
         if (!isRecord(td)) {
             return td;
         }
@@ -104,12 +109,17 @@ public class RecordRewriter implements RewriteRule {
         }
 
         // 从组件构建类型参数列表:"int x, int y"
+        // 组件类型用 import 感知的短名渲染(TypeText),并收集缺失的 import,
+        // 避免输出 record R(Box<java.util.Map<...>>) 形式的全限定名.
         List<String> recordComponents = new ArrayList<>();
         for (String name : componentNames) {
             // 查找对应字段的类型
             for (AstNode m : td.children()) {
                 if (m instanceof FieldDeclaration fd && name.equals(fd.name())) {
-                    recordComponents.add(fd.type().displayName() + " " + name);
+                    String typeText = com.bingbaihanji.bdec.util.TypeText.render(
+                            fd.type(), unit.packageName(), unit.innerClassNames(),
+                            collectedImports);
+                    recordComponents.add(typeText + " " + name);
                     break;
                 }
             }
@@ -118,7 +128,8 @@ public class RecordRewriter implements RewriteRule {
         // record 不显式展示 "extends Record"——将 super 名称置为 null
         return new TypeDeclaration(td.accessFlags() & ~ACC_RECORD,
                 td.simpleName(), "record", null,
-                td.interfaceNames(), recordComponents, members);
+                td.interfaceNames(), recordComponents, members, td.annotations(),
+                td.superAnnotations(), td.interfaceAnnotations());
     }
 
     /**

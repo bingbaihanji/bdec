@@ -35,30 +35,10 @@ public class AstRewriter {
     public CompilationUnit rewrite(CompilationUnit unit, BdecConfig config, DecompileContext ctx) {
         CompilationUnit result = unit;
         for (RewriteRule rule : rules) {
-            if (isEnabled(rule.name(), config)) {
+            if (rule.kind().isEnabled(config)) {
                 result = rule.rewrite(result, ctx);
             }
         }
         return result;
-    }
-
-    /**
-     * 根据配置判断指定名称的规则是否启用.
-     *
-     * @param name   规则名称
-     * @param config 配置对象
-     * @return {@code true} 表示该规则已启用
-     */
-    private boolean isEnabled(String name, BdecConfig config) {
-        return switch (name) {
-            case "enum", "enum-switch" -> config.decodeEnums();
-            case "lambda" -> config.decodeLambdas();
-            case "ternary" -> config.decodeTernary();
-            case "string-concat" -> config.decodeStringConcat();
-            case "try-resource" -> config.decodeTryResource();
-            case "for-each" -> config.decodeForEach();
-            case "string-switch" -> config.decodeStringSwitch();
-            default -> true;
-        };
     }
 }

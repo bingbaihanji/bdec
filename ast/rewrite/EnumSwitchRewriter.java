@@ -64,6 +64,9 @@ public class EnumSwitchRewriter implements RewriteRule {
     public String name() {return "enum-switch";}
 
     @Override
+    public RewriteRuleKind kind() {return RewriteRuleKind.ENUM_SWITCH;}
+
+    @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
         // 阶段一:从所有嵌套层级的类型中收集 $SwitchMap$ 字段名
         Set<String> switchMapFieldNames = new HashSet<>();
@@ -130,8 +133,7 @@ public class EnumSwitchRewriter implements RewriteRule {
             }
         }
 
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), newMembers);
+        return withMembers(td, newMembers);
     }
 
     /**
@@ -158,8 +160,7 @@ public class EnumSwitchRewriter implements RewriteRule {
     /** 重写方法声明中的方法体 */
     private MethodDeclaration rewriteMethod(MethodDeclaration md, Set<String> switchMapFieldNames) {
         Statement newBody = md.body() != null ? rewriteStatement(md.body(), switchMapFieldNames) : null;
-        return new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                md.parameterNames(), md.parameterTypes(), md.typeParameters(), newBody);
+        return withBody(md, newBody);
     }
 
     /** 递归重写各种语句类型 */
@@ -178,12 +179,7 @@ public class EnumSwitchRewriter implements RewriteRule {
                             ? rewriteStatement(i.elseBranch(), switchMapFieldNames) : null);
         }
         if (s instanceof LoopStatement l) {
-            if (l.loopKind() == LoopStatement.LoopKind.FOR_EACH) {
-                return new LoopStatement(l.loopKind(), l.forEachVar(), l.condition(),
-                        rewriteStatement(l.body(), switchMapFieldNames));
-            }
-            return new LoopStatement(l.loopKind(), l.condition(),
-                    rewriteStatement(l.body(), switchMapFieldNames));
+            return withLoopBody(l, rewriteStatement(l.body(), switchMapFieldNames));
         }
         if (s instanceof TryStatement t) {
             List<TryStatement.CatchClause> newCatches = new ArrayList<>();

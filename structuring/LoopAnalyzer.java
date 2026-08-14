@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec.structuring;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.DominatorTree;
+import com.bingbaihanji.bdec.cfg.EdgeKind;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -51,7 +52,15 @@ public final class LoopAnalyzer {
             if (block == graph.entryBlock() || block == graph.exitBlock()) {
                 continue;
             }
-            for (BasicBlock succ : graph.successorsOf(block)) {
+            for (var edge : graph.outgoingOf(block)) {
+                // 异常边不参与自然循环回边检测.
+                // 处理器块常因异常范围覆盖自身而带有 EXCEPTION 自环
+                //(例如 catch Throwable 的处理器体),将其识别为循环
+                // 会在折叠时破坏 try-catch 结构.
+                if (edge.kind() == EdgeKind.EXCEPTION) {
+                    continue;
+                }
+                BasicBlock succ = edge.target();
                 if (domTree.dominates(succ, block)) {
                     // 发现回边:block(N) → succ(H)
                     LoopInfo loop = extractNaturalLoop(succ, block, graph, domTree);
@@ -88,7 +97,12 @@ public final class LoopAnalyzer {
                 if (!body.add(curr)) {
                     continue;
                 }
-                for (BasicBlock pred : graph.predecessorsOf(curr)) {
+                // 循环体只沿非异常边反向扩展——异常前驱不属于循环体
+                for (var predEdge : graph.incomingOf(curr)) {
+                    if (predEdge.kind() == EdgeKind.EXCEPTION) {
+                        continue;
+                    }
+                    BasicBlock pred = predEdge.source();
                     if (!body.contains(pred)) {
                         worklist.push(pred);
                     }

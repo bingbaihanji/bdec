@@ -52,6 +52,9 @@ public class StringConcatRewriter implements RewriteRule {
     public String name() {return "string-concat";}
 
     @Override
+    public RewriteRuleKind kind() {return RewriteRuleKind.STRING_CONCAT;}
+
+    @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
         List<TypeDeclaration> types = new ArrayList<>();
         for (TypeDeclaration td : unit.types()) {
@@ -70,15 +73,12 @@ public class StringConcatRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(),
-                        md.body() != null ? rewriteStatement(md.body()) : null));
+                members.add(withBody(md, md.body() != null ? rewriteStatement(md.body()) : null));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /**
@@ -119,7 +119,8 @@ public class StringConcatRewriter implements RewriteRule {
         }
         if (s instanceof VariableDeclaration vd) {
             return new VariableDeclaration(vd.type(), vd.name(),
-                    vd.initializer() != null ? rewriteExpr(vd.initializer()) : null);
+                    vd.initializer() != null ? rewriteExpr(vd.initializer()) : null,
+                    vd.typeAnnotations());
         }
         return s;
     }

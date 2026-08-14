@@ -39,6 +39,9 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
     /** 当前封闭类型是否为接口(影响 default 方法的输出) */
     private final boolean isInterface;
 
+    /** 当前封闭类型是否为注解类型(影响元素方法的输出) */
+    private final boolean isAnnotationType;
+
     /**
      * 构造语句发射器.
      *
@@ -47,11 +50,19 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
      * @param className   类名(用于识别构造器)
      * @param isInterface 是否为接口类型
      */
-    public StatementEmitter(IndentWriter w, ExpressionEmitter exprs, String className, boolean isInterface) {
+    public StatementEmitter(IndentWriter w, ExpressionEmitter exprs, String className,
+                            boolean isInterface, boolean isAnnotationType) {
         this.w = w;
         this.exprs = exprs;
         this.className = className;
         this.isInterface = isInterface;
+        this.isAnnotationType = isAnnotationType;
+    }
+
+    /** 兼容构造器:接口/注解标志由 kindName 判定 */
+    public StatementEmitter(IndentWriter w, ExpressionEmitter exprs, String className,
+                            boolean isInterface) {
+        this(w, exprs, className, isInterface, false);
     }
 
     /**
@@ -79,6 +90,14 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
      */
     private String typeName(com.bingbaihanji.bdec.type.JavaType t) {
         return exprs.typeName(t);
+    }
+
+    /** 渲染带 JSR-308 类型注解的类型名(注解按类型路径定位) */
+    private String typeNameAnnotated(
+            com.bingbaihanji.bdec.type.JavaType t,
+            java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+                    java.util.List<String>> anns) {
+        return exprs.typeNameAnnotated(t, anns);
     }
 
     @Override
@@ -138,10 +157,44 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
                 System.err.println("WARNING: null statement at index " + i + " in BlockStatement, skipping");
                 continue;
             }
+            // 跳过 void 方法或构造器末尾多余的 "return;"
+            //(JVM 要求在方法末尾有 return 指令,但 Java 源码中无需显示写出)
+            if (isTrailingVoidReturn(s, stmts, i)) {
+                continue;
+            }
             emit(s);
         }
         w.dedent();
         w.write("}").newLine();
+    }
+
+    /** 检查是否为块中无意义的末尾 void return */
+    private boolean isTrailingVoidReturn(Statement s, List<Statement> stmts, int idx) {
+        if (!(s instanceof ReturnStatement rs)) {
+            return false;
+        }
+        if (rs.value() != null) {
+            return false; // 有返回值,需要保留
+        }
+        // 仅当是最后一条语句(或之后只有 null/空语句)时才跳过
+        for (int j = idx + 1; j < stmts.size(); j++) {
+            Statement next = stmts.get(j);
+            if (next != null && !isEmptyNoOp(next)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 检查语句是否为空操作(无意义的空块或null) */
+    private boolean isEmptyNoOp(Statement s) {
+        if (s == null) {
+            return true;
+        }
+        if (s instanceof BlockStatement bs && bs.statements().isEmpty()) {
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -183,7 +236,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
                     // 若为裸 VarExpr(无类型信息),补全类型声明
                     if (l.forEachVar() instanceof com.bingbaihanji.bdec.ast.expr.VarExpr v
                             && !(l.forEachVar() instanceof com.bingbaihanji.bdec.ast.expr.AssignExpr)) {
-                        w.write("Object ").write(v.name());
+                        if (l.forEachVarType() != null) {
+                            w.write(typeName(l.forEachVarType())).space().write(v.name());
+                        } else {
+                            w.write("Object ").write(v.name());
+                        }
                     } else {
                         exprs.emit(l.forEachVar());
                     }
@@ -250,8 +307,22 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
      * @param m 方法声明节点
      */
     private void emitMethodDecl(MethodDeclaration m) {
+        // 方法上的注解(如 @Override,@AnnotationDemo(value = "testMethod", count = 5))
+        for (String ann : m.annotations()) {
+            w.write(ann).newLine();
+        }
+        // 注解元素方法:@interface 隐式 public abstract,不输出修饰符
+        if (isAnnotationType) {
+            w.write(typeNameAnnotated(m.returnType(), m.typeAnnotations().onType()))
+                    .space().write(m.name()).write("()");
+            if (m.annotationDefault() != null) {
+                w.space().token("default").space().write(m.annotationDefault());
+            }
+            w.write(";").newLine();
+            return;
+        }
         // 输出方法修饰符
-        emitMethodModifiers(m.accessFlags());
+        ModifierRenderer.emitMethodModifiers(m.accessFlags(), isInterface, w);
 
         // 输出方法级别的泛型类型参数:<T>
         if (!m.typeParameters().isEmpty()) {
@@ -284,17 +355,47 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         if (isConstructor) {
             w.write(methodName).write("(");
         } else {
-            w.write(typeName(m.returnType())).space().write(methodName).write("(");
+            w.write(typeNameAnnotated(m.returnType(), m.typeAnnotations().onType()))
+                    .space().write(methodName).write("(");
         }
 
-        // 输出参数列表
+        // 输出参数列表(参数级注解内联在类型之前:void m(@Ann("x") String s))
+        String[] pAnns = m.parameterAnnotations();
+        var paramTypeAnns = m.typeAnnotations().onParameters();
         for (int i = 0; i < m.parameterNames().length; i++) {
             if (i > 0) {
                 w.write(", ");
             }
-            w.write(typeName(m.parameterTypes()[i])).space().write(m.parameterNames()[i]);
+            if (pAnns != null && i < pAnns.length && pAnns[i] != null) {
+                w.write(pAnns[i]).space();
+            }
+            java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+                    java.util.List<String>> paramAnns =
+                    i < paramTypeAnns.size() ? paramTypeAnns.get(i) : java.util.Map.of();
+            w.write(typeNameAnnotated(m.parameterTypes()[i], paramAnns))
+                    .space().write(m.parameterNames()[i]);
         }
-        w.write(")").space();
+        w.write(")");
+
+        // 输出 throws 子句(构造函数与普通方法均可声明异常);
+        // throws 类型注解(0x17)位于异常类型根上,路径为空
+        if (!m.throwsTypes().isEmpty()) {
+            w.space().token("throws").space();
+            var throwsTypeAnns = m.typeAnnotations().onThrows();
+            for (int i = 0; i < m.throwsTypes().size(); i++) {
+                if (i > 0) {
+                    w.write(", ");
+                }
+                if (i < throwsTypeAnns.size()) {
+                    for (String a : throwsTypeAnns.get(i)
+                            .getOrDefault(java.util.List.of(), java.util.List.of())) {
+                        w.write(a).space();
+                    }
+                }
+                w.write(m.throwsTypes().get(i));
+            }
+        }
+        w.space();
 
         // 输出方法体
         if (m.body() != null) {
@@ -345,8 +446,12 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
      * @param f 字段声明节点
      */
     private void emitFieldDecl(FieldDeclaration f) {
-        emitFieldModifiers(f.accessFlags());
-        w.write(typeName(f.type())).space().write(f.name());
+        // 字段上的注解(如 @AnnotationDemo(value = "field", count = 1))
+        for (String ann : f.annotations()) {
+            w.write(ann).newLine();
+        }
+        ModifierRenderer.emitFieldModifiers(f.accessFlags(), w);
+        w.write(typeNameAnnotated(f.type(), f.typeAnnotations())).space().write(f.name());
         if (f.initializer() != null) {
             w.space().write("=").space();
             exprs.emit(f.initializer());
@@ -407,7 +512,8 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
      */
     private void emitVariableDecl(Statement stmt) {
         if (stmt instanceof VariableDeclaration vd) {
-            w.write(typeName(vd.type())).space().write(vd.name());
+            w.write(typeNameAnnotated(vd.type(), vd.typeAnnotations()))
+                    .space().write(vd.name());
             if (vd.initializer() != null) {
                 w.space().write("=").space();
                 exprs.emit(vd.initializer());
@@ -535,84 +641,6 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             return body.get(0);
         }
         return new BlockStatement(body);
-    }
-
-    /**
-     * 根据访问标志输出方法修饰符关键字(public/private/protected/static/final 等).
-     * 使用 JVM 规范的 ACC_* 常量进行位判断.
-     *
-     * @param flags 访问标志位掩码
-     */
-    private void emitMethodModifiers(int flags) {
-        // 0x0001 = ACC_PUBLIC
-        if ((flags & 0x0001) != 0) {
-            w.token("public").space();
-        } else if ((flags & 0x0002) != 0) {
-            // 0x0002 = ACC_PRIVATE
-            w.token("private").space();
-        } else if ((flags & 0x0004) != 0) {
-            // 0x0004 = ACC_PROTECTED
-            w.token("protected").space();
-        }
-        // 接口中的非 abstract,非 static,非 private 方法需要 default 关键字
-        if (isInterface && (flags & 0x0400) == 0 && (flags & 0x0008) == 0 && (flags & 0x0002) == 0) {
-            w.token("default").space();
-        }
-        // 0x0008 = ACC_STATIC
-        if ((flags & 0x0008) != 0) {
-            w.token("static").space();
-        }
-        // 0x0010 = ACC_FINAL
-        if ((flags & 0x0010) != 0) {
-            w.token("final").space();
-        }
-        // 0x0020 = ACC_SYNCHRONIZED
-        if ((flags & 0x0020) != 0) {
-            w.token("synchronized").space();
-        }
-        // 0x0100 = ACC_NATIVE
-        if ((flags & 0x0100) != 0) {
-            w.token("native").space();
-        }
-        // 0x0400 = ACC_ABSTRACT
-        if ((flags & 0x0400) != 0) {
-            w.token("abstract").space();
-        }
-    }
-
-    /**
-     * 根据访问标志输出字段修饰符关键字(public/private/protected/static/final/volatile/transient).
-     * 使用 JVM 规范的 ACC_* 常量进行位判断.
-     *
-     * @param flags 访问标志位掩码
-     */
-    private void emitFieldModifiers(int flags) {
-        // 0x0001 = ACC_PUBLIC
-        if ((flags & 0x0001) != 0) {
-            w.token("public").space();
-        } else if ((flags & 0x0002) != 0) {
-            // 0x0002 = ACC_PRIVATE
-            w.token("private").space();
-        } else if ((flags & 0x0004) != 0) {
-            // 0x0004 = ACC_PROTECTED
-            w.token("protected").space();
-        }
-        // 0x0008 = ACC_STATIC
-        if ((flags & 0x0008) != 0) {
-            w.token("static").space();
-        }
-        // 0x0010 = ACC_FINAL
-        if ((flags & 0x0010) != 0) {
-            w.token("final").space();
-        }
-        // 0x0040 = ACC_VOLATILE
-        if ((flags & 0x0040) != 0) {
-            w.token("volatile").space();
-        }
-        // 0x0080 = ACC_TRANSIENT
-        if ((flags & 0x0080) != 0) {
-            w.token("transient").space();
-        }
     }
 
     /**

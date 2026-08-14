@@ -34,6 +34,7 @@ import com.bingbaihanji.bdec.semantic.SemanticReconstructor;
 import com.bingbaihanji.bdec.structuring.ControlFlowStructurer;
 import com.bingbaihanji.bdec.structuring.StructuredMethod;
 import com.bingbaihanji.bdec.type.JavaType;
+import com.bingbaihanji.bdec.util.ParameterNameResolver;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -54,9 +55,6 @@ import java.util.List;
  * 和 Vineflower 的 {@code LambdaProcessor}.
  */
 public class LambdaRewriter implements RewriteRule {
-
-    /** ACC_SYNTHETIC 标志位(0x1000) */
-    private static final int ACC_SYNTHETIC = 0x1000;
 
     /** 在类文件中按名称查找 lambda 合成方法 */
     private static MethodModel findLambdaMethod(ClassFileModel cfm, String methodName) {
@@ -89,6 +87,12 @@ public class LambdaRewriter implements RewriteRule {
         if (collapsed != null) {
             return collapsed;
         }
+        // 处理 if(cond) return false; 无 else 且无尾随 return 的情况
+        // (共享合并块中的 return 被 if-else 结构吸收后导致)
+        collapsed = collapseIfReturnFalse(body);
+        if (collapsed != null) {
+            return collapsed;
+        }
         return null;
     }
 
@@ -106,7 +110,9 @@ public class LambdaRewriter implements RewriteRule {
                 && ifStmt.elseBranch() == null
                 && stmts.get(1) instanceof ReturnStatement trailingReturn) {
             ReturnStatement thenRet = getSingleReturnFromBlock(ifStmt.thenBranch());
-            if (thenRet == null) return null;
+            if (thenRet == null) {
+                return null;
+            }
             return tryCollapseBoolean(ifStmt.condition(), thenRet, trailingReturn);
         }
         // 模式3/4:单条 if-else 语句
@@ -115,7 +121,9 @@ public class LambdaRewriter implements RewriteRule {
                 && ifStmt.elseBranch() != null) {
             ReturnStatement thenRet = getSingleReturnFromBlock(ifStmt.thenBranch());
             ReturnStatement elseRet = getSingleReturnFromBlock(ifStmt.elseBranch());
-            if (thenRet == null || elseRet == null) return null;
+            if (thenRet == null || elseRet == null) {
+                return null;
+            }
             return tryCollapseBoolean(ifStmt.condition(), thenRet, elseRet);
         }
         return null;
@@ -135,11 +143,41 @@ public class LambdaRewriter implements RewriteRule {
     }
 
     /**
+     * 处理 if(cond) return false; (无 else 且无尾随 return)的特殊情况.
+     * 当共享合并块中有 return true 且被 if-else 结构吸收时,
+     * if 分支体退化为仅有 then 无 else 的形式.此时将条件取反即可得到表达式形式.
+     */
+    private static Expression collapseIfReturnFalse(Statement s) {
+        if (!(s instanceof BlockStatement bs) || bs.statements().size() != 1) {
+            return null;
+        }
+        Statement only = bs.statements().get(0);
+        if (!(only instanceof IfStatement ifStmt) || ifStmt.elseBranch() != null) {
+            return null;
+        }
+        ReturnStatement thenRet = getSingleReturnFromBlock(ifStmt.thenBranch());
+        if (thenRet == null) {
+            return null;
+        }
+        // if (cond) { return false; } → !cond
+        if (isBooleanLiteral(thenRet.value(), false)) {
+            return new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                    com.bingbaihanji.bdec.ast.expr.UnaryOperator.NOT,
+                    ifStmt.condition());
+        }
+        // if (cond) { return true; } → cond
+        if (isBooleanLiteral(thenRet.value(), true)) {
+            return ifStmt.condition();
+        }
+        return null;
+    }
+
+    /**
      * 尝试折叠 boolean 模式:thenRet 和 trailingRet 必须为一个 true 一个 false.
      * @return cond 或 !cond,或 null
      */
     private static Expression tryCollapseBoolean(Expression cond,
-                                                  ReturnStatement thenRet, ReturnStatement trailingRet) {
+                                                 ReturnStatement thenRet, ReturnStatement trailingRet) {
         boolean thenIsTrue = isBooleanLiteral(thenRet.value(), true);
         boolean thenIsFalse = isBooleanLiteral(thenRet.value(), false);
         boolean otherIsTrue = isBooleanLiteral(trailingRet.value(), true);
@@ -193,8 +231,36 @@ public class LambdaRewriter implements RewriteRule {
         return false;
     }
 
+    /** 从 lambda 合成方法中提取参数列表(类型优先使用 Signature 属性,名称来自 LVT) */
+    private static List<LambdaExpr.Param> buildLambdaParams(MethodModel m) {
+        List<LambdaExpr.Param> params = new ArrayList<>();
+        // 优先使用 Signature 属性获取泛型参数类型(而非擦除后的描述符类型).
+        // 例如 lambda 方法描述符为 (Object,Object)Object,
+        // 但 Signature 为 (Integer,Integer)Integer.
+        JavaType[] paramTypes = m.parameterTypes();
+        String sig = m.signature();
+        if (sig != null && !sig.isEmpty()) {
+            JavaType[] sigTypes = com.bingbaihanji.bdec.bytecode.parser.SignatureParser
+                    .parseMethodSignature(sig);
+            if (sigTypes != null && sigTypes.length == paramTypes.length + 1) {
+                // sigTypes = [paramTypes..., returnType]
+                paramTypes = new JavaType[paramTypes.length];
+                System.arraycopy(sigTypes, 0, paramTypes, 0, paramTypes.length);
+            }
+        }
+        String[] names = ParameterNameResolver.resolveNames(m, "arg");
+        for (int i = 0; i < paramTypes.length; i++) {
+            params.add(new LambdaExpr.Param(names[i], paramTypes[i]));
+        }
+        return params;
+    }
+
+
     @Override
     public String name() {return "lambda";}
+
+    @Override
+    public RewriteRuleKind kind() {return RewriteRuleKind.LAMBDA;}
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
@@ -220,17 +286,14 @@ public class LambdaRewriter implements RewriteRule {
                 if (isLambdaSyntheticMethod(md)) {
                     continue;
                 }
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(),
-                        md.body() != null
+                members.add(withBody(md, md.body() != null
                                 ? rewriteStatement(md.body(), bootstrapMethods, cfm, ctx)
                                 : null));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /** 检查方法是否为 lambda 合成方法(lambda$xxx$N 或方法引用桥接方法) */
@@ -282,7 +345,7 @@ public class LambdaRewriter implements RewriteRule {
         if (s instanceof VariableDeclaration vd && vd.initializer() != null) {
             Expression newInit = rewriteExpr(vd.initializer(), bootstrapMethods, cfm, ctx);
             if (newInit != vd.initializer()) {
-                return new VariableDeclaration(vd.type(), vd.name(), newInit);
+                return new VariableDeclaration(vd.type(), vd.name(), newInit, vd.typeAnnotations());
             }
         }
         return s;
@@ -314,7 +377,8 @@ public class LambdaRewriter implements RewriteRule {
         if (e instanceof CastExpr cast) {
             Expression newOperand = rewriteExpr(cast.operand(), bootstrapMethods, cfm, ctx);
             if (newOperand != cast.operand()) {
-                return new CastExpr(cast.targetType(), newOperand);
+                return new CastExpr(cast.targetType(), newOperand,
+                        cast.typeAnnotations());
             }
             return e;
         }
@@ -464,20 +528,5 @@ public class LambdaRewriter implements RewriteRule {
         } catch (Exception e) {
             return placeholder;
         }
-    }
-
-    /** 从 lambda 合成方法中提取参数列表(类型来自描述符,名称来自 LVT) */
-    private static List<LambdaExpr.Param> buildLambdaParams(MethodModel m) {
-        List<LambdaExpr.Param> params = new ArrayList<>();
-        JavaType[] paramTypes = m.parameterTypes();
-        for (int i = 0; i < paramTypes.length; i++) {
-            int slot = m.isStatic() ? i : i + 1;
-            String name = m.localVarNames().get(slot);
-            if (name == null || name.isEmpty()) {
-                name = "arg" + i;
-            }
-            params.add(new LambdaExpr.Param(name, paramTypes[i]));
-        }
-        return params;
     }
 }

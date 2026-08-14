@@ -75,6 +75,10 @@ public final class DeadCodeElimination {
             case MONITOR_ENTER, MONITOR_EXIT -> true;
             case CONDITION -> true; // 控制分支结构
             case SWITCH -> true;
+            // 循环计数递增:回边数据流在 SSA 中可能缺少 PHI 合并,
+            // 其写操作会被误判为死代码.INC 始终保留——
+            // 变量若确实无用,反编译输出中的自增语句不改变可观察语义.
+            case INC -> true;
             default -> false;
         };
     }

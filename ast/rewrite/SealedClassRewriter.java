@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec.ast.rewrite;
 import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.bytecode.model.AccessFlags;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,9 +17,6 @@ import java.util.List;
  * </p>
  */
 public class SealedClassRewriter implements RewriteRule {
-
-    /** ACC_SEALED 访问标志位,值为 0x1000(JVM 预览特性标志区域) */
-    private static final int ACC_SEALED = 0x1000;
 
     @Override
     public String name() {return "sealed";}
@@ -41,7 +39,7 @@ public class SealedClassRewriter implements RewriteRule {
      * @return 重写后的类型声明
      */
     private TypeDeclaration rewriteType(TypeDeclaration td, String pkg, DecompileContext context) {
-        boolean isSealed = (td.accessFlags() & ACC_SEALED) != 0;
+        boolean isSealed = (td.accessFlags() & AccessFlags.ACC_SEALED) != 0;
         if (isSealed) {
             return rewriteSealedType(td);
         }
@@ -59,9 +57,10 @@ public class SealedClassRewriter implements RewriteRule {
     private TypeDeclaration rewriteSealedType(TypeDeclaration td) {
         String kindName = td.isInterface() ? "sealed interface" : "sealed class";
         List<String> typeParams = new ArrayList<>(td.typeParameters());
-        return new TypeDeclaration(td.accessFlags() & ~ACC_SEALED,
+        return new TypeDeclaration(td.accessFlags() & ~AccessFlags.ACC_SEALED,
                 td.simpleName(), kindName, td.superName(),
-                td.interfaceNames(), typeParams, td.children());
+                td.interfaceNames(), typeParams, td.children(), td.annotations(),
+                td.superAnnotations(), td.interfaceAnnotations());
     }
 
     /**
@@ -78,9 +77,9 @@ public class SealedClassRewriter implements RewriteRule {
      */
     private TypeDeclaration rewriteNonSealedType(TypeDeclaration td, String pkg, DecompileContext context) {
         // 只适用于非 final,非 abstract,非 sealed 的普通类
-        if (td.isInterface() || (td.accessFlags() & 0x0010) != 0
-                || (td.accessFlags() & 0x0400) != 0
-                || (td.accessFlags() & ACC_SEALED) != 0) {
+        if (td.isInterface() || (td.accessFlags() & AccessFlags.ACC_FINAL) != 0
+                || (td.accessFlags() & AccessFlags.ACC_ABSTRACT) != 0
+                || (td.accessFlags() & AccessFlags.ACC_SEALED) != 0) {
             return td;
         }
         // 必须有父类名才能继续检查
@@ -88,9 +87,15 @@ public class SealedClassRewriter implements RewriteRule {
             return td;
         }
         // 根据包名和父类简称构建 JVM 内部名称
+        // (父类名可能带泛型参数如 "Parent<String>",查找密封父类时需剥离)
+        String superBase = td.superName();
+        int lt = superBase.indexOf('<');
+        if (lt >= 0) {
+            superBase = superBase.substring(0, lt);
+        }
         String internalName = pkg != null && !pkg.isEmpty()
-                ? pkg.replace('.', '/') + "/" + td.superName()
-                : td.superName();
+                ? pkg.replace('.', '/') + "/" + superBase
+                : superBase;
         // 检查父类是否为密封类
         if (!isSuperclassSealed(internalName, context)) {
             return td;
@@ -98,7 +103,8 @@ public class SealedClassRewriter implements RewriteRule {
         // 标记为非密封子类
         return new TypeDeclaration(td.accessFlags(), td.simpleName(),
                 "non-sealed class", td.superName(),
-                td.interfaceNames(), td.typeParameters(), td.children());
+                td.interfaceNames(), td.typeParameters(), td.children(), td.annotations(),
+                td.superAnnotations(), td.interfaceAnnotations());
     }
 
     /**
@@ -126,7 +132,7 @@ public class SealedClassRewriter implements RewriteRule {
             var model = reader.read(internalName, bytes);
             // Java 17-21 预览特性:ACC_SEALED 标志位(0x1000)
             // Java 22+:PermittedSubclasses 属性(无类标志位)
-            return (model.accessFlags() & ACC_SEALED) != 0
+            return (model.accessFlags() & AccessFlags.ACC_SEALED) != 0
                     || !model.permittedSubclasses().isEmpty();
         } catch (Exception e) {
             return false;

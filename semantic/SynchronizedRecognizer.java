@@ -9,10 +9,14 @@ import com.bingbaihanji.bdec.ir.LinearIr;
 import com.bingbaihanji.bdec.ir.Value;
 import com.bingbaihanji.bdec.ir.Variable;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * synchronized 块识别器.
@@ -83,13 +87,60 @@ public final class SynchronizedRecognizer {
 
             ExceptionRange handler = findCoveringHandler(cfg, enterBlock);
             if (handler == null) {
+                // monitorenter 位于保护区之前(其直落后继才是 sync 体):
+                // javac 将 try 范围起点设在 monitorenter 之后,
+                // 需要检查后继块是否被处理器覆盖.
+                for (BasicBlock succ : cfg.successorsOf(enterBlock)) {
+                    handler = findCoveringHandler(cfg, succ);
+                    if (handler != null) {
+                        break;
+                    }
+                }
+            }
+            if (handler == null) {
                 continue;
             }
 
-            // 验证异常处理器包含 MONITOR_EXIT + THROW 模式
+            // monitorenter 前通常有 dup; astore N(监视器对象副本),
+            // 处理器的 monitorexit 使用副本槽位——记录以便匹配.
+            int copySlot = -1;
+            if (monitorObj instanceof Variable mv) {
+                for (IrInstruction insn : blockInsns.getOrDefault(enterBlock.id(), List.of())) {
+                    if (insn.opcode() == IrOpcode.STORE && insn.operands().size() >= 2
+                            && insn.operands().get(1) instanceof Variable src
+                            && src.slot() == mv.slot()
+                            && insn.operands().getFirst() instanceof Variable dst) {
+                        copySlot = dst.slot();
+                    }
+                }
+            }
+
+            // 验证异常处理器包含 MONITOR_EXIT + THROW 模式.
+            // MONITOR_EXIT 与 THROW 可能分布在同一处理器的相邻块中
+            //(handler 链:B59 monitorexit → B60 athrow),沿非异常后继收集.
             BasicBlock handlerBlock = handler.handlerBlock();
-            List<IrInstruction> handlerInsns = blockInsns.getOrDefault(handlerBlock.id(), List.of());
-            if (!isMonitorExitThrow(handlerInsns, monitorObj)) {
+            List<IrInstruction> handlerInsns = new ArrayList<>();
+            Set<BasicBlock> chainVisited = new HashSet<>();
+            Deque<BasicBlock> chainQueue = new ArrayDeque<>();
+            chainQueue.add(handlerBlock);
+            while (!chainQueue.isEmpty()) {
+                BasicBlock cur = chainQueue.poll();
+                if (!chainVisited.add(cur)) {
+                    continue;
+                }
+                handlerInsns.addAll(blockInsns.getOrDefault(cur.id(), List.of()));
+                List<BasicBlock> nonExSuccs = new ArrayList<>();
+                for (var e : cfg.outgoingOf(cur)) {
+                    if (e.kind() != com.bingbaihanji.bdec.cfg.EdgeKind.EXCEPTION
+                            && e.target() != cfg.exitBlock()) {
+                        nonExSuccs.add(e.target());
+                    }
+                }
+                if (nonExSuccs.size() == 1) {
+                    chainQueue.add(nonExSuccs.getFirst());
+                }
+            }
+            if (!isMonitorExitThrow(handlerInsns, monitorObj, copySlot)) {
                 continue;
             }
 
@@ -100,7 +151,7 @@ public final class SynchronizedRecognizer {
                     continue;
                 }
                 for (IrInstruction insn : entry.getValue()) {
-                    if (insn.opcode() == IrOpcode.MONITOR_EXIT && matchesObject(insn, monitorObj)) {
+                    if (insn.opcode() == IrOpcode.MONITOR_EXIT && matchesObject(insn, monitorObj, copySlot)) {
                         foundNormalExit = true;
                         break;
                     }
@@ -120,7 +171,7 @@ public final class SynchronizedRecognizer {
                 // 标记所有 MONITOR_EXIT 指令为待移除(后续由结构化层处理)
                 for (var entry : blockInsns.entrySet()) {
                     for (IrInstruction insn : entry.getValue()) {
-                        if (insn.opcode() == IrOpcode.MONITOR_EXIT && matchesObject(insn, monitorObj)) {
+                        if (insn.opcode() == IrOpcode.MONITOR_EXIT && matchesObject(insn, monitorObj, copySlot)) {
                             insn.addAnnotation(SemanticAnnotation.of(
                                     SemanticTag.SYNCHRONIZED_BLOCK));
                         }
@@ -186,11 +237,11 @@ public final class SynchronizedRecognizer {
     /**
      * 检查异常处理器指令列表是否包含 MONITOR_EXIT + THROW 模式.
      */
-    private boolean isMonitorExitThrow(List<IrInstruction> handlerInsns, Value monitorObj) {
+    private boolean isMonitorExitThrow(List<IrInstruction> handlerInsns, Value monitorObj, int copySlot) {
         boolean hasMonitorExit = false;
         boolean hasThrow = false;
         for (IrInstruction insn : handlerInsns) {
-            if (insn.opcode() == IrOpcode.MONITOR_EXIT && matchesObject(insn, monitorObj)) {
+            if (insn.opcode() == IrOpcode.MONITOR_EXIT && matchesObject(insn, monitorObj, copySlot)) {
                 hasMonitorExit = true;
             }
             if (insn.opcode() == IrOpcode.THROW) {
@@ -201,13 +252,13 @@ public final class SynchronizedRecognizer {
     }
 
     /** 检查 MONITOR_EXIT 指令是否引用了预期的监视器对象 */
-    private boolean matchesObject(IrInstruction monInsn, Value expected) {
+    private boolean matchesObject(IrInstruction monInsn, Value expected, int copySlot) {
         if (monInsn.operands().isEmpty()) {
             return false;
         }
         Value obj = monInsn.operands().getFirst();
         if (expected instanceof Variable ev && obj instanceof Variable ov) {
-            return ev.slot() == ov.slot();
+            return ev.slot() == ov.slot() || ov.slot() == copySlot;
         }
         return obj.equals(expected);
     }
@@ -215,7 +266,7 @@ public final class SynchronizedRecognizer {
     /** 将监视器对象 Value 转换为可读的描述字符串 */
     private String describeMonitor(Value v) {
         if (v instanceof Variable var) {
-            return "var" + var.slot();
+            return var.slot() == 0 ? "this" : "var" + var.slot();
         }
         return v.toString();
     }

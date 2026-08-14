@@ -92,9 +92,70 @@ public final class SignatureParser {
         return extractTypeParams(signature); // 格式相同:以 <...> 开头
     }
 
+    /** 内部名 → 简短显示名(去包名、去 java.lang. 前缀) */
+    private static String simpleTypeName(String internalName) {
+        String name = internalName.replace('/', '.');
+        if (name.startsWith("java.lang.") && name.indexOf('.', 10) < 0) {
+            name = name.substring(10);
+        }
+        int dot = name.lastIndexOf('.');
+        // 保留完整包名由发射器的 import 机制简写;此处给 displayName 用简短形式
+        return name;
+    }
+
+    /**
+     * 将类签名解析为父类型与接口类型数组.
+     *
+     * <p>类签名格式:{@code [<类型参数>]父类[接口]*}.
+     * 对于类,返回数组 {@code [父类, 接口1, 接口2, ...]};
+     * 对于接口(无父类),返回数组 {@code [接口1, 接口2, ...]}.
+     * 每个元素都是含类型参数的 {@link JavaType}(如 {@code Base<String>}),
+     * 调用方据此重建 {@code extends Base<String>} / {@code implements List<Integer>}.</p>
+     *
+     * @param signature 类签名属性字符串(如 {@code <T:Ljava/lang/Object;>LBase<Ljava/lang/String;>;})
+     * @return 父类型与接口类型数组,解析失败或无签名返回 {@code null}
+     */
+    public static JavaType[] parseClassSignature(String signature) {
+        if (signature == null || signature.isEmpty()) {
+            return null;
+        }
+        try {
+            int i = 0;
+            // 跳过开头的类型参数声明(如 <T:Ljava/lang/Object;>)
+            if (signature.charAt(0) == '<') {
+                int depth = 1;
+                i = 1;
+                while (i < signature.length() && depth > 0) {
+                    char c = signature.charAt(i);
+                    if (c == '<') {
+                        depth++;
+                    } else if (c == '>') {
+                        depth--;
+                    }
+                    i++;
+                }
+            }
+            List<JavaType> types = new ArrayList<>();
+            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+            while (i < signature.length()) {
+                i = parseTypeToJavaType(signature, i, ref);
+                if (ref.get() != null) {
+                    types.add(ref.get());
+                }
+            }
+            return types.isEmpty() ? null : types.toArray(new JavaType[0]);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /**
      * 将方法签名解析为参数类型数组和返回类型.
      * 例如 {@code (TT;TU;)V} → params=[typevar(T), typevar(U)], returnType=void.
+     *
+     * <p>类型变量产 {@code kind=TYPE_VARIABLE}(descriptor 仍为 "T名字;",
+     * displayName 仍为裸变量名),与 parseClassSignature/parseGenericType
+     * 一致,CLASS 伪装已彻底消除。</p>
      *
      * @param signature 方法签名属性字符串(如 {@code <T:Ljava/lang/Object;>(TT;TU;)V})
      * @return {@code [paramTypes..., returnType]},解析失败返回 {@code null}
@@ -111,8 +172,11 @@ public final class SignatureParser {
                 i = 1;
                 while (i < signature.length() && depth > 0) {
                     char c = signature.charAt(i);
-                    if (c == '<') depth++;
-                    else if (c == '>') depth--;
+                    if (c == '<') {
+                        depth++;
+                    } else if (c == '>') {
+                        depth--;
+                    }
                     i++;
                 }
             }
@@ -163,6 +227,8 @@ public final class SignatureParser {
 
     /**
      * 将类型签名字符串解析为 JavaType 结构体.
+     * 类型变量产 {@code kind=TYPE_VARIABLE}(descriptor="T名字;",
+     * internalName=裸变量名),所有入口一致,无 CLASS 伪装。
      *
      * @param sig 完整签名字符串
      * @param i   当前解析起始位置
@@ -208,9 +274,9 @@ public final class SignatureParser {
             case 'T': {
                 int semi = sig.indexOf(';', i);
                 String tvName = sig.substring(i + 1, semi);
-                // 类型变量 —— 使用类型变量名作为内部名称用于显示
-                out.set(new JavaType(TypeKind.CLASS, tvName, "T" + tvName + ";",
-                        List.of(), 0));
+                // 类型变量:kind=TYPE_VARIABLE,descriptor 保持 "T<名字>;"、
+                // internalName 保持裸变量名(displayName 渲染为裸名).
+                out.set(JavaType.typeVariable(tvName));
                 return semi + 1;
             }
             // 引用类型(如 Ljava/lang/String; 或泛型 Lpkg/List<Lpkg/X;>;)
@@ -219,29 +285,39 @@ public final class SignatureParser {
                 String raw = sig.substring(i + 1, semi);
                 int lt = raw.indexOf('<');
                 if (lt >= 0) {
-                    // 泛型类型:解析类名与类型参数
+                    // 泛型类型:解析类名与类型参数.
+                    // 注意:类型参数可能含通配符(Ljava/lang/Number;),
+                    // 第一个分号属于参数而非类名——循环到配对的 '>' 为止.
                     String className = raw.substring(0, lt);
                     List<JavaType> typeArgs = new ArrayList<>();
                     int argPos = i + 1 + lt + 1;
-                    while (argPos < i + semi) {
+                    while (argPos < sig.length() && sig.charAt(argPos) != '>') {
                         char ac = sig.charAt(argPos);
                         if (ac == '*') {
                             // 无界通配符 ?
-                            typeArgs.add(new JavaType(TypeKind.CLASS, "?",
-                                    "Ljava/lang/Object;", List.of(), 0));
+                            typeArgs.add(new JavaType(TypeKind.WILDCARD, "?",
+                                    "?", List.of(), 0));
                             argPos++;
                         } else if (ac == '+') {
                             // 上界通配符 ? extends T
                             var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos + 1, ref);
-                            typeArgs.add(ref.get() != null ? ref.get()
-                                    : JavaType.classType("java/lang/Object"));
+                            JavaType bound = ref.get();
+                            String boundName = bound != null && bound.internalName() != null
+                                    ? simpleTypeName(bound.internalName()) : "Object";
+                            typeArgs.add(new JavaType(TypeKind.WILDCARD,
+                                    "? extends " + boundName, "?",
+                                    bound != null ? List.of(bound) : List.of(), 0));
                         } else if (ac == '-') {
                             // 下界通配符 ? super T
                             var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos + 1, ref);
-                            typeArgs.add(ref.get() != null ? ref.get()
-                                    : JavaType.classType("java/lang/Object"));
+                            JavaType bound = ref.get();
+                            String boundName = bound != null && bound.internalName() != null
+                                    ? simpleTypeName(bound.internalName()) : "Object";
+                            typeArgs.add(new JavaType(TypeKind.WILDCARD,
+                                    "? super " + boundName, "?",
+                                    bound != null ? List.of(bound) : List.of(), 0));
                         } else {
                             var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos, ref);
@@ -249,12 +325,12 @@ public final class SignatureParser {
                                 typeArgs.add(ref.get());
                             }
                         }
-                        if (argPos >= i + semi) {
-                            break;
-                        }
                     }
+                    // argPos 指向 '>',描述符结束于其后分号
+                    int endSemi = sig.indexOf(';', argPos);
                     out.set(new JavaType(TypeKind.CLASS, className,
                             "L" + className + ";", typeArgs, 0));
+                    return endSemi + 1;
                 } else {
                     out.set(JavaType.classType(raw));
                 }
@@ -276,125 +352,4 @@ public final class SignatureParser {
         }
     }
 
-    /**
-     * 将字段或方法参数签名转换为可读的泛型类型名.
-     *
-     * <p>例如:{@code Ljava/util/List<Ljava/lang/String;>;}
-     * → {@code java.util.List<java.lang.String>}
-     *
-     * @param sig 类型签名字符串
-     * @return 可读的泛型类型名,解析失败则返回原始签名字符串
-     */
-    public static String signatureToDisplayName(String sig) {
-        if (sig == null || sig.isEmpty()) {
-            return null;
-        }
-        try {
-            StringBuilder sb = new StringBuilder();
-            parseTypeSignature(sig, 0, sb);
-            return sb.toString();
-        } catch (Exception e) {
-            return sig; // 解析失败时回退到原始签名
-        }
-    }
-
-    /**
-     * 从位置 i 开始解析类型签名,将结果追加到 StringBuilder.
-     *
-     * @param sig 完整签名字符串
-     * @param i   当前解析起始位置
-     * @param sb  输出结果缓冲区
-     * @return 解析后的下一个位置
-     */
-    private static int parseTypeSignature(String sig, int i, StringBuilder sb) {
-        if (i >= sig.length()) {
-            return i;
-        }
-        char c = sig.charAt(i);
-        switch (c) {
-            // 基本类型 → Java 关键字
-            case 'B':
-                sb.append("byte");
-                return i + 1;
-            case 'C':
-                sb.append("char");
-                return i + 1;
-            case 'D':
-                sb.append("double");
-                return i + 1;
-            case 'F':
-                sb.append("float");
-                return i + 1;
-            case 'I':
-                sb.append("int");
-                return i + 1;
-            case 'J':
-                sb.append("long");
-                return i + 1;
-            case 'S':
-                sb.append("short");
-                return i + 1;
-            case 'Z':
-                sb.append("boolean");
-                return i + 1;
-            case 'V':
-                sb.append("void");
-                return i + 1;
-            // 类型变量:Tname;
-            case 'T': {
-                int semi = sig.indexOf(';', i);
-                sb.append(sig, i + 1, semi);
-                return semi + 1;
-            }
-            // 引用类型:Lpkg/Name; 或 Lpkg/Name<...>;
-            case 'L': {
-                int semi = sig.indexOf(';', i);
-                String raw = sig.substring(i + 1, semi);
-                // 检查是否存在类型参数
-                int lt = raw.indexOf('<');
-                if (lt >= 0) {
-                    String className = raw.substring(0, lt).replace('/', '.');
-                    sb.append(className).append('<');
-                    int argPos = i + 1 + lt + 1;
-                    boolean first = true;
-                    while (argPos < i + semi) {
-                        if (!first) {
-                            sb.append(", ");
-                        }
-                        first = false;
-                        // 类型参数可能为:*(无界通配符),+L...(extends),-L...(super),L...; 或 T...;
-                        char ac = sig.charAt(argPos);
-                        if (ac == '*') {
-                            sb.append('?');
-                            argPos++;
-                        } else if (ac == '+') {
-                            sb.append("? extends ");
-                            argPos = parseTypeSignature(sig, argPos + 1, sb);
-                        } else if (ac == '-') {
-                            sb.append("? super ");
-                            argPos = parseTypeSignature(sig, argPos + 1, sb);
-                        } else {
-                            argPos = parseTypeSignature(sig, argPos, sb);
-                        }
-                        if (argPos >= i + semi) {
-                            break;
-                        }
-                    }
-                    sb.append('>');
-                } else {
-                    sb.append(raw.replace('/', '.'));
-                }
-                return semi + 1;
-            }
-            // 数组类型
-            case '[': {
-                int next = parseTypeSignature(sig, i + 1, sb);
-                sb.append("[]");
-                return next;
-            }
-            default:
-                sb.append('?');
-                return i + 1;
-        }
-    }
 }

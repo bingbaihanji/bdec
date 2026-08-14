@@ -9,18 +9,34 @@ import java.util.List;
  * 本地变量槽位计算等工具方法.
  *
  * @param kind            类型种类枚举
- * @param internalName    JVM 内部名称(如 "java/lang/String")
+ * @param internalName    JVM 内部名称(如 "java/lang/String");ARRAY 种类下
+ *                        为元素链首个类型变量名(其余场景恒 null),供签名
+ *                        覆盖闸门的 isClassTypeParam 判定使用
  * @param descriptor      JVM 类型描述符(如 "I","Ljava/lang/String;")
  * @param typeArguments   泛型类型参数列表
  * @param arrayDimensions 数组维度数(0 表示非数组类型)
+ * @param element         数组元素类型(仅 ARRAY 种类由 {@link #array} 工厂
+ *                        存储;其余种类及旧式五参构造为 null,elementOf
+ *                        在 null 时回退描述符重建)
  */
 public record JavaType(
         TypeKind kind,
         String internalName,
         String descriptor,
         List<JavaType> typeArguments,
-        int arrayDimensions
+        int arrayDimensions,
+        JavaType element
 ) {
+
+    /**
+     * 五参兼容构造:element 为 null,与旧记录形态调用点完全一致.
+     * 经此构造的数组(element=null)在 elementOf/displayName 中
+     * 走描述符重建旧路径,行为不变.
+     */
+    public JavaType(TypeKind kind, String internalName, String descriptor,
+                    List<JavaType> typeArguments, int arrayDimensions) {
+        this(kind, internalName, descriptor, typeArguments, arrayDimensions, null);
+    }
 
     /** void 基本类型 */
     public static final JavaType VOID = primitive(TypeKind.VOID, "V");
@@ -72,7 +88,30 @@ public record JavaType(
     }
 
     /**
+     * 创建泛型类型变量的工厂方法.
+     *
+     * <p>契约:descriptor 保持 JVM 签名字段格式 {@code "T" + name + ";"}
+     * (如 {@code TT;}),displayName 返回裸变量名——与旧的"CLASS 伪装"
+     * 表示字节级一致,兼容依赖 {@code descriptor().startsWith("T")}
+     * 启发式的消费点(如 MethodRefRewriter).</p>
+     *
+     * @param name 类型变量名(如 "T","E")
+     * @return 类型变量实例
+     */
+    public static JavaType typeVariable(String name) {
+        return new JavaType(TypeKind.TYPE_VARIABLE, name, "T" + name + ";",
+                Collections.emptyList(), 0);
+    }
+
+    /**
      * 创建数组类型的工厂方法.
+     *
+     * <p>元素类型存入 {@code element} 组件(descriptor 仍为
+     * {@code "[" + elementType.descriptor()} 的字节级形态,泛型信息
+     * 不再经描述符擦除丢失);若元素链含类型变量,internalName 携带
+     * 首个类型变量名——AstBuilder 签名覆盖闸门的
+     * {@code isClassTypeParam} 按 internalName 与类型参数名匹配,
+     * 从而使 {@code List<T>[]} 这类签名自动放行覆盖擦除描述符。</p>
      *
      * @param elementType 数组元素类型
      * @param dimensions  数组维度数
@@ -81,8 +120,64 @@ public record JavaType(
     public static JavaType array(JavaType elementType, int dimensions) {
         String desc = "[".repeat(Math.max(0, dimensions)) +
                 elementType.descriptor();
-        return new JavaType(TypeKind.ARRAY, null,
-                desc, Collections.emptyList(), dimensions);
+        return new JavaType(TypeKind.ARRAY, firstTypeVariableName(elementType),
+                desc, Collections.emptyList(), dimensions, elementType);
+    }
+
+    /**
+     * 获取数组类型的元素类型(剥离最外层一维).
+     *
+     * <p>优先返回工厂存储的元素(保留泛型参数,如 {@code List<T>[]} →
+     * {@code List<T>});element 为 null(旧式五参构造)时回退描述符
+     * 重建,行为与旧实现一致。</p>
+     *
+     * @param arrayType 数组类型
+     * @return 元素类型,若输入非数组类型则原样返回
+     */
+    public static JavaType elementOf(JavaType arrayType) {
+        if (arrayType.kind() != TypeKind.ARRAY || arrayType.arrayDimensions() == 0) {
+            return arrayType;
+        }
+        if (arrayType.element() != null) {
+            return arrayType.element();
+        }
+        String elemDesc = arrayType.descriptor().replaceFirst("^\\[", "");
+        return fromDescriptor(elemDesc);
+    }
+
+    /**
+     * 深度优先查找类型树中首个类型变量的名字.
+     *
+     * <p>CLASS/WILDCARD 沿 typeArguments 递归,ARRAY 沿 element 递归,
+     * 未找到返回 null。</p>
+     *
+     * @param type 待检查的类型
+     * @return 首个类型变量名,无则 null
+     */
+    private static String firstTypeVariableName(JavaType type) {
+        if (type == null) {
+            return null;
+        }
+        switch (type.kind()) {
+            case TYPE_VARIABLE -> {
+                return type.internalName();
+            }
+            case ARRAY -> {
+                return firstTypeVariableName(type.element());
+            }
+            case CLASS, WILDCARD -> {
+                for (JavaType arg : type.typeArguments()) {
+                    String found = firstTypeVariableName(arg);
+                    if (found != null) {
+                        return found;
+                    }
+                }
+                return null;
+            }
+            default -> {
+                return null;
+            }
+        }
     }
 
     /**
@@ -103,7 +198,19 @@ public record JavaType(
             case 'F' -> FLOAT;
             case 'D' -> DOUBLE;
             case 'L' -> classType(desc.substring(1, desc.length() - 1));
-            default -> new JavaType(TypeKind.CLASS, desc, desc, Collections.emptyList(), 0);
+            default -> {
+                // 类型变量描述符(签名格式 "T" + 名字 + ";",如 "TT;"):
+                // 经 elementOf 重建数组元素类型时也产 TYPE_VARIABLE,
+                // 与 SignatureParser / JavaType.typeVariable 的表示一致,
+                // 不再伪装为 CLASS(旧伪装 internalName 携带整个 "TT;",
+                // 渲染出非法的 "TT;[]")。
+                if (desc.length() > 2 && desc.charAt(0) == 'T'
+                        && desc.charAt(desc.length() - 1) == ';') {
+                    yield typeVariable(desc.substring(1, desc.length() - 1));
+                }
+                // 其他无法识别的描述符(如多维数组元素 "[I")保持旧行为
+                yield new JavaType(TypeKind.CLASS, desc, desc, Collections.emptyList(), 0);
+            }
         };
     }
 
@@ -112,6 +219,7 @@ public record JavaType(
      * <ul>
      *   <li>基本类型返回对应的 Java 关键字(int,long 等)</li>
      *   <li>类类型返回内部名称转为点分形式,并处理泛型参数</li>
+     *   <li>类型变量返回裸变量名(存储在 internalName)</li>
      *   <li>数组类型递归拼接 "[]" 后缀</li>
      * </ul>
      *
@@ -149,11 +257,37 @@ public record JavaType(
                 yield name;
             }
             case ARRAY -> {
-                // 从描述符中提取元素类型的描述符部分
+                // 优先经存储元素渲染(保留泛型参数,如 List<T>[]);
+                // 嵌套创建(SignatureParser 每层 1 维)与维度累积创建
+                // (TypeResolver 外层维度为 1+内层维度)统一按
+                // 元素链递归,括号数 = 各层贡献之和.
+                if (arrayDimensions > 0 && element != null) {
+                    if (element.kind() == TypeKind.ARRAY) {
+                        int remaining = Math.max(1,
+                                arrayDimensions - element.arrayDimensions());
+                        yield element.displayName() + "[]".repeat(remaining);
+                    }
+                    yield element.displayName() + "[]".repeat(arrayDimensions);
+                }
+                // 无存储元素(旧式五参构造)或维度 0:描述符重建旧路径
                 String elemDesc = descriptor.replaceFirst("^\\[+", "");
                 JavaType elem = fromDescriptor(elemDesc);
                 yield elem.displayName() + "[]".repeat(arrayDimensions);
             }
+            case WILDCARD -> {
+                // 边界类型可能自带泛型参数(? extends Comparable<String>),
+                // 从边界重建显示名以保留嵌套泛型(internalName 在解析时
+                // 仅取了边界的基础名).
+                if (!typeArguments.isEmpty()) {
+                    String base = typeArguments.getFirst().displayName();
+                    if (internalName != null && internalName.startsWith("? super ")) {
+                        yield "? super " + base;
+                    }
+                    yield "? extends " + base;
+                }
+                yield internalName != null ? internalName : "?";
+            }
+            case TYPE_VARIABLE -> internalName != null ? internalName : "?";
             default -> descriptor;
         };
     }

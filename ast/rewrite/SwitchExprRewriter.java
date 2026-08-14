@@ -14,6 +14,7 @@ import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
+import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -50,32 +51,39 @@ public class SwitchExprRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(),
-                        md.typeParameters(),
-                        md.body() != null ? rewriteStatement(md.body()) : null));
+                boolean nonVoid = md.returnType() != null
+                        && md.returnType().kind() != com.bingbaihanji.bdec.type.TypeKind.VOID;
+                members.add(withBody(md, md.body() != null ? rewriteStatement(md.body(), nonVoid) : null));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /**
      * 递归遍历语句,对代码块中的 switch 语句进行表达式模式检测.
      *
-     * @param s 待处理的语句
+     * @param s       待处理的语句
+     * @param nonVoid 方法是否具有非 void 返回类型
      * @return 处理后的语句
      */
-    private Statement rewriteStatement(Statement s) {
+    private Statement rewriteStatement(Statement s, boolean nonVoid) {
         if (s instanceof BlockStatement bs) {
             List<Statement> rewritten = new ArrayList<>();
-            for (Statement cs : bs.statements()) {
-                Statement rs = rewriteStatement(cs);
+            List<Statement> originals = bs.statements();
+            for (int idx = 0; idx < originals.size(); idx++) {
+                Statement cs = originals.get(idx);
+                Statement rs = rewriteStatement(cs, nonVoid);
                 if (rs instanceof SwitchStatement sw && isSwitchExpression(sw)) {
-                    // 将其标记为 switch 表达式
-                    rewritten.add(new SwitchStatement(sw.discriminant(), sw.cases(), true));
+                    // 尾部 switch(case 直接 return)在非 void 方法中保持冒号语法:
+                    // 转换为箭头表达式后作为裸语句会缺失方法返回值,无法编译.
+                    // 保留 case 中的 return 语句,语义与源码一致.
+                    if (nonVoid && idx == originals.size() - 1) {
+                        rewritten.add(sw);
+                    } else {
+                        rewritten.add(toSwitchExpression(sw));
+                    }
                 } else {
                     rewritten.add(rs);
                 }
@@ -84,17 +92,38 @@ public class SwitchExprRewriter implements RewriteRule {
         }
         if (s instanceof IfStatement i) {
             return new IfStatement(i.condition(),
-                    rewriteStatement(i.thenBranch()),
-                    i.elseBranch() != null ? rewriteStatement(i.elseBranch()) : null);
+                    rewriteStatement(i.thenBranch(), nonVoid),
+                    i.elseBranch() != null ? rewriteStatement(i.elseBranch(), nonVoid) : null);
         }
         if (s instanceof LoopStatement l) {
-            if (l.loopKind() == LoopStatement.LoopKind.FOR_EACH) {
-                return new LoopStatement(l.loopKind(), l.forEachVar(), l.condition(),
-                        rewriteStatement(l.body()));
-            }
-            return new LoopStatement(l.loopKind(), l.condition(), rewriteStatement(l.body()));
+            return withLoopBody(l, rewriteStatement(l.body(), nonVoid));
         }
         return s;
+    }
+
+    /**
+     * 将 switch 语句转换为 switch 表达式:
+     * case 体中的 ReturnStatement 转换为 ExpressionStatement
+     *(箭头语法要求表达式而非语句).
+     */
+    private SwitchStatement toSwitchExpression(SwitchStatement sw) {
+        List<SwitchStatement.CaseGroup> newCases = new ArrayList<>();
+        for (SwitchStatement.CaseGroup cg : sw.cases()) {
+            List<Statement> newBody = new ArrayList<>();
+            for (Statement s : cg.body()) {
+                if (s instanceof ReturnStatement rs && rs.value() != null) {
+                    newBody.add(new ExpressionStatement(rs.value()));
+                } else if (s instanceof ReturnStatement) {
+                    // void return——保留为空表达式
+                    newBody.add(new ExpressionStatement(
+                            new com.bingbaihanji.bdec.ast.expr.LitExpr(null, JavaType.VOID)));
+                } else {
+                    newBody.add(s);
+                }
+            }
+            newCases.add(new SwitchStatement.CaseGroup(cg.labels(), newBody, cg.isDefault()));
+        }
+        return new SwitchStatement(sw.discriminant(), newCases, true);
     }
 
     /**
@@ -116,6 +145,12 @@ public class SwitchExprRewriter implements RewriteRule {
         for (SwitchStatement.CaseGroup cg : sw.cases()) {
             List<Statement> body = cg.body();
             if (body.isEmpty()) {
+                return false;
+            }
+            // 仅支持单语句 case 体(单个 return 或单个赋值+break).
+            // 多语句 case 体(如模式匹配 switch 的变量声明+return)
+            // 无法安全转换为箭头表达式.
+            if (body.size() != 1) {
                 return false;
             }
             Statement last = body.getLast();

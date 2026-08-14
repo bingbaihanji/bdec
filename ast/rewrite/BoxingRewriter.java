@@ -4,8 +4,15 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.CastExpr;
+import com.bingbaihanji.bdec.ast.expr.CondExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
@@ -13,6 +20,7 @@ import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
+import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -72,15 +80,12 @@ public class BoxingRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(),
-                        rewriteStatement(md.body())));
+                members.add(withBody(md, rewriteStatement(md.body())));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /** 递归重写语句中的装箱/拆箱调用 */
@@ -99,7 +104,13 @@ public class BoxingRewriter implements RewriteRule {
             case ReturnStatement rs -> new ReturnStatement(
                     rs.value() != null ? rewriteExpr(rs.value()) : null);
             case ThrowStatement ts -> new ThrowStatement(rewriteExpr(ts.expression()));
-            default -> s;
+            case VariableDeclaration vd -> {
+                // 重写变量声明中的初始化表达式(如 Integer.valueOf(x) → x)
+                Expression init = vd.initializer() != null
+                        ? rewriteExpr(vd.initializer()) : null;
+                yield new VariableDeclaration(vd.type(), vd.name(), init, vd.typeAnnotations());
+            }
+            default -> s; // 其他语句类型暂不处理(装箱模式不常见)
         };
     }
 
@@ -128,7 +139,43 @@ public class BoxingRewriter implements RewriteRule {
                     inv.target() != null ? rewriteExpr(inv.target()) : null,
                     inv.methodName(), newArgs, inv.returnType());
         }
-        // TODO: 递归重写其他表达式类型的子节点
+        // 二元表达式:重写左右操作数
+        if (e instanceof BinExpr bin) {
+            return new BinExpr(bin.operator(),
+                    rewriteExpr(bin.left()), rewriteExpr(bin.right()));
+        }
+        // 一元表达式:重写操作数
+        if (e instanceof UnExpr un) {
+            return new UnExpr(un.operator(), rewriteExpr(un.operand()));
+        }
+        // 类型转换:重写内部表达式
+        if (e instanceof CastExpr cast) {
+            return new CastExpr(cast.targetType(), rewriteExpr(cast.operand()),
+                    cast.typeAnnotations());
+        }
+        // 赋值表达式:重写左右侧
+        if (e instanceof AssignExpr assign) {
+            return new AssignExpr(rewriteExpr(assign.target()),
+                    rewriteExpr(assign.value()), assign.compoundOp());
+        }
+        // 条件表达式(a ? b : c):重写所有分支
+        if (e instanceof CondExpr cond) {
+            return new CondExpr(rewriteExpr(cond.condition()),
+                    rewriteExpr(cond.trueExpr()), rewriteExpr(cond.falseExpr()));
+        }
+        // Lambda表达式体:重写内部表达式
+        if (e instanceof LambdaExpr lambda) {
+            if (lambda.bodyExpr() != null) {
+                return LambdaExpr.expression(lambda.parameters(),
+                        rewriteExpr(lambda.bodyExpr()), lambda.functionalType());
+            }
+            if (lambda.bodyBlock() != null) {
+                return LambdaExpr.block(lambda.parameters(),
+                        (BlockStatement) rewriteStatement(lambda.bodyBlock()),
+                        lambda.functionalType());
+            }
+        }
+        // 数组访问,实例检查,字面量等:无子表达式需重写
         return e;
     }
 
@@ -146,6 +193,27 @@ public class BoxingRewriter implements RewriteRule {
         if (!"valueOf".equals(inv.methodName())) {
             return false;
         }
-        return inv.target() == null && inv.arguments().size() == 1;
+        if (inv.arguments().size() != 1) {
+            return false;
+        }
+        // 静态调用:target 为 null 或为包装类型名称(如 VarExpr("Integer"))
+        if (inv.target() == null) {
+            return true;
+        }
+        if (inv.target() instanceof VarExpr v) {
+            String name = v.name();
+            if (name != null) {
+                // 检查 target 名称是否为包装类型的简单名(不区分大小写)
+                String lower = name.toLowerCase();
+                for (String wrapper : WRAPPER_TYPES) {
+                    int slash = wrapper.lastIndexOf('/');
+                    String simple = slash >= 0 ? wrapper.substring(slash + 1) : wrapper;
+                    if (simple.equalsIgnoreCase(lower)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 }

@@ -41,7 +41,7 @@ public final class FinallyRecognizer {
      * @return 合并后的语句树(若无变更则返回同一对象)
      */
     public BlockStatement merge(BlockStatement root,
-                                Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
+                                List<TryCatchInfo> tryCatchAnns) {
         List<Statement> merged = mergeList(root.statements(), tryCatchAnns);
         return new BlockStatement(merged);
     }
@@ -54,7 +54,7 @@ public final class FinallyRecognizer {
      * @return 合并后的语句列表
      */
     private List<Statement> mergeList(List<Statement> stmts,
-                                      Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
+                                      List<TryCatchInfo> tryCatchAnns) {
         // 构建索引:对每个 TryStatement 找到其处理器块,
         // 使用 TryCatchInfo.handlerBlock() 作为合并键
         Map<Statement, BasicBlock> tryToHandler = new HashMap<>();
@@ -127,7 +127,7 @@ public final class FinallyRecognizer {
     }
 
     /** 递归处理嵌套的 BlockStatement */
-    private Statement processNested(Statement s, Map<BasicBlock, TryCatchInfo> tryCatchAnns) {
+    private Statement processNested(Statement s, List<TryCatchInfo> tryCatchAnns) {
         if (s instanceof BlockStatement bs) {
             List<Statement> merged = mergeList(bs.statements(), tryCatchAnns);
             return new BlockStatement(merged);
@@ -158,7 +158,7 @@ public final class FinallyRecognizer {
      * 来推断哪个 TryStatement 源自哪个 TryCatchInfo.
      */
     private void findTryStatements(Statement s,
-                                   Map<BasicBlock, TryCatchInfo> tryCatchAnns,
+                                   List<TryCatchInfo> tryCatchAnns,
                                    Map<Statement, BasicBlock> result,
                                    Set<Statement> visited) {
         if (!visited.add(s)) {
@@ -166,11 +166,11 @@ public final class FinallyRecognizer {
         }
         if (s instanceof TryStatement ts && ts.finallyBody() != null) {
             // 通过检查 try 体找到匹配的 TryCatchInfo
-            for (var entry : tryCatchAnns.entrySet()) {
+            for (TryCatchInfo tci : tryCatchAnns) {
                 // 启发式匹配:如果是 try-finally(无 catch 子句),
                 // 大概率来自 catch-all 处理器.将其映射到处理器块用于合并.
                 if (ts.catchClauses().isEmpty()) {
-                    result.put(s, entry.getValue().handlerBlock());
+                    result.put(s, tci.handlerBlock());
                     break;
                 }
             }

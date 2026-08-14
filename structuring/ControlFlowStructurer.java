@@ -12,7 +12,6 @@ import com.bingbaihanji.bdec.cfg.PostDominatorTree;
 import com.bingbaihanji.bdec.ir.LinearIr;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -48,6 +47,16 @@ public class ControlFlowStructurer {
     /** 块归约器(在结构化完成后将 CFG 转为 AST 语句) */
     private BlockReducer blockReducer;
 
+    /** 折叠虚拟块的单调递增 ID 计数器.
+     *  <p>BasicBlock 的 equals/hashCode 仅基于 id——若使用 blockCount+1000
+     *  作为虚拟块 id,连续折叠时 blockCount 可能不变(折叠 N 块再新增 1 块),
+     *  导致同一图中出现多个 id 相同的块,使 CFG 的 HashMap 和注解映射键碰撞,
+     *  边丢失、结构破坏.单调计数器保证全局唯一.</p> */
+    private int nextVirtualBlockId = 1_000_000;
+
+    /** 最近一次折叠创建的虚拟块 ID(供 findReplacementBlock 查找) */
+    private int lastCreatedVirtualId = -1;
+
     /**
      * 对方法的线性 IR 进行控制流结构化,生成 AST 方法体.
      *
@@ -56,6 +65,10 @@ public class ControlFlowStructurer {
      * @return 结构化方法对象,包含归约后的 AST 方法体
      */
     public StructuredMethod structure(LinearIr ir, DecompileContext ctx) {
+        // 每个方法独立分配虚拟块 ID(从 1_000_000 开始,避免与原始块 0..N 冲突)
+        nextVirtualBlockId = 1_000_000;
+        lastCreatedVirtualId = -1;
+
         ControlFlowGraph graph = ir.controlFlowGraph();
 
         // 1. 计算初始支配树与后支配树
@@ -72,17 +85,13 @@ public class ControlFlowStructurer {
         Map<BasicBlock, LoopInfo> loopAnns = new HashMap<>();
         Map<BasicBlock, IfInfo> ifAnns = new HashMap<>();
         Map<BasicBlock, SwitchInfo> switchAnns = new HashMap<>();
-        Map<BasicBlock, TryCatchInfo> tryCatchAnns = new HashMap<>();
+        // try-catch 使用列表而非映射:同一处理器(如 finally)可能对应
+        // 多个异常范围,映射键会互相覆盖导致 catch 子句丢失.
+        List<TryCatchInfo> tryCatchAnns = new ArrayList<>(tryCatchInfos);
 
         // 记录 switch 头块
         for (SwitchInfo si : switchInfos) {
             switchAnns.put(si.header(), si);
-        }
-        // 记录 try-catch 入口(以第一个 try 块为键,而非处理器)
-        for (TryCatchInfo tci : tryCatchInfos) {
-            tci.tryBlocks().stream()
-                    .min(Comparator.comparingInt(BasicBlock::startOffset))
-                    .ifPresent(tryEntry -> tryCatchAnns.put(tryEntry, tci));
         }
         // 从预折叠分析中记录 if/else 和循环注解.
         // 这些注解由 BlockReducer 直接用于构建 IfStatement/LoopStatement.
@@ -106,11 +115,25 @@ public class ControlFlowStructurer {
             if (!loops.isEmpty()) {
                 loops = LoopAnalyzer.sortInnermostFirst(loops);
                 for (LoopInfo loop : loops) {
+                    // 跳过包含 switch 的循环(头或体):
+                    // 模式匹配 switch(typeSwitch) 的 when 守卫会生成回边
+                    //(切换到重启索引的重试循环).折叠此循环会破坏 switch 结构.
+                    // 循环头可能只是 typeSwitch 调用的块(不含 switch 指令),
+                    // 但循环体内包含 tableswitch 块,因此也需要检查.
+                    if (isSwitchHeader(loop.header(), switchAnns)
+                            || loopContainsSwitch(loop, switchAnns)) {
+                        continue;
+                    }
+                    // 跳过体内含内部分支(continue/break 模式)的循环:
+                    // 折叠会把体内条件分支扁平化丢失,
+                    // 由 BlockReducer 直接结构化翻译循环体.
+                    if (hasInternalBranches(loop, graph)) {
+                        continue;
+                    }
                     BasicBlock oldHeader = loop.header();
-                    int oldBlockCount = graph.blockCount();
                     graph = foldLoop(graph, loop, postDom);
                     // 将循环注解迁移到替换后的虚拟块
-                    BasicBlock replacement = findReplacementBlock(graph, oldBlockCount);
+                    BasicBlock replacement = findReplacementBlock(graph);
                     loopAnns.remove(oldHeader);
                     if (replacement != null) {
                         loopAnns.put(replacement, loop);
@@ -157,47 +180,68 @@ public class ControlFlowStructurer {
             finalIfAnns.put(ifInfo.header(), ifInfo);
         }
 
-        // 5c. 在最终折叠图上重新分析 try-catch(折叠可能替换了块,
-        // 导致预折叠的 tryCatchAnns 键失效).
-        List<TryCatchInfo> finalTryCatch = tryCatchAnalyzer.analyze(graph);
-        Map<BasicBlock, TryCatchInfo> finalTryCatchAnns = new HashMap<>();
-        for (TryCatchInfo tci : finalTryCatch) {
-            BasicBlock tryEntry = tci.tryBlocks().stream()
-                    .min(Comparator.comparingInt(BasicBlock::startOffset))
-                    .orElse(null);
-            if (tryEntry != null) {
-                finalTryCatchAnns.put(tryEntry, tci);
-            }
+        // 5c. 在最终折叠图上重新分析 switch.
+        // 循环折叠可能替换了 switch 头块,使预折叠的 switchAnns 键失效.
+        // 模式匹配 switch(typeSwitch) 特别容易受此影响——其 when 守卫
+        // 会生成回边,导致 switch 头被 LoopAnalyzer 折叠.
+        List<SwitchInfo> finalSwitches = switchAnalyzer.analyze(graph, finalDom);
+        Map<BasicBlock, SwitchInfo> finalSwitchAnns = new HashMap<>();
+        for (SwitchInfo si : finalSwitches) {
+            finalSwitchAnns.put(si.header(), si);
         }
 
+        // 5d. 在最终折叠图上重新分析 try-catch(折叠可能替换了块,
+        // 导致预折叠的 tryCatchAnns 引用失效).
+        // 使用列表:同一 try 区域可有多个处理器(catch + finally),
+        // 以任意块为键的映射都会互相覆盖丢失处理器.
+        List<TryCatchInfo> finalTryCatch = tryCatchAnalyzer.analyze(graph);
+
         // 6. 生成带有结构注解的 AST
+        if (ctx != null && ctx.config() != null && ctx.config().debugDumpCfg()) {
+            dumpGraph("=== FINAL FOLDED CFG [" + ir.method().name() + "] ===", graph,
+                    finalIfAnns, finalSwitchAnns, loopAnns);
+        }
         blockReducer = new BlockReducer(!ir.method().isStatic());
-        BlockStatement body = blockReducer.reduce(graph, ir, loopAnns, finalIfAnns, switchAnns, finalTryCatchAnns);
+        BlockStatement body = blockReducer.reduce(graph, ir, loopAnns, finalIfAnns, finalSwitchAnns, finalTryCatch);
 
         // 7. 后处理:合并共享同一处理器的相邻 try-finally 块
-        body = finallyRecognizer.merge(body, finalTryCatchAnns);
+        body = finallyRecognizer.merge(body, finalTryCatch);
 
-        return new StructuredMethod(ir.method(), ir, body, loopAnns, ifAnns, switchAnns, finalTryCatchAnns);
+        return new StructuredMethod(ir.method(), ir, body, loopAnns, ifAnns, switchAnns, finalTryCatch);
     }
 
     // ── 折叠操作 ────────────────────────────────────────
 
+    /** 调试:打印折叠后 CFG 的块/边/注解(由 debugDumpCfg 开关控制) */
+    private void dumpGraph(String title, ControlFlowGraph graph,
+                           Map<BasicBlock, IfInfo> ifAnns,
+                           Map<BasicBlock, SwitchInfo> switchAnns,
+                           Map<BasicBlock, LoopInfo> loopAnns) {
+        System.err.println(title);
+        for (BasicBlock b : graph.blocks()) {
+            String tag = "";
+            if (b == graph.entryBlock()) tag += "[ENTRY] ";
+            if (b == graph.exitBlock()) tag += "[EXIT] ";
+            if (loopAnns.containsKey(b)) tag += "[LOOP] ";
+            if (switchAnns.containsKey(b)) tag += "[SWITCH] ";
+            if (ifAnns.containsKey(b)) tag += "[IF] ";
+            System.err.println("  B" + b.id() + " " + tag
+                    + " off=" + b.startOffset() + " insns=" + b.instructions().size());
+            for (var e : graph.outgoingOf(b)) {
+                System.err.println("    -> B" + e.target().id() + " [" + e.kind()
+                        + (e.switchKey() >= 0 ? " key=" + e.switchKey() : "")
+                        + (e.catchType() != null ? " catch=" + e.catchType() : "") + "]");
+            }
+        }
+    }
+
     /** 将循环体折叠为单个虚拟基本块 */
     private ControlFlowGraph foldLoop(ControlFlowGraph graph, LoopInfo loop,
                                       PostDominatorTree postDom) {
-        BasicBlock virtualBlock = new BasicBlock(graph.blockCount() + 1000,
+        lastCreatedVirtualId = nextVirtualBlockId++;
+        BasicBlock virtualBlock = new BasicBlock(lastCreatedVirtualId,
                 flattenInstructions(loop.body(), graph));
         return buildFoldedGraph(graph, loop.body(), virtualBlock, loop.header());
-    }
-
-    /** 将 if-else 的两个分支折叠为单个虚拟基本块 */
-    private ControlFlowGraph foldIf(ControlFlowGraph graph, IfInfo info) {
-        Set<BasicBlock> allFolded = new HashSet<>();
-        allFolded.addAll(info.thenBlocks());
-        allFolded.addAll(info.elseBlocks());
-        BasicBlock virtualBlock = new BasicBlock(graph.blockCount() + 1000,
-                flattenInstructions(allFolded, graph));
-        return buildFoldedGraph(graph, allFolded, virtualBlock, info.header());
     }
 
     /**
@@ -230,6 +274,28 @@ public class ControlFlowStructurer {
                     if (b1hasException != b2hasException) {
                         continue;
                     }
+                    // 不合并包含 switch 指令的块.
+                    // switch 块合并后 tableswitch 不再在末尾,导致 endsWithSwitch() 失效.
+                    if (b1.containsSwitch() || b2.containsSwitch()) {
+                        continue;
+                    }
+                    // switch 块的出边目标不能与任何块合并
+                    if (isSwitchTarget(b1, graph) || isSwitchTarget(b2, graph)) {
+                        continue;
+                    }
+                    // 检查 b1 是否有 SWITCH_CASE 出边(防止 switch 头与后续合并)
+                    if (hasSwitchOutgoing(b1, graph) || hasSwitchOutgoing(b2, graph)) {
+                        continue;
+                    }
+                    // 不合并处理器块(有 EXCEPTION 入边)与后续非处理器块.
+                    // 否则 catch/finally 体泄露到后续代码中.
+                    boolean b1isHandler = graph.incomingOf(b1).stream()
+                            .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
+                    boolean b2isHandler = graph.incomingOf(b2).stream()
+                            .anyMatch(e -> e.kind() == EdgeKind.EXCEPTION);
+                    if (b1isHandler != b2isHandler) {
+                        continue;
+                    }
                     List<Instruction> merged = new ArrayList<>();
                     merged.addAll(b1.instructions());
                     merged.addAll(b2.instructions());
@@ -242,6 +308,73 @@ public class ControlFlowStructurer {
     }
 
     // ── 辅助方法 ────────────────────────────────────────────────────
+
+    /** 检查循环体内是否含内部分支(continue/break 模式).
+     *  <p>非头块以条件跳转结尾(体内 if),或存在指向非头体内块的 GOTO
+     *  (continue 桥接块)——折叠会扁平化这些分支,丢失控制流结构.
+     *  while 风格的测试在头块、增量在 latch 的普通循环不受影响.</p> */
+    private boolean hasInternalBranches(LoopInfo loop, ControlFlowGraph graph) {
+        for (BasicBlock b : loop.body()) {
+            if (b == loop.header()) {
+                continue;
+            }
+            if (b.endsWithConditionalJump()) {
+                return true;
+            }
+            for (var e : graph.outgoingOf(b)) {
+                if (e.kind() == EdgeKind.GOTO) {
+                    BasicBlock t = e.target();
+                    if (t != loop.header() && loop.body().contains(t)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 检查循环体中是否包含 switch 块 */
+    private boolean loopContainsSwitch(LoopInfo loop, Map<BasicBlock, SwitchInfo> switchAnns) {
+        for (BasicBlock b : loop.body()) {
+            if (isSwitchHeader(b, switchAnns)) {
+                return true;
+            }
+            if (b.containsSwitch()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 检查基本块是否有 switch 出边 */
+    private boolean hasSwitchOutgoing(BasicBlock block, ControlFlowGraph graph) {
+        return graph.outgoingOf(block).stream()
+                .anyMatch(e -> e.kind() == EdgeKind.SWITCH_CASE
+                        || e.kind() == EdgeKind.SWITCH_DEFAULT);
+    }
+
+    /** 检查基本块是否为 switch 目标(有 SWITCH_CASE 或 SWITCH_DEFAULT 入边) */
+    private boolean isSwitchTarget(BasicBlock block, ControlFlowGraph graph) {
+        return graph.incomingOf(block).stream()
+                .anyMatch(e -> e.kind() == EdgeKind.SWITCH_CASE
+                        || e.kind() == EdgeKind.SWITCH_DEFAULT);
+    }
+
+    /** 检查基本块是否为 switch 头(包含 switch 指令或存在于注解映射中) */
+    private boolean isSwitchHeader(BasicBlock block, Map<BasicBlock, SwitchInfo> switchAnns) {
+        if (switchAnns.containsKey(block)) return true;
+        // 按 ID 匹配(折叠后块 ID 可能变化)
+        for (BasicBlock key : switchAnns.keySet()) {
+            if (key.id() == block.id()) return true;
+        }
+        // 按内容检测:块中是否包含 tableswitch/lookupswitch 指令
+        if (block.containsSwitch()) return true;
+        // 按起始偏移量匹配(合并后 startOffset 可能保留)
+        for (BasicBlock key : switchAnns.keySet()) {
+            if (key.startOffset() == block.startOffset()) return true;
+        }
+        return false;
+    }
 
     /** 在折叠后的新图中按 ID 或起始偏移量查找等效块 */
     private BasicBlock findBlockInGraph(ControlFlowGraph graph, BasicBlock old) {
@@ -259,19 +392,13 @@ public class ControlFlowStructurer {
         return null;
     }
 
-    /** 查找折叠操作创建的替换虚拟块.
-     *  虚拟块的 id = 之前的块数量 + 1000. */
-    private BasicBlock findReplacementBlock(ControlFlowGraph graph, int oldBlockCount) {
-        int targetId = oldBlockCount + 1000;
-        for (BasicBlock b : graph.blocks()) {
-            if (b.id() == targetId) {
-                return b;
-            }
+    /** 查找折叠操作创建的替换虚拟块(按单调计数器分配的 ID). */
+    private BasicBlock findReplacementBlock(ControlFlowGraph graph) {
+        if (lastCreatedVirtualId < 0) {
+            return null;
         }
-        // 回退:查找任意非 entry/exit 的,id >= 1000 且有指令的块
         for (BasicBlock b : graph.blocks()) {
-            if (b != graph.entryBlock() && b != graph.exitBlock()
-                    && b.id() >= 1000 && !b.instructions().isEmpty()) {
+            if (b.id() == lastCreatedVirtualId) {
                 return b;
             }
         }

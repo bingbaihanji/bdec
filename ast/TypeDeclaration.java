@@ -1,5 +1,7 @@
 package com.bingbaihanji.bdec.ast;
 
+import com.bingbaihanji.bdec.bytecode.model.AccessFlags;
+
 import java.util.List;
 
 /**
@@ -33,6 +35,16 @@ public final class TypeDeclaration implements AstNode {
     /** 类型成员列表(字段,方法,内部类等AST节点) */
     private final List<AstNode> members;
 
+    /** 类级注解(已渲染的源码行,如 "@Retention(RetentionPolicy.RUNTIME)") */
+    private final List<String> annotations;
+
+    /** 父类型注解(已渲染的源码行,如 "extends @A Parent" 中的 "@A";空路径) */
+    private final List<String> superAnnotations;
+
+    /** 接口注解(已渲染的源码行,如 "implements @A I" 中的 "@A";
+     *  与 interfaceNames 按索引对齐,无注解接口用空串占位) */
+    private final List<String> interfaceAnnotations;
+
     /**
      * 构造一个类型声明节点(含泛型类型参数).
      *
@@ -47,6 +59,53 @@ public final class TypeDeclaration implements AstNode {
     public TypeDeclaration(int af, String sn, String kn, String superName,
                            List<String> interfaceNames, List<String> typeParams,
                            List<AstNode> m) {
+        this(af, sn, kn, superName, interfaceNames, typeParams, m,
+                List.of(), List.of(), List.of());
+    }
+
+    /**
+     * 构造一个类型声明节点(含类级注解).
+     *
+     * @param af              访问标志
+     * @param sn              简单名称
+     * @param kn              类型种类
+     * @param superName       父类名称
+     * @param interfaceNames  接口名称列表
+     * @param typeParams      泛型类型参数列表
+     * @param m               成员列表
+     * @param annotations     类级注解(已渲染的源码行)
+     */
+    public TypeDeclaration(int af, String sn, String kn, String superName,
+                           List<String> interfaceNames, List<String> typeParams,
+                           List<AstNode> m, List<String> annotations) {
+        this(af, sn, kn, superName, interfaceNames, typeParams, m, annotations,
+                List.of(), List.of());
+    }
+
+    /**
+     * 构造一个类型声明节点(含类级注解与父类型注解).
+     *
+     * @param superAnnotations 父类型注解(已渲染的源码行,空路径)
+     */
+    public TypeDeclaration(int af, String sn, String kn, String superName,
+                           List<String> interfaceNames, List<String> typeParams,
+                           List<AstNode> m, List<String> annotations,
+                           List<String> superAnnotations) {
+        this(af, sn, kn, superName, interfaceNames, typeParams, m, annotations,
+                superAnnotations, List.of());
+    }
+
+    /**
+     * 构造一个类型声明节点(含类级注解、父类型注解与接口注解).
+     *
+     * @param interfaceAnnotations 接口注解(已渲染的源码行,
+     *                             与 interfaceNames 按索引对齐,无注解为空串)
+     */
+    public TypeDeclaration(int af, String sn, String kn, String superName,
+                           List<String> interfaceNames, List<String> typeParams,
+                           List<AstNode> m, List<String> annotations,
+                           List<String> superAnnotations,
+                           List<String> interfaceAnnotations) {
         this.accessFlags = af;
         this.simpleName = sn;
         this.kindName = kn;
@@ -54,6 +113,9 @@ public final class TypeDeclaration implements AstNode {
         this.interfaceNames = List.copyOf(interfaceNames);
         this.typeParameters = List.copyOf(typeParams);
         this.members = List.copyOf(m);
+        this.annotations = List.copyOf(annotations);
+        this.superAnnotations = List.copyOf(superAnnotations);
+        this.interfaceAnnotations = List.copyOf(interfaceAnnotations);
     }
 
     /**
@@ -68,7 +130,7 @@ public final class TypeDeclaration implements AstNode {
      */
     public TypeDeclaration(int af, String sn, String kn, String superName,
                            List<String> interfaceNames, List<AstNode> m) {
-        this(af, sn, kn, superName, interfaceNames, List.of(), m);
+        this(af, sn, kn, superName, interfaceNames, List.of(), m, List.of(), List.of());
     }
 
     /** @return 访问标志 */
@@ -76,6 +138,15 @@ public final class TypeDeclaration implements AstNode {
 
     /** @return 类型简单名称 */
     public String simpleName() {return simpleName;}
+
+    /** @return 类级注解(已渲染的源码行) */
+    public List<String> annotations() {return annotations;}
+
+    /** @return 父类型注解(已渲染的源码行) */
+    public List<String> superAnnotations() {return superAnnotations;}
+
+    /** @return 接口注解(已渲染的源码行,与 interfaceNames 按索引对齐,无注解为空串) */
+    public List<String> interfaceAnnotations() {return interfaceAnnotations;}
 
     /** @return 类型种类 */
     public String kindName() {return kindName;}
@@ -90,7 +161,7 @@ public final class TypeDeclaration implements AstNode {
     public List<String> typeParameters() {return typeParameters;}
 
     /** @return 当前类型声明是否为接口 */
-    public boolean isInterface() {return (accessFlags & 0x0200) != 0;}
+    public boolean isInterface() {return (accessFlags & AccessFlags.ACC_INTERFACE) != 0;}
 
     @Override
     public AstKind kind() {return AstKind.TYPE_DECLARATION;}
