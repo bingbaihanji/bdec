@@ -10,6 +10,8 @@ package com.bingbaihanji.bdec.ast;
 public enum AstKind {
     /** 编译单元(源文件) */
     COMPILATION_UNIT,
+    /** 模块声明(module-info.java) */
+    MODULE_DECL,
     /** 类型声明(类,接口,枚举,注解) */
     TYPE_DECLARATION,
     /** 代码块 */
@@ -34,12 +36,8 @@ public enum AstKind {
     CONTINUE,
     /** 变量声明语句 */
     VARIABLE_DECL,
-    /** assert 断言语句 */
-    ASSERT,
     /** synchronized 同步语句 */
     SYNCHRONIZED,
-    /** 带标签的语句 */
-    LABELED,
     /** 字面量表达式 */
     LITERAL,
     /** 变量引用表达式 */

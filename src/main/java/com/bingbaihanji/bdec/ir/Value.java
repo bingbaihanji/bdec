@@ -10,7 +10,7 @@ import com.bingbaihanji.bdec.type.JavaType;
  * 所有值都必须提供其Java类型信息.
  * </p>
  */
-public sealed interface Value permits Variable, ConstantValue, InstructionRef {
+public sealed interface Value permits Variable, ConstantValue, InstructionRef, DynamicConstantValue {
 
     /**
      * 获取该值的Java类型.

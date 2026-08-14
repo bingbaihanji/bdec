@@ -23,6 +23,7 @@ public record IfInfo(
         Set<BasicBlock> elseBlocks,
         boolean negateCondition
 ) {
+
     /** 兼容旧调用方的便捷构造函数(默认 negateCondition=false) */
     public IfInfo(BasicBlock header, BasicBlock follow,
                   Set<BasicBlock> thenBlocks, Set<BasicBlock> elseBlocks) {

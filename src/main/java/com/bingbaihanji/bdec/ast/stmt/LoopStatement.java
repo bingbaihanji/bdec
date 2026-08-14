@@ -4,6 +4,7 @@ import com.bingbaihanji.bdec.ast.AstKind;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.AstVisitor;
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -37,6 +38,9 @@ public final class LoopStatement extends Statement {
      */
     private final Expression forEachVar;
 
+    /** for-each 元素变量的类型(可为 null,发射时回退为 Object) */
+    private final JavaType forEachVarType;
+
     /**
      * for 循环的完整构造器.
      *
@@ -46,6 +50,18 @@ public final class LoopStatement extends Statement {
      * @param incr 增量表达式
      * @param b    循环体语句
      */
+    /** 完整构造器(含 for-each 元素变量与类型) */
+    public LoopStatement(LoopKind k, Expression init, Expression cond, Expression incr,
+                         Statement b, Expression forEachVar, JavaType forEachVarType) {
+        this.loopKind = k;
+        this.initExpr = init;
+        this.condition = cond;
+        this.incrExpr = incr;
+        this.body = b;
+        this.forEachVar = forEachVar;
+        this.forEachVarType = forEachVarType;
+    }
+
     public LoopStatement(LoopKind k, Expression init, Expression cond, Expression incr, Statement b) {
         loopKind = k;
         initExpr = init;
@@ -53,6 +69,7 @@ public final class LoopStatement extends Statement {
         incrExpr = incr;
         body = b;
         forEachVar = null;
+        forEachVarType = null;
     }
 
     /**
@@ -64,12 +81,19 @@ public final class LoopStatement extends Statement {
      * @param b        循环体语句
      */
     public LoopStatement(LoopKind k, Expression varExpr, Expression iterable, Statement b) {
+        this(k, varExpr, iterable, b, null);
+    }
+
+    /** FOR_EACH 构造器(含元素变量类型) */
+    public LoopStatement(LoopKind k, Expression varExpr, Expression iterable, Statement b,
+                         JavaType varType) {
         loopKind = k;
         initExpr = null;
         condition = iterable;  // 将可迭代表达式存储在 condition 字段中
         incrExpr = null;
         body = b;
         forEachVar = varExpr;
+        forEachVarType = varType;
     }
 
     /**
@@ -97,6 +121,15 @@ public final class LoopStatement extends Statement {
 
     /** @return for-each 循环变量表达式,普通 for/while 循环时为 null */
     public Expression forEachVar() {return forEachVar;}
+
+    /** @return for-each 元素变量的类型(可为 null) */
+    public JavaType forEachVarType() {return forEachVarType;}
+
+    /** 返回带元素类型的 for-each 循环副本 */
+    public LoopStatement withForEachVarType(JavaType t) {
+        return new LoopStatement(loopKind, initExpr, condition, incrExpr, body,
+                forEachVar, t);
+    }
 
     /** @return 循环体语句 */
     public Statement body() {return body;}

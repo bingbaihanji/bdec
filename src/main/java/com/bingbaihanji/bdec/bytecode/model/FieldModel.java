@@ -2,6 +2,8 @@ package com.bingbaihanji.bdec.bytecode.model;
 
 import com.bingbaihanji.bdec.type.JavaType;
 
+import java.util.List;
+
 /**
  * 字段模型.
  *
@@ -13,17 +15,16 @@ import com.bingbaihanji.bdec.type.JavaType;
  * @param type          字段的 Java 类型
  * @param constantValue 常量值,若字段非编译期常量则为 {@code null}
  * @param signature     字段的泛型签名属性,若无则为空字符串
+ * @param annotations     字段上的注解(RuntimeVisible/InvisibleAnnotations),无则为空列表
+ * @param typeAnnotations 字段类型上的 JSR-308 类型注解(RuntimeVisibleTypeAnnotations),无则为空列表
  */
 public record FieldModel(
         int accessFlags,
         String name,
         JavaType type,
         Object constantValue,
-        String signature
+        String signature,
+        List<AnnotationEntry> annotations,
+        List<TypeAnnotationEntry> typeAnnotations
 ) {
-
-    /** 向后兼容的构造函数,不含签名信息. */
-    public FieldModel(int accessFlags, String name, JavaType type, Object constantValue) {
-        this(accessFlags, name, type, constantValue, "");
-    }
 }

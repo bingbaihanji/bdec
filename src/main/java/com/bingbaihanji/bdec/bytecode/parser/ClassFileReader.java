@@ -1,5 +1,6 @@
 package com.bingbaihanji.bdec.bytecode.parser;
 
+import com.bingbaihanji.bdec.bytecode.model.AccessFlags;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
@@ -39,6 +40,9 @@ public final class ClassFileReader {
 
     /** 结构解析器,负责解析字段和方法结构. */
     private final StructureParser structParser = new StructureParser();
+
+    /** 注解解析器,负责解析类级注解与类型注解. */
+    private final AnnotationParser annotationParser = new AnnotationParser();
 
     /**
      * 解析 {@code BootstrapMethods} 类属性.
@@ -153,6 +157,96 @@ public final class ClassFileReader {
     }
 
     /**
+     * 解析 {@code Module} 类属性(JVMS 4.7.25,module-info.class).
+     *
+     * <p>该属性携带模块声明所需的全部信息:模块名与标志、版本、
+     * requires/exports/opens/uses/provides 子句.</p>
+     */
+    private com.bingbaihanji.bdec.bytecode.model.ModuleInfo parseModule(DataInputStream in,
+            ConstantPoolEntry[] pool) throws IOException {
+        int nameIdx = in.readUnsignedShort();
+        String name = ConstantPoolParser.moduleName(pool, nameIdx);
+        int flags = in.readUnsignedShort();
+        int versionIdx = in.readUnsignedShort();
+        String version = versionIdx != 0 ? ConstantPoolParser.utf8(pool, versionIdx) : null;
+
+        // requires 表(依赖模块)
+        int reqCount = in.readUnsignedShort();
+        List<com.bingbaihanji.bdec.bytecode.model.ModuleInfo.RequiresEntry> requires
+                = new ArrayList<>(reqCount);
+        for (int i = 0; i < reqCount; i++) {
+            int modIdx = in.readUnsignedShort();
+            int reqFlags = in.readUnsignedShort();
+            int verIdx = in.readUnsignedShort();
+            requires.add(new com.bingbaihanji.bdec.bytecode.model.ModuleInfo.RequiresEntry(
+                    ConstantPoolParser.moduleName(pool, modIdx), reqFlags,
+                    verIdx != 0 ? ConstantPoolParser.utf8(pool, verIdx) : null));
+        }
+
+        // exports 表(导出的包及其目标模块)
+        int expCount = in.readUnsignedShort();
+        List<com.bingbaihanji.bdec.bytecode.model.ModuleInfo.ExportsEntry> exports
+                = new ArrayList<>(expCount);
+        for (int i = 0; i < expCount; i++) {
+            int pkgIdx = in.readUnsignedShort();
+            int expFlags = in.readUnsignedShort();
+            int toCount = in.readUnsignedShort();
+            List<String> to = new ArrayList<>(toCount);
+            for (int j = 0; j < toCount; j++) {
+                to.add(ConstantPoolParser.moduleName(pool, in.readUnsignedShort()));
+            }
+            exports.add(new com.bingbaihanji.bdec.bytecode.model.ModuleInfo.ExportsEntry(
+                    ConstantPoolParser.packageName(pool, pkgIdx).replace('/', '.'),
+                    expFlags, to));
+        }
+
+        // opens 表(开放的包及其目标模块)
+        int opensCount = in.readUnsignedShort();
+        List<com.bingbaihanji.bdec.bytecode.model.ModuleInfo.OpensEntry> opens
+                = new ArrayList<>(opensCount);
+        for (int i = 0; i < opensCount; i++) {
+            int pkgIdx = in.readUnsignedShort();
+            int openFlags = in.readUnsignedShort();
+            int toCount = in.readUnsignedShort();
+            List<String> to = new ArrayList<>(toCount);
+            for (int j = 0; j < toCount; j++) {
+                to.add(ConstantPoolParser.moduleName(pool, in.readUnsignedShort()));
+            }
+            opens.add(new com.bingbaihanji.bdec.bytecode.model.ModuleInfo.OpensEntry(
+                    ConstantPoolParser.packageName(pool, pkgIdx).replace('/', '.'),
+                    openFlags, to));
+        }
+
+        // uses 表(消费的服务接口)
+        int usesCount = in.readUnsignedShort();
+        List<String> uses = new ArrayList<>(usesCount);
+        for (int i = 0; i < usesCount; i++) {
+            uses.add(ConstantPoolParser.className(pool, in.readUnsignedShort())
+                    .replace('/', '.'));
+        }
+
+        // provides 表(服务实现)
+        int provCount = in.readUnsignedShort();
+        List<com.bingbaihanji.bdec.bytecode.model.ModuleInfo.ProvidesEntry> provides
+                = new ArrayList<>(provCount);
+        for (int i = 0; i < provCount; i++) {
+            String service = ConstantPoolParser.className(pool, in.readUnsignedShort())
+                    .replace('/', '.');
+            int withCount = in.readUnsignedShort();
+            List<String> with = new ArrayList<>(withCount);
+            for (int j = 0; j < withCount; j++) {
+                with.add(ConstantPoolParser.className(pool, in.readUnsignedShort())
+                        .replace('/', '.'));
+            }
+            provides.add(new com.bingbaihanji.bdec.bytecode.model.ModuleInfo.ProvidesEntry(
+                    service, with));
+        }
+
+        return new com.bingbaihanji.bdec.bytecode.model.ModuleInfo(
+                name, flags, version, requires, exports, opens, uses, provides);
+    }
+
+    /**
      * 读取一个类文件的完整内容并构造 {@link ClassFileModel}.
      *
      * <p>这是类文件解析的主入口方法,按照 JVM 类文件格式顺序读取
@@ -181,9 +275,13 @@ public final class ClassFileReader {
         // 读取访问标志
         int accessFlags = in.readUnsignedShort();
 
-        // 读取当前类名
+        // 读取当前类名.
+        // module-info.class 的 this_class 指向 CONSTANT_Module 而非 CONSTANT_Class
+        // (ACC_MODULE = 0x8000).
         int thisClassIdx = in.readUnsignedShort();
-        String thisClassName = ConstantPoolParser.className(pool, thisClassIdx);
+        String thisClassName = (accessFlags & AccessFlags.ACC_MODULE) != 0
+                ? ConstantPoolParser.moduleName(pool, thisClassIdx)
+                : ConstantPoolParser.className(pool, thisClassIdx);
 
         // 读取父类名(索引为 0 表示当前类是 java.lang.Object)
         int superClassIdx = in.readUnsignedShort();
@@ -213,10 +311,20 @@ public final class ClassFileReader {
         List<RecordComponentEntry> recordComponents = Collections.emptyList();
         List<String> permittedSubclasses = Collections.emptyList();
         List<InnerClassEntry> innerClasses = Collections.emptyList();
+        List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> classAnnotations
+                = Collections.emptyList();
+        com.bingbaihanji.bdec.bytecode.model.ModuleInfo moduleInfo = null;
+        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry>
+                classTypeAnnotations = Collections.emptyList();
         for (int i = 0; i < attrCount; i++) {
             int attrNameIdx = in.readUnsignedShort();
             int attrLen = in.readInt();
             String attrName = ConstantPoolParser.utf8(pool, attrNameIdx);
+            // 畸形类文件中属性名索引可能无效(utf8 返回 null),跳过该属性.
+            if (attrName == null) {
+                in.skipBytes(attrLen);
+                continue;
+            }
             switch (attrName) {
                 case "Signature" -> {
                     int sigIdx = in.readUnsignedShort();
@@ -234,12 +342,22 @@ public final class ClassFileReader {
                 case "InnerClasses" -> {
                     innerClasses = parseInnerClasses(in, pool);
                 }
+                case "RuntimeVisibleAnnotations" -> {
+                    classAnnotations = annotationParser.parseAnnotations(in, pool);
+                }
+                case "RuntimeVisibleTypeAnnotations" -> {
+                    classTypeAnnotations = annotationParser.parseTypeAnnotations(in, pool);
+                }
+                case "Module" -> {
+                    moduleInfo = parseModule(in, pool);
+                }
                 default -> in.skipBytes(attrLen);
             }
         }
 
         return new ClassFileModel(major, minor, accessFlags,
                 thisClassName, superName, interfaces, fields, methods, pool, signature,
-                bootstrapMethods, recordComponents, permittedSubclasses, innerClasses);
+                bootstrapMethods, recordComponents, permittedSubclasses, innerClasses,
+                classAnnotations, moduleInfo, classTypeAnnotations);
     }
 }

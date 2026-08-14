@@ -25,16 +25,16 @@ import java.util.jar.JarInputStream;
  */
 public final class BdecCli {
 
-    /** 当前版本号 */
-    private static final String VERSION = "0.1.0";
+    /** 当前版本号(引用 {@link BuildInfo} 单一事实源) */
+    private static final String VERSION = BuildInfo.VERSION;
 
     /** 命令行帮助信息模板 */
     private static final String HELP = """
                                        BDEC (Bingbaihanji Decompiler) v%s — Java 反编译引擎
-                                       
+
                                        用法:
                                          java -jar bdec.jar [选项]
-                                       
+
                                        选项:
                                          --help, -h               显示此帮助信息
                                          --version, -v            显示版本号
@@ -42,12 +42,12 @@ public final class BdecCli {
                                                                   输出目录默认为当前目录
                                          -jar <文件> [输出目录]    反编译 JAR 包中全部 .class 文件
                                                                   输出目录默认为当前目录
-                                       
+
                                        示例:
                                          java -jar bdec.jar -class "D:/hello/Hello.class" "D:/hello/"
                                          java -jar bdec.jar -jar "test.jar" ./
                                          java -jar bdec.jar -jar "lib.jar" ./output/
-                                       
+
                                        输出:
                                          对每个类 com.example.Foo,生成 输出目录/com/example/Foo.java
                                        """.formatted(VERSION);
@@ -106,7 +106,37 @@ public final class BdecCli {
 
             // 直接从 class 文件字节中读取内部名称(最可靠的方式)
             String name = readInternalName(bytes, classFile.toString());
-            BdecResult result = engine.decompile(name, bytes, DecompileContext.empty(config));
+
+            // 创建类字节加载器以支持内部类反编译.
+            // 解析 class 文件的包目录并从 classes 根目录加载内部类.
+            // 例如外部类在 target/classes/com/example/Outer.class,
+            // 内部类 target/classes/com/example/Outer$Inner.class
+            // 需要从 classes 根目录通过内部名称加载.
+            Path classFileParent = classFile.toAbsolutePath().getParent();
+            // 通过从类文件路径中移除包目录来查找 classes 根目录
+            Path classesRoot = classFileParent;
+            int slashIdx = name.lastIndexOf('/');
+            if (slashIdx >= 0) {
+                String packagePath = name.substring(0, slashIdx);
+                String parentPath = classFileParent.toString().replace('\\', '/');
+                if (parentPath.endsWith(packagePath)) {
+                    classesRoot = Path.of(parentPath.substring(0,
+                            parentPath.length() - packagePath.length()));
+                }
+            }
+            final Path root = classesRoot;
+            java.util.function.Function<String, byte[]> loader = innerName -> {
+                try {
+                    Path innerFile = root.resolve(innerName + ".class");
+                    if (Files.exists(innerFile)) {
+                        return Files.readAllBytes(innerFile);
+                    }
+                } catch (Exception ignored) {
+                }
+                return null;
+            };
+            DecompileContext ctx = new DecompileContext(config, loader);
+            BdecResult result = engine.decompile(name, bytes, ctx);
 
             if (!result.success()) {
                 System.err.println("Decompile failed: " +

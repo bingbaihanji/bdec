@@ -60,18 +60,14 @@ public class TextBlockRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(),
-                        md.body() != null ? rewriteStatement(md.body()) : null));
+                members.add(withBody(md, md.body() != null ? rewriteStatement(md.body()) : null));
             } else if (m instanceof FieldDeclaration fd) {
-                members.add(new FieldDeclaration(fd.accessFlags(), fd.name(), fd.type(),
-                        fd.initializer() != null ? rewriteExpr(fd.initializer()) : null));
+                members.add(withInitializer(fd, fd.initializer() != null ? rewriteExpr(fd.initializer()) : null));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /**

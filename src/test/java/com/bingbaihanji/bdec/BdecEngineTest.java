@@ -17,7 +17,7 @@ public class BdecEngineTest {
         List<DecompilerDiagnostic> diags = new ArrayList<>();
         BdecEngine engine = new BdecEngine(BdecConfig.defaults(), diags::add);
         assertEquals("bdec", engine.getName());
-        assertEquals("0.1.0", engine.getVersion());
+        assertEquals("1.0.0", engine.getVersion());
     }
 
     @Test

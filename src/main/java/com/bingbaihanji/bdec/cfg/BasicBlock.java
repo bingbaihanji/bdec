@@ -1,6 +1,7 @@
 package com.bingbaihanji.bdec.cfg;
 
 import com.bingbaihanji.bdec.bytecode.model.Instruction;
+import com.bingbaihanji.bdec.bytecode.opcode.Opcode;
 
 import java.util.List;
 
@@ -101,7 +102,24 @@ public final class BasicBlock {
      */
     public boolean endsWithSwitch() {
         var last = lastInstruction();
-        return last != null && (last.opcode() == 170 || last.opcode() == 171);
+        return last != null && (last.opcode() == Opcode.TABLESWITCH.code()
+                || last.opcode() == Opcode.LOOKUPSWITCH.code());
+    }
+
+    /**
+     * 判断基本块中是否包含 switch 指令(不一定是最后一条).
+     * 用于防止 CFG 折叠时 switch 被合并到更大的块中而丢失.
+     *
+     * @return 如果包含 tableswitch 或 lookupswitch 则返回 {@code true}
+     */
+    public boolean containsSwitch() {
+        for (Instruction insn : instructions) {
+            if (insn.opcode() == Opcode.TABLESWITCH.code()
+                    || insn.opcode() == Opcode.LOOKUPSWITCH.code()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override

@@ -61,8 +61,12 @@ public final class BranchAnalyzer {
             }
             // 用剩余的后继填补缺失的目标
             for (BasicBlock s : succs) {
-                if (trueTarget == null && s != falseTarget) trueTarget = s;
-                if (falseTarget == null && s != trueTarget) falseTarget = s;
+                if (trueTarget == null && s != falseTarget) {
+                    trueTarget = s;
+                }
+                if (falseTarget == null && s != trueTarget) {
+                    falseTarget = s;
+                }
             }
             if (trueTarget == null || falseTarget == null) {
                 continue;
@@ -73,9 +77,31 @@ public final class BranchAnalyzer {
                 continue;
             }
 
+            // 终止分支检测:一个分支的所有路径直达 exit 且目标块无外部前驱
+            //(即该分支是 throw/return 的终止分支),此时 follow 应为
+            // 另一分支的目标(延续点).
+            // 例:assert 模式 if (x > 0) {} else throw——FALSE 分支直接
+            // athrow 到 exit,TRUE 目标是方法的后续代码(有外部前驱).
+            if (falseTarget != null
+                    && isTerminalBranch(falseTarget, trueTarget, block, graph)
+                    && hasExternalPred(trueTarget, block, graph)) {
+                follow = trueTarget;
+            } else if (trueTarget != null
+                    && isTerminalBranch(trueTarget, falseTarget, block, graph)
+                    && hasExternalPred(falseTarget, block, graph)) {
+                follow = falseTarget;
+            }
+
             Set<BasicBlock> thenBlocks, elseBlocks;
             boolean negateCondition = false;
 
+            // 特判:一个分支在另一个分支的目标处汇入(一个分支是"跳过"分支).
+            // 例:assert 的 $assertionsDisabled 检查——TRUE 直接落到后续代码,
+            // FALSE 是 assert 体,最终也汇入后续代码.
+            // 此时被汇入分支是空的"跳过",if 应取反后只包含另一分支,
+            // 后续代码不属于 if.
+            boolean falseJoinsTrue = branchJoins(falseTarget, trueTarget, follow, graph);
+            boolean trueJoinsFalse = branchJoins(trueTarget, falseTarget, follow, graph);
             if (trueTarget == follow) {
                 // 跳转目标直达 follow → false 分支(直落)是 then 体
                 // CONDITION 已将 ifeq 翻译为 !(值),但 then 体在 CONDITION 为假时执行,
@@ -88,6 +114,19 @@ public final class BranchAnalyzer {
                 // 不需要取反,因为 then 体在 CONDITION 为真时执行
                 thenBlocks = collectBranch(trueTarget, follow, graph);
                 elseBlocks = Set.of();
+            } else if (falseJoinsTrue) {
+                // false 分支汇入 true 目标:then = false 分支(条件取反),
+                // 收敛点 = true 目标,后续代码不属于 if.
+                thenBlocks = collectBranch(falseTarget, trueTarget, graph);
+                elseBlocks = Set.of();
+                negateCondition = true;
+                follow = trueTarget;
+            } else if (trueJoinsFalse) {
+                // true 分支汇入 false 目标:then = true 分支(条件不变),
+                // 收敛点 = false 目标.
+                thenBlocks = collectBranch(trueTarget, falseTarget, graph);
+                elseBlocks = Set.of();
+                follow = falseTarget;
             } else {
                 // 两个后继都不直达 follow → if-else
                 thenBlocks = collectBranch(trueTarget, follow, graph);
@@ -97,6 +136,82 @@ public final class BranchAnalyzer {
             results.add(new IfInfo(block, follow, thenBlocks, elseBlocks, negateCondition));
         }
         return results;
+    }
+
+    /** 检查目标块是否有 header 之外的前驱(即它是共享延续点) */
+    private boolean hasExternalPred(BasicBlock target, BasicBlock header,
+                                    ControlFlowGraph graph) {
+        if (target == null) {
+            return false;
+        }
+        for (var in : graph.incomingOf(target)) {
+            if (in.source() != header) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 检查分支是否为终止分支:目标块无外部前驱(仅从 header 进入),
+     *  且所有路径都直达 exit,不汇入另一个分支的目标. */
+    private boolean isTerminalBranch(BasicBlock start, BasicBlock otherTarget,
+                                     BasicBlock header, ControlFlowGraph graph) {
+        if (start == otherTarget || start == graph.exitBlock()) {
+            return false;
+        }
+        // 目标块有 header 之外的前驱 → 它是共享延续点,不是终止分支
+        for (var in : graph.incomingOf(start)) {
+            if (in.source() != header) {
+                return false;
+            }
+        }
+        // 所有非异常路径都必须直达 exit
+        Set<BasicBlock> visited = new java.util.HashSet<>();
+        Deque<BasicBlock> queue = new ArrayDeque<>();
+        queue.add(start);
+        while (!queue.isEmpty()) {
+            BasicBlock curr = queue.poll();
+            if (!visited.add(curr)) {
+                continue;
+            }
+            if (curr == otherTarget) {
+                return false; // 汇入了另一分支
+            }
+            for (var e : graph.outgoingOf(curr)) {
+                if (e.kind() == EdgeKind.EXCEPTION) {
+                    continue;
+                }
+                BasicBlock t = e.target();
+                if (t == graph.exitBlock()) {
+                    continue; // 正常终止
+                }
+                if (t == otherTarget) {
+                    return false;
+                }
+                queue.add(t);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 检查分支区域(从 start 到 stop 的可达块)中是否存在指向 joinTarget 的边,
+     * 即该分支最终汇入另一个分支的目标块.
+     */
+    private boolean branchJoins(BasicBlock start, BasicBlock joinTarget,
+                                BasicBlock stop, ControlFlowGraph graph) {
+        if (start == joinTarget || joinTarget == null || start == stop) {
+            return false;
+        }
+        Set<BasicBlock> region = collectBranch(start, stop, graph);
+        for (BasicBlock rb : region) {
+            for (var e : graph.outgoingOf(rb)) {
+                if (e.kind() != EdgeKind.EXCEPTION && e.target() == joinTarget) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

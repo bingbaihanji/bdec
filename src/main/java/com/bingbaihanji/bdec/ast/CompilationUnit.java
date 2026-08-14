@@ -15,9 +15,11 @@ import java.util.Map;
  * @param imports  导入语句列表(全限定类名)
  * @param types  该编译单元中包含的所有类型声明
  * @param innerClassNames  内部类友好名称映射:简单内部名称(如 TestClass2$1LocalClass) → 友好名称(如 LocalClass)
+ * @param module  模块声明,仅 module-info.class 反编译结果非 null
  */
 public record CompilationUnit(String packageName, List<String> imports, List<TypeDeclaration> types,
-                              Map<String, String> innerClassNames) implements AstNode {
+                              Map<String, String> innerClassNames, ModuleDeclaration module)
+        implements AstNode {
 
     /**
      * 构造一个编译单元.
@@ -27,7 +29,7 @@ public record CompilationUnit(String packageName, List<String> imports, List<Typ
      * @param ts   类型声明列表
      */
     public CompilationUnit(String pkg, List<String> imps, List<TypeDeclaration> ts) {
-        this(pkg, imps, ts, Collections.emptyMap());
+        this(pkg, imps, ts, Collections.emptyMap(), null);
     }
 
     /**
@@ -40,10 +42,19 @@ public record CompilationUnit(String packageName, List<String> imports, List<Typ
      */
     public CompilationUnit(String packageName, List<String> imports, List<TypeDeclaration> types,
                            Map<String, String> innerClassNames) {
+        this(packageName, imports, types, innerClassNames, null);
+    }
+
+    /**
+     * 构造一个编译单元(含模块声明,用于 module-info.class).
+     */
+    public CompilationUnit(String packageName, List<String> imports, List<TypeDeclaration> types,
+                           Map<String, String> innerClassNames, ModuleDeclaration module) {
         this.packageName = packageName;
         this.imports = List.copyOf(imports);
         this.types = List.copyOf(types);
         this.innerClassNames = Map.copyOf(innerClassNames);
+        this.module = module;
     }
 
     /** @return 包名 */
@@ -62,11 +73,17 @@ public record CompilationUnit(String packageName, List<String> imports, List<Typ
     @Override
     public Map<String, String> innerClassNames() {return innerClassNames;}
 
+    /** @return 模块声明,仅 module-info.class 反编译结果非 null */
+    @Override
+    public ModuleDeclaration module() {return module;}
+
     @Override
     public AstKind kind() {return AstKind.COMPILATION_UNIT;}
 
     @Override
-    public List<AstNode> children() {return List.copyOf(types);}
+    public List<AstNode> children() {
+        return module != null ? List.of(module) : List.copyOf(types);
+    }
 
     @Override
     public <R, C> R accept(AstVisitor<R, C> v, C c) {return v.visit(this, c);}

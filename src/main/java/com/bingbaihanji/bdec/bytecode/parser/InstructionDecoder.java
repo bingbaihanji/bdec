@@ -84,7 +84,7 @@ public final class InstructionDecoder {
                 // 隐式索引操作码(ILOAD_0,ISTORE_3 等)的 operandCount==0,
                 // 索引来自 implicitVarIndex.
                 // 非索引操作码(BIPUSH,LDC 等)的 implicitVarIndex==-1.
-                if (op.implicitVarIndex() < 0 || op.operandBytes() > 0) {
+                if (op.implicitVarIndex() == 0) {
                     varIndex = val;
                 }
             }

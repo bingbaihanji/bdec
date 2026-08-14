@@ -77,4 +77,27 @@ public class ConstantPoolParserTest {
 
         assertEquals("testString", ConstantPoolParser.utf8(pool, 1));
     }
+
+    @Test
+    public void testInvalidIndexReturnsNull() throws IOException {
+        // 构造最小常量池:index 1 = Utf8, index 2 = Class(name_index=1)
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        DataOutputStream dos = new DataOutputStream(bos);
+        dos.writeShort(3);
+        dos.writeByte(1);
+        dos.writeUTF("java/lang/Object");
+        dos.writeByte(7);
+        dos.writeShort(1);
+
+        var pool = new ConstantPoolParser().parse(new DataInputStream(
+                new ByteArrayInputStream(bos.toByteArray())));
+
+        // 无效索引应返回 null 而非哨兵字符串.
+        assertNull(ConstantPoolParser.utf8(pool, 0));       // 索引 0 恒无效
+        assertNull(ConstantPoolParser.utf8(pool, 99));      // 越界
+        assertNull(ConstantPoolParser.utf8(pool, 2));       // 非 CpUtf8 条目
+        assertNull(ConstantPoolParser.className(pool, 0));  // 索引 0
+        assertNull(ConstantPoolParser.className(pool, 1));  // 非 CpClass 条目
+        assertEquals("java/lang/Object", ConstantPoolParser.className(pool, 2)); // 合法
+    }
 }

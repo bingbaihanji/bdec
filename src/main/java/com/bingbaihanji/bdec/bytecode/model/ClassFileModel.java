@@ -5,7 +5,6 @@ import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.RecordComponentEntry;
 
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -37,6 +36,7 @@ import java.util.List;
  * @param recordComponents      记录组件属性列表(Java 16+ 的 {@code record} 类)
  * @param permittedSubclasses   密封类允许的子类列表(Java 17+ 的 {@code sealed class})
  * @param innerClasses          内部类属性列表
+ * @param moduleInfo            Module 属性(model-info.class),普通类为 {@code null}
  */
 public record ClassFileModel(
         int majorVersion,
@@ -52,29 +52,9 @@ public record ClassFileModel(
         List<BootstrapMethodEntry> bootstrapMethods,
         List<RecordComponentEntry> recordComponents,
         List<String> permittedSubclasses,
-        List<InnerClassEntry> innerClasses
+        List<InnerClassEntry> innerClasses,
+        List<AnnotationEntry> annotations,
+        ModuleInfo moduleInfo,
+        List<TypeAnnotationEntry> typeAnnotations
 ) {
-
-    /** 向后兼容的构造函数,不含签名与引导方法信息. */
-    public ClassFileModel(int majorVersion, int minorVersion, int accessFlags,
-                          String internalName, String superInternalName,
-                          List<String> interfaceInternalNames, List<FieldModel> fields,
-                          List<MethodModel> methods, ConstantPoolEntry[] constantPool) {
-        this(majorVersion, minorVersion, accessFlags, internalName, superInternalName,
-                interfaceInternalNames, fields, methods, constantPool, "",
-                Collections.emptyList(), Collections.emptyList(), Collections.emptyList(),
-                Collections.emptyList());
-    }
-
-    /** 包含签名但不含引导方法的构造函数. */
-    public ClassFileModel(int majorVersion, int minorVersion, int accessFlags,
-                          String internalName, String superInternalName,
-                          List<String> interfaceInternalNames, List<FieldModel> fields,
-                          List<MethodModel> methods, ConstantPoolEntry[] constantPool,
-                          String signature) {
-        this(majorVersion, minorVersion, accessFlags, internalName, superInternalName,
-                interfaceInternalNames, fields, methods, constantPool, signature,
-                Collections.emptyList(), Collections.emptyList(), Collections.emptyList(),
-                Collections.emptyList());
-    }
 }

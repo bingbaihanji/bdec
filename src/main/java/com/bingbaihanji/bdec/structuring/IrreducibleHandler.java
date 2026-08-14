@@ -5,13 +5,9 @@ import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 /**
  * 不可归约控制流图处理器.
  *
- * <p>当 CFG 无法完全归约为结构化形式时,作为回退方案进行处理.
- * 按优先级依次尝试:
- * <ol>
- *   <li>阶段一:节点分裂以打破不可归约性</li>
- *   <li>阶段二:标记化的 break/continue 语句</li>
- *   <li>阶段三:goto 回退(最终手段)</li>
- * </ol>
+ * <p>当 CFG 无法完全归约为结构化形式时作为回退方案.
+ * 当前为透传占位实现(直接返回原图),后续可在此实现
+ * 节点分裂、标记化 break/continue、goto 回退等降级策略.
  */
 public final class IrreducibleHandler {
 
@@ -19,12 +15,9 @@ public final class IrreducibleHandler {
      * 处理不可归约的控制流图.
      *
      * @param graph 原始 CFG
-     * @return 处理后的 CFG(当前为透传实现)
+     * @return 处理后的 CFG
      */
     public ControlFlowGraph handle(ControlFlowGraph graph) {
-        // 阶段一:节点分裂以打破不可归约性
-        // 阶段二:标记化的 break/continue
-        // 阶段三:goto 回退(最终手段)
-        return graph; // 当前为透传实现
+        return graph; // 透传占位:暂未实现不可归约降级
     }
 }

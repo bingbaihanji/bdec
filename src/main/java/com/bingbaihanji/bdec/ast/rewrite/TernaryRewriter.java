@@ -36,6 +36,9 @@ public class TernaryRewriter implements RewriteRule {
     public String name() {return "ternary";}
 
     @Override
+    public RewriteRuleKind kind() {return RewriteRuleKind.TERNARY;}
+
+    @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
         List<TypeDeclaration> rewrittenTypes = new ArrayList<>();
         for (TypeDeclaration td : unit.types()) {
@@ -55,15 +58,12 @@ public class TernaryRewriter implements RewriteRule {
         for (AstNode member : td.children()) {
             if (member instanceof MethodDeclaration md) {
                 Statement newBody = md.body() != null ? rewriteStatement(md.body()) : null;
-                rewrittenMembers.add(new MethodDeclaration(
-                        md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(), newBody));
+                rewrittenMembers.add(withBody(md, newBody));
             } else {
                 rewrittenMembers.add(member);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), rewrittenMembers);
+        return withMembers(td, rewrittenMembers);
     }
 
     /**

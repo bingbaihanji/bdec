@@ -2,15 +2,21 @@ package com.bingbaihanji.bdec;
 
 import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -120,6 +126,88 @@ public class DecompileTestHarness {
         }
     }
 
+    /**
+     * Compile a Java source string and decompile the top-level class, with a
+     * bytecode loader that resolves inner/anonymous classes ({@code E$1} etc.)
+     * from the temp directory — needed by {@code EnumRewriter} to read enum
+     * constant class bodies. Uses the default {@link BdecConfig}.
+     */
+    public static String decompileWithInnerLoader(String source, String className) throws Exception {
+        Path tmpDir = Files.createTempDirectory("bdec-test-inner-");
+        try {
+            String simple = className.contains("/")
+                    ? className.substring(className.lastIndexOf('/') + 1) : className;
+            Path srcFile = tmpDir.resolve(simple + ".java");
+            Files.writeString(srcFile, source, StandardCharsets.UTF_8);
+
+            JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+            ByteArrayOutputStream errStream = new ByteArrayOutputStream();
+            int compileResult = compiler.run(null, null, errStream,
+                    "-g", "-d", tmpDir.toString(), srcFile.toString());
+            if (compileResult != 0) {
+                throw new RuntimeException("Compilation failed for: " + className
+                        + "\n" + errStream.toString());
+            }
+
+            Path classFile = tmpDir.resolve(simple + ".class");
+            if (!Files.exists(classFile)) {
+                throw new RuntimeException("No .class file produced for: " + className);
+            }
+
+            Function<String, byte[]> loader = internalName -> {
+                try {
+                    Path innerFile = tmpDir.resolve(internalName + ".class");
+                    if (Files.exists(innerFile)) {
+                        return Files.readAllBytes(innerFile);
+                    }
+                } catch (Exception ignored) {
+                }
+                return null;
+            };
+
+            BdecConfig config = BdecConfig.builder().build();
+            BdecEngine engine = new BdecEngine(config, d -> {});
+            BdecResult result = engine.decompile(classFile, new DecompileContext(config, loader));
+            if (!result.success()) {
+                throw new RuntimeException("Decompilation failed: " + result.cause());
+            }
+            return result.decompiledCode();
+        } finally {
+            deleteRecursively(tmpDir);
+        }
+    }
+
+    /**
+     * Assert that decompiled source recompiles with javac, optionally alongside
+     * companion sources (other types referenced by the decompiled code, keyed by
+     * simple class name). All sources are compiled together into one directory.
+     */
+    public static void assertRecompiles(String decompiled, String className,
+                                        Map<String, String> companions) throws Exception {
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        assertNotNull("No system Java compiler available", compiler);
+        Path workDir = Files.createTempDirectory("bdec-test-rc-");
+        try {
+            Files.writeString(workDir.resolve(className + ".java"),
+                    decompiled, StandardCharsets.UTF_8);
+            List<String> args = new ArrayList<>();
+            args.add("-d");
+            args.add(workDir.toString());
+            args.add(workDir.resolve(className + ".java").toString());
+            for (Map.Entry<String, String> c : companions.entrySet()) {
+                Files.writeString(workDir.resolve(c.getKey() + ".java"),
+                        c.getValue(), StandardCharsets.UTF_8);
+                args.add(workDir.resolve(c.getKey() + ".java").toString());
+            }
+            ByteArrayOutputStream errStream = new ByteArrayOutputStream();
+            int result = compiler.run(null, null, errStream, args.toArray(new String[0]));
+            assertEquals("Recompilation of decompiled " + className + " failed:\n"
+                    + errStream, 0, result);
+        } finally {
+            deleteRecursively(workDir);
+        }
+    }
+
     private Path findResource(String resourcePath) {
         // Try classpath first (Maven copies src/test/resources to classpath root)
         try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
@@ -147,11 +235,11 @@ public class DecompileTestHarness {
         return name;
     }
 
-    private void deleteRecursively(Path dir) {
+    private static void deleteRecursively(Path dir) {
         try {
             if (Files.isDirectory(dir)) {
                 try (var files = Files.list(dir)) {
-                    files.forEach(this::deleteRecursively);
+                    files.forEach(DecompileTestHarness::deleteRecursively);
                 }
             }
             Files.deleteIfExists(dir);

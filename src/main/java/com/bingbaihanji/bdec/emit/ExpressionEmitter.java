@@ -6,6 +6,7 @@ import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
+import com.bingbaihanji.bdec.util.TypeNameRenderer;
 
 import java.util.HashSet;
 import java.util.List;
@@ -20,8 +21,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
     /** 缩进写入器,用于格式化输出源代码 */
     private final IndentWriter w;
 
-    /** 已导入的包集合,用于类型名称简写判断 */
-    private final Set<String> importedPackages;
+    /** 当前编译单元包名(默认包为 ""),用于同包类型简写判断 */
+    private final String currentPackage;
+
+    /** 已导入的全限定名集合(精确匹配),用于类型名称简写判断 */
+    private final Set<String> importedFqns;
 
     /** 内部类 friendly 名称映射:内部名称 → 简单名称(如 "TestClass2$1LocalClass" → "LocalClass") */
     private java.util.Map<String, String> innerClassNames = java.util.Map.of();
@@ -30,30 +34,35 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
     private StatementEmitter stmtEmitter;
 
     /**
-     * 构造表达式发射器,无导入信息.
+     * 构造表达式发射器,无导入信息(默认包).
      *
      * @param w 缩进写入器
      */
     public ExpressionEmitter(IndentWriter w) {
-        this(w, List.of());
+        this(w, "", List.of());
     }
 
     /**
-     * 构造表达式发射器,根据导入列表初始化包名集合.
+     * 构造表达式发射器,根据导入列表初始化全限定名集合(默认包).
      *
      * @param w       缩进写入器
      * @param imports 导入语句列表,如 "java.util.List"
      */
     public ExpressionEmitter(IndentWriter w, List<String> imports) {
+        this(w, "", imports);
+    }
+
+    /**
+     * 构造表达式发射器,携带当前包名与导入列表.
+     *
+     * @param w              缩进写入器
+     * @param currentPackage 当前编译单元包名(默认包为 "")
+     * @param imports        导入语句列表,如 "java.util.List"
+     */
+    public ExpressionEmitter(IndentWriter w, String currentPackage, List<String> imports) {
         this.w = w;
-        this.importedPackages = new HashSet<>();
-        for (String imp : imports) {
-            // 将 "java.util.List" 形式的导入转换为包名 "java.util"
-            int lastDot = imp.lastIndexOf('.');
-            if (lastDot >= 0) {
-                importedPackages.add(imp.substring(0, lastDot));
-            }
-        }
+        this.currentPackage = currentPackage != null ? currentPackage : "";
+        this.importedFqns = new HashSet<>(imports);
     }
 
     /**
@@ -148,16 +157,6 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         };
     }
 
-    /** 检查简单类名是否为匿名类引用(如 TestClass2$1, Foo$2LocalClass) */
-    private static boolean isAnonymousClassName(String simpleName) {
-        int idx = simpleName.lastIndexOf('$');
-        if (idx >= 0 && idx + 1 < simpleName.length()) {
-            char c = simpleName.charAt(idx + 1);
-            return c >= '0' && c <= '9';
-        }
-        return false;
-    }
-
     /**
      * 设置内部类名称映射,用于将字节码内部名称(如 TestClass2$1LocalClass)
      * 解析为 Java 源码中的友好简单名称(如 LocalClass).
@@ -189,54 +188,145 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
      * @return 最短有效的类型名称字符串
      */
     String typeName(JavaType type) {
-        if (type.kind() == TypeKind.CLASS && type.internalName() != null) {
-            String internal = type.internalName();
-            String full = internal.replace('/', '.');
-
-            // 检查内部类友好名称映射(如 TestClass2$1LocalClass → LocalClass)
-            String rawSimple = internal.substring(internal.lastIndexOf('/') + 1);
-            if (innerClassNames.containsKey(rawSimple)) {
-                String friendly = innerClassNames.get(rawSimple);
-                // 对于命名内部类,直接返回友好简单名称
-                if (friendly != null && !friendly.isEmpty()) {
-                    // 检查是否有冲突类型(需要包名限定)
-                    // 简化处理:对于同包类型,简单名称即可
-                    return friendly;
-                }
+        String baseName = typeBaseName(type);
+        // 附加泛型类型参数(如 BiFunction<Integer, Integer, Integer>).
+        // WILDCARD 的边界已包含在名称中(? extends Number),不重复追加.
+        if (!type.typeArguments().isEmpty() && type.kind() != TypeKind.WILDCARD) {
+            StringBuilder sb = new StringBuilder(baseName);
+            sb.append('<');
+            for (int i = 0; i < type.typeArguments().size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(typeName(type.typeArguments().get(i)));
             }
-
-            // 将命名内部类的 $ 转为 .(如 Map$Entry → Map.Entry),
-            // 但跳过匿名类(如 TestClass2$1——数字开头的"名称"非法)
-            String simple = full.substring(full.lastIndexOf('.') + 1);
-            if (!isAnonymousClassName(simple)) {
-                full = full.replace('$', '.');
-            }
-            // java.lang 包下的类型始终使用简单类名
-            if (full.startsWith("java.lang.") && full.indexOf('.', 10) < 0) {
-                return full.substring(10);
-            }
-            // 与导入包名匹配的类型使用简单类名
-            int lastSlash = internal.lastIndexOf('/');
-            if (lastSlash >= 0) {
-                String pkg = internal.substring(0, lastSlash).replace('/', '.');
-                if (importedPackages.contains(pkg)) {
-                    // 返回已转换 $→. 的简单名称
-                    if (!isAnonymousClassName(rawSimple)) {
-                        return rawSimple.replace('$', '.');
-                    }
-                    // 匿名类:检查是否有友好名称
-                    if (innerClassNames.containsKey(rawSimple)) {
-                        String friendly = innerClassNames.get(rawSimple);
-                        if (friendly != null && !friendly.isEmpty()) {
-                            return friendly;
-                        }
-                    }
-                    return rawSimple;
-                }
-            }
-            return full;
+            sb.append('>');
+            return sb.toString();
         }
-        // 数组类型委托给类型自身的 displayName(递归处理)
+        return baseName;
+    }
+
+    /**
+     * 渲染带 JSR-308 类型注解的类型名.
+     *
+     * <p>注解按类型路径定位在类型树中的准确位置(与 javac 的编码一致):</p>
+     * <ul>
+     *   <li>路径为空 → 注解应用于该类型本身(数组场景输出为 {@code String @A []})</li>
+     *   <li>{@code [TYPE_ARGUMENT(i)]} → 泛型参数 i(如 {@code List<@A String>})</li>
+     *   <li>{@code [ARRAY]*} → 沿维度深入(元素类型注解输出为 {@code @A String[]})</li>
+     * </ul>
+     *
+     * @param type 类型对象
+     * @param anns 类型路径 → 渲染后注解行列表的映射
+     * @return 含类型注解的类型名
+     */
+    String typeNameAnnotated(JavaType type,
+                             java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+                                     java.util.List<String>> anns) {
+        if (anns == null || anns.isEmpty()) {
+            return typeName(type);
+        }
+        return renderAnnotatedType(type, java.util.List.of(), anns);
+    }
+
+    /** 递归渲染类型树,沿途在对应路径处插入注解. */
+    private String renderAnnotatedType(
+            JavaType type,
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path,
+            java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+                    java.util.List<String>> anns) {
+        // 数组:元素类型递归渲染(路径沿每个维度深入).
+        // 各层数组本身的注解输出在对应 "[]" 之前,与 javac 的 type_path 编码一致:
+        //   @A String[]  → 元素类型注解,路径 [ARRAY]
+        //   String @A [] → 数组本身注解,路径为空
+        //   String @A [] @B [] → 外层数组(空路径)在前一个 "[]" 前,
+        //                         元素数组([ARRAY])在后一个 "[]" 前
+        if (type.kind() == TypeKind.ARRAY) {
+            StringBuilder sb = new StringBuilder();
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> elemPath = path;
+            for (int d = 0; d < type.arrayDimensions(); d++) {
+                elemPath = appendPath(elemPath,
+                        com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_ARRAY, d);
+            }
+            sb.append(renderAnnotatedType(elementOfArray(type), elemPath, anns));
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> cur = path;
+            for (int d = 0; d < type.arrayDimensions(); d++) {
+                boolean annotated = false;
+                for (String a : anns.getOrDefault(cur, java.util.List.of())) {
+                    sb.append(' ').append(a);
+                    annotated = true;
+                }
+                // 有注解时保留空格(如 "String @NonNull []"),无注解时紧凑输出 "[]"
+                sb.append(annotated ? " []" : "[]");
+                cur = appendPath(cur,
+                        com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_ARRAY, d);
+            }
+            return sb.toString();
+        }
+        return renderAnnotatedBase(type, path, anns);
+    }
+
+    /**
+     * 渲染非数组类型的注解化名称:路径处注解 + 基础名 + 泛型参数递归.
+     * 供 {@link #renderAnnotatedType} 与 new 表达式发射共用.
+     */
+    private String renderAnnotatedBase(
+            JavaType type,
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path,
+            java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+                    java.util.List<String>> anns) {
+        StringBuilder sb = new StringBuilder();
+        for (String a : anns.getOrDefault(path, java.util.List.of())) {
+            sb.append(a).append(' ');
+        }
+        sb.append(typeBaseName(type));
+        // 泛型参数递归渲染(类型路径深入 TYPE_ARGUMENT(i));
+        // WILDCARD 的边界已包含在基础名中,不重复展开.
+        if (!type.typeArguments().isEmpty() && type.kind() != TypeKind.WILDCARD) {
+            sb.append('<');
+            for (int i = 0; i < type.typeArguments().size(); i++) {
+                if (i > 0) {
+                    sb.append(", ");
+                }
+                java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> argPath
+                        = appendPath(path,
+                        com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_TYPE_ARGUMENT, i);
+                sb.append(renderAnnotatedType(type.typeArguments().get(i), argPath, anns));
+            }
+            sb.append('>');
+        }
+        return sb.toString();
+    }
+
+    /** path 处的注解渲染行列表(无则空). */
+    private java.util.List<String> annotationsAt(
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path,
+            java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+                    java.util.List<String>> anns) {
+        return anns.getOrDefault(path, java.util.List.of());
+    }
+
+    /** 在类型路径末尾追加一个元素(不可变列表). */
+    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> appendPath(
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path,
+            int kind, int index) {
+        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> next
+                = new java.util.ArrayList<>(path);
+        next.add(new com.bingbaihanji.bdec.bytecode.model.TypePathElement(kind, index));
+        return next;
+    }
+
+    /** 数组类型的元素类型(剥离最外层一维). */
+    private static JavaType elementOfArray(JavaType arrayType) {
+        return JavaType.elementOf(arrayType);
+    }
+
+    /** 渲染不带泛型参数的基础类型名 */
+    private String typeBaseName(JavaType type) {
+        if (type.kind() == TypeKind.CLASS && type.internalName() != null) {
+            // CLASS 短名解析统一委托 TypeNameRenderer(单一事实源),
+            // 与 TypeText 收集模式共享 java.lang/同包/匿名类/$→. 规则
+            return TypeNameRenderer.className(type, currentPackage,
+                    innerClassNames, importedFqns);
+        }
         return type.displayName();
     }
 
@@ -294,7 +384,12 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         if (v == null) {
             w.write("null");
         } else if (v instanceof String s) {
-            w.write("\"").write(escapeString(s)).write("\"");
+            if (s.contains("\n") && s.lines().count() >= 3) {
+                // 多行字符串 → 文本块(TextBlockRewriter 标记的转换目标)
+                emitTextBlock(s);
+            } else {
+                w.write("\"").write(escapeString(s)).write("\"");
+            }
         } else if (v instanceof Character c) {
             w.write("'").write(escapeChar(c)).write("'");
         } else if (v instanceof Boolean b) {
@@ -324,6 +419,47 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         } else {
             w.write(String.valueOf(v));
         }
+    }
+
+    /**
+     * 发射文本块字符串.
+     *
+     * <p>输出格式与 javac 一致:开始定界符后换行,内容行缩进一级,
+     * 结束定界符独占一行.伴随缩进由 javac 按结束定界符的列位置剥离,
+     * 内容即为原始字符串(含结尾换行).</p>
+     */
+    private void emitTextBlock(String s) {
+        w.write("\"\"\"").newLine();
+        w.indent();
+        String[] lines = s.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            // 最后一段为空(结尾换行)——不输出空内容行
+            if (i == lines.length - 1 && line.isEmpty()) {
+                break;
+            }
+            w.write(escapeTextBlockLine(line)).newLine();
+        }
+        w.dedent();
+        w.write("\"\"\"");
+    }
+
+    /** 文本块行转义:反斜杠与定界符序列 */
+    private String escapeTextBlockLine(String line) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '\\') {
+                sb.append("\\\\");
+            } else if (c == '"' && i + 2 < line.length()
+                    && line.charAt(i + 1) == '"' && line.charAt(i + 2) == '"') {
+                sb.append("\\\"\"\"");
+                i += 2;
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     /**
@@ -403,7 +539,9 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
      */
     private void emitInvocation(InvocationExpr inv) {
         if (inv.target() != null) {
-            emit(inv.target());
+            // 使用 emitWithParens 确保低优先级目标(如 CastExpr)正确加括号.
+            // 例如 ((Integer)var2).intValue() 而非 (Integer)var2.intValue().
+            emitWithParens(inv.target(), inv.precedence());
             w.write(".");
         }
         w.write(inv.methodName()).write("(");
@@ -424,7 +562,8 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
      */
     private void emitFieldAccess(FieldAccessExpr fa) {
         if (fa.target() != null) {
-            emit(fa.target());
+            // 使用 emitWithParens 确保低优先级目标正确加括号
+            emitWithParens(fa.target(), fa.precedence());
             w.write(".");
         }
         w.write(fa.fieldName());
@@ -442,7 +581,7 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             w.write("obj");
         }
         w.write(" instanceof ");
-        w.write(typeName(io.targetType()));
+        w.write(typeNameAnnotated(io.targetType(), io.typeAnnotations()));
     }
 
     /**
@@ -453,6 +592,13 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
     private void emitLambda(LambdaExpr lambda) {
         if (lambda.isMethodRef()) {
             // 方法引用(如 String::valueOf)
+            List<String> recvAnns = lambda.methodRefReceiverAnnotations();
+            if (recvAnns != null) {
+                for (String ann : recvAnns) {
+                    w.write(ann);
+                    w.write(" ");
+                }
+            }
             w.write(lambda.methodRefOwner());
             w.write("::");
             w.write(lambda.methodRefName());
@@ -466,7 +612,8 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
                 w.write(", ");
             }
             LambdaExpr.Param p = params.get(i);
-            if (p.type() != null && p.type().kind() != com.bingbaihanji.bdec.type.TypeKind.CLASS) {
+            if (p.type() != null && p.type().kind() != TypeKind.CLASS
+                    && p.type().kind() != TypeKind.TYPE_VARIABLE) {
                 w.write(typeName(p.type()));
                 w.write(" ");
             }
@@ -535,7 +682,7 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
      * @param cast 类型转换表达式节点
      */
     private void emitCast(CastExpr cast) {
-        w.write("(").write(typeName(cast.targetType())).write(") ");
+        w.write("(").write(typeNameAnnotated(cast.targetType(), cast.typeAnnotations())).write(") ");
         emitWithParens(cast.operand(), cast.precedence());
     }
 
@@ -545,9 +692,56 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
      * @param n new 表达式节点
      */
     private void emitNew(NewExpr n) {
-        w.write("new ").write(typeName(n.instantiatedType()));
+        JavaType type = n.instantiatedType();
+        var anns = n.typeAnnotations();
+        if (anns.isEmpty()) {
+            // 非数组且带泛型参数的类型用 typeName 展开泛型(如 ArrayList<String>),
+            // 与注解路径 renderAnnotatedBase 的泛型递归保持一致(未来兼容:
+            // 字节码层 new 类型天然擦除,当前无路径携带 typeArguments);
+            // 无泛型/数组类型保持原 typeBaseName 行为不变.
+            String name = (type.arrayDimensions() == 0 && !type.typeArguments().isEmpty())
+                    ? typeName(type)
+                    : typeBaseName(type);
+            if (type.arrayDimensions() > 0) {
+                // 去除数组后缀: "String[]" → "String"(维度由下方 dims 分支自行发射)
+                int bracketIdx = name.indexOf('[');
+                if (bracketIdx >= 0) {
+                    name = name.substring(0, bracketIdx);
+                }
+            }
+            w.write("new ").write(name);
+        } else if (type.arrayDimensions() > 0) {
+            // JSR-308 注解数组创建:new @A String[3](元素注解,路径 [ARRAY])
+            // 或 new String @A [3](数组本身注解,路径为空).
+            // 维度连同注解在此发射,直接返回避免走下方 dims 分支重复输出.
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> elemPath
+                    = java.util.List.of();
+            for (int d = 0; d < type.arrayDimensions(); d++) {
+                elemPath = appendPath(elemPath,
+                        com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_ARRAY, d);
+            }
+            w.write("new ").write(renderAnnotatedBase(elementOfArray(type), elemPath, anns));
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> cur
+                    = java.util.List.of();
+            for (int d = 0; d < n.dimensions().size(); d++) {
+                java.util.List<String> dimAnns = annotationsAt(cur, anns);
+                for (String a : dimAnns) {
+                    w.write(' ').write(a);
+                }
+                // 有注解时保留空格(与 renderAnnotatedType 的 " []" 惯例一致)
+                w.write(dimAnns.isEmpty() ? "[" : " [");
+                emit(n.dimensions().get(d));
+                w.write("]");
+                cur = appendPath(cur,
+                        com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_ARRAY, d);
+            }
+            return;
+        } else {
+            // JSR-308 注解对象创建:new @A ArrayList<>()(含泛型参数递归)
+            w.write("new ").write(renderAnnotatedBase(type, java.util.List.of(), anns));
+        }
         if (!n.constructorArgs().isEmpty()) {
-            // 构造器参数调用
+            // 构造器参数调用(如 new ArrayList(args))
             w.write("(");
             List<Expression> args = n.constructorArgs();
             for (int i = 0; i < args.size(); i++) {
@@ -558,17 +752,37 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             }
             w.write(")");
         } else if (!n.dimensions().isEmpty()) {
-            // 多维数组创建
-            w.write("[");
-            for (int i = 0; i < n.dimensions().size(); i++) {
-                if (i > 0) {
-                    w.write("][");
-                }
-                emit(n.dimensions().get(i));
+            // 数组创建:new String[3] 或 new int[3][5]
+            for (Expression dim : n.dimensions()) {
+                w.write("[");
+                emit(dim);
+                w.write("]");
             }
-            w.write("]");
+        } else if (!n.arrayInitializer().isEmpty()) {
+            // 数组初始化器:new String[]{"a", "b"}
+            w.write("[]{");
+            List<Expression> elems = n.arrayInitializer();
+            for (int i = 0; i < elems.size(); i++) {
+                if (i > 0) {
+                    w.write(", ");
+                }
+                emit(elems.get(i));
+            }
+            w.write("}");
         } else {
             w.write("()");
+        }
+        // 匿名类体:new Type(args) { <成员> }
+        if (n.isAnonymousClass() && stmtEmitter != null) {
+            w.space().write("{").newLine();
+            w.indent();
+            for (com.bingbaihanji.bdec.ast.AstNode member : n.anonymousBody()) {
+                if (member instanceof com.bingbaihanji.bdec.ast.stmt.Statement st) {
+                    stmtEmitter.emit(st);
+                }
+            }
+            w.dedent();
+            w.write("}");
         }
     }
 

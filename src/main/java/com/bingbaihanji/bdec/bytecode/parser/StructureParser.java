@@ -1,9 +1,12 @@
 package com.bingbaihanji.bdec.bytecode.parser;
 
+import com.bingbaihanji.bdec.bytecode.model.AnnotationEntry;
 import com.bingbaihanji.bdec.bytecode.model.ExceptionHandlerModel;
 import com.bingbaihanji.bdec.bytecode.model.FieldModel;
 import com.bingbaihanji.bdec.bytecode.model.Instruction;
+import com.bingbaihanji.bdec.bytecode.model.LocalVariableEntry;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
+import com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry.CpDouble;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry.CpFloat;
@@ -16,25 +19,26 @@ import com.bingbaihanji.bdec.type.TypeResolver;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * 结构解析器.
+ * 结构解析器(里程碑 Phase 3).
  *
  * <p>负责解析类文件中字段表({@code field_info})和方法表({@code method_info})
- * 的结构化数据.每个字段和方法都包含:
- * <ul>
- *   <li>访问标志</li>
- *   <li>名称索引与描述符索引(指向常量池)</li>
- *   <li>属性表(如 {@code Signature},{@code ConstantValue},{@code Code} 等)</li>
- * </ul>
+ * 的顶层循环。注解结构解析委托 {@link AnnotationParser},Code 属性解析委托
+ * {@link CodeAttributeParser}。</p>
  *
  * <p>该类仅在同一包内可见(package-private),作为 {@link ClassFileReader} 的辅助组件.
  */
 class StructureParser {
 
-    /** 指令解码器,用于解析 {@code Code} 属性中的字节码指令. */
-    private final InstructionDecoder insnDecoder = new InstructionDecoder();
+    /** 注解解析器(element_value / annotation / type-annotation). */
+    private final AnnotationParser annotationParser = new AnnotationParser();
+
+    /** Code 属性解析器(字节码指令 + LVT/LVTT + 类型注解). */
+    private final CodeAttributeParser codeParser = new CodeAttributeParser();
 
     /**
      * 解析字段表.
@@ -61,6 +65,8 @@ class StructureParser {
 
             Object constValue = null;
             String signature = "";
+            List<AnnotationEntry> anns = List.of();
+            List<TypeAnnotationEntry> typeAnns = List.of();
             int attrCount = in.readUnsignedShort();
             for (int a = 0; a < attrCount; a++) {
                 int attrNameIdx = in.readUnsignedShort();
@@ -80,11 +86,17 @@ class StructureParser {
                         case CpString cs -> ConstantPoolParser.utf8(pool, cs.stringIndex());
                         default -> "<unknown constant>";
                     };
+                } else if ("RuntimeVisibleAnnotations".equals(attrName)) {
+                    anns = annotationParser.parseAnnotations(in, pool);
+                } else if ("RuntimeVisibleTypeAnnotations".equals(attrName)) {
+                    // JSR-308 类型注解(字段类型上的注解)
+                    typeAnns = annotationParser.parseTypeAnnotations(in, pool);
                 } else {
                     in.skipBytes(attrLen);
                 }
             }
-            fields.add(new FieldModel(accessFlags, name, type, constValue, signature));
+            fields.add(new FieldModel(accessFlags, name, type, constValue, signature, anns,
+                    typeAnns));
         }
         return fields;
     }
@@ -94,11 +106,7 @@ class StructureParser {
      *
      * <p>遍历类文件中所有方法,提取每个方法的访问标志,名称,描述符,
      * 返回类型与参数类型,字节码指令,异常处理器表,签名,局部变量表等信息.
-     *
-     * <p>{@code Code} 属性中包含的子属性也会被解析:
-     * <ul>
-     *   <li>{@code LocalVariableTable} — 局部变量表,用于还原参数名和局部变量名</li>
-     * </ul>
+     * {@code Code} 属性的解析委托 {@link CodeAttributeParser}。</p>
      *
      * @param in    数据输入流,定位在方法表起始位置
      * @param pool  已解析的常量池
@@ -123,9 +131,15 @@ class StructureParser {
             List<ExceptionHandlerModel> handlers = List.of();
             int maxStack = 0, maxLocals = 0;
             String signature = "";
-            java.util.Map<Integer, String> localVarNames = new java.util.HashMap<>();
-            java.util.List<com.bingbaihanji.bdec.bytecode.model.LocalVariableEntry> lvtEntries
-                    = new java.util.ArrayList<>();
+            List<String> declaredExceptions = new ArrayList<>();
+            Object annotationDefault = null;
+            List<AnnotationEntry> anns = List.of();
+            List<List<AnnotationEntry>> paramAnns = List.of();
+            List<TypeAnnotationEntry> typeAnns = List.of();
+            // Code 属性内的类型注解(局部变量 0x40/0x41 等偏移量相关目标)
+            List<TypeAnnotationEntry> codeTypeAnns = new ArrayList<>();
+            Map<Integer, String> localVarNames = new HashMap<>();
+            List<LocalVariableEntry> lvtEntries = new ArrayList<>();
 
             int attrCount = in.readUnsignedShort();
             for (int a = 0; a < attrCount; a++) {
@@ -136,64 +150,57 @@ class StructureParser {
                 if ("Signature".equals(attrName)) {
                     int sigIdx = in.readUnsignedShort();
                     signature = ConstantPoolParser.utf8(pool, sigIdx);
-                } else if ("Code".equals(attrName)) {
-                    // Code 属性核心结构
-                    maxStack = in.readUnsignedShort();
-                    maxLocals = in.readUnsignedShort();
-                    int codeLength = in.readInt();
-                    byte[] code = new byte[codeLength];
-                    in.readFully(code);
-                    instructions = insnDecoder.decodeAll(code, 0, codeLength);
-
-                    // 解析异常处理器表
-                    int excCount = in.readUnsignedShort();
-                    handlers = new ArrayList<>();
-                    for (int e = 0; e < excCount; e++) {
-                        int startPc = in.readUnsignedShort();
-                        int endPc = in.readUnsignedShort();
-                        int handlerPc = in.readUnsignedShort();
-                        int catchTypeIdx = in.readUnsignedShort();
-                        // catchType 为 0 时表示 finally 块(捕获任意异常)
-                        String catchType = catchTypeIdx == 0 ? null
-                                : ConstantPoolParser.className(pool, catchTypeIdx);
-                        handlers.add(new ExceptionHandlerModel(startPc, endPc, handlerPc, catchType));
+                } else if ("RuntimeVisibleAnnotations".equals(attrName)) {
+                    // 方法级注解
+                    anns = annotationParser.parseAnnotations(in, pool);
+                } else if ("RuntimeVisibleTypeAnnotations".equals(attrName)) {
+                    // JSR-308 类型注解(返回类型/参数类型/throws 上的注解)
+                    typeAnns = annotationParser.parseTypeAnnotations(in, pool);
+                } else if ("RuntimeVisibleParameterAnnotations".equals(attrName)) {
+                    // 参数级注解(JVMS 4.7.18):num_parameters 个参数注解列表
+                    int numParams = in.readUnsignedByte();
+                    List<List<AnnotationEntry>> pAnns = new ArrayList<>();
+                    for (int p = 0; p < numParams; p++) {
+                        pAnns.add(annotationParser.parseAnnotations(in, pool));
                     }
-
-                    // 解析 Code 子属性(行号表,局部变量表等)
-                    int codeAttrCount = in.readUnsignedShort();
-                    for (int ca = 0; ca < codeAttrCount; ca++) {
-                        int subAttrNameIdx = in.readUnsignedShort();
-                        int len = in.readInt();
-                        String subAttrName = ConstantPoolParser.utf8(pool, subAttrNameIdx);
-                        if ("LocalVariableTable".equals(subAttrName)) {
-                            int lvtLen = in.readUnsignedShort();
-                            for (int l = 0; l < lvtLen; l++) {
-                                int startPc = in.readUnsignedShort();
-                                int length = in.readUnsignedShort();
-                                int lvtNameIdx = in.readUnsignedShort();
-                                int lvtDescIdx = in.readUnsignedShort();
-                                int index = in.readUnsignedShort();
-                                String varName = ConstantPoolParser.utf8(pool, lvtNameIdx);
-                                String varDesc = ConstantPoolParser.utf8(pool, lvtDescIdx);
-                                // 存储作用域感知条目,用于按字节码偏移量查找
-                                if (varName != null && !varName.isEmpty()) {
-                                    localVarNames.put(index, varName); // 最后出现的名称优先,作用域感知查找处理消歧
-                                    lvtEntries.add(new com.bingbaihanji.bdec.bytecode.model
-                                            .LocalVariableEntry(startPc, length, varName,
-                                            index, varDesc));
-                                }
-                            }
-                        } else {
-                            in.skipBytes(len);
+                    paramAnns = pAnns;
+                } else if ("AnnotationDefault".equals(attrName)) {
+                    // 注解方法元素的默认值(element_value)
+                    annotationDefault = annotationParser.parseElementValue(in, pool);
+                } else if ("Exceptions".equals(attrName)) {
+                    // Exceptions 属性:方法声明中 throws 的受检异常列表
+                    int n = in.readUnsignedShort();
+                    for (int x = 0; x < n; x++) {
+                        int classIdx = in.readUnsignedShort();
+                        String internalName = ConstantPoolParser.className(pool, classIdx);
+                        if (internalName != null) {
+                            declaredExceptions.add(internalName);
                         }
                     }
+                } else if ("Code".equals(attrName)) {
+                    // Code 属性核心结构(指令、异常处理器表、局部变量表)
+                    CodeAttributeParser.CodeAttribute codeAttr = codeParser.parseCode(in, pool);
+                    maxStack = codeAttr.maxStack();
+                    maxLocals = codeAttr.maxLocals();
+                    instructions = codeAttr.instructions();
+                    handlers = codeAttr.handlers();
+                    localVarNames = codeAttr.localVarNames();
+                    lvtEntries = codeAttr.lvtEntries();
+                    codeTypeAnns = codeAttr.codeTypeAnns();
                 } else {
                     in.skipBytes(attrLen);
                 }
             }
+            // 合并方法级与 Code 级类型注解(局部变量注解位于 Code 属性内)
+            if (!codeTypeAnns.isEmpty()) {
+                List<TypeAnnotationEntry> merged = new ArrayList<>(typeAnns);
+                merged.addAll(codeTypeAnns);
+                typeAnns = merged;
+            }
             methods.add(new MethodModel(accessFlags, name, desc, returnType, paramTypes,
                     instructions, handlers, maxStack, maxLocals, signature,
-                    localVarNames, lvtEntries));
+                    localVarNames, lvtEntries, declaredExceptions, annotationDefault, anns,
+                    paramAnns, typeAnns));
         }
         return methods;
     }

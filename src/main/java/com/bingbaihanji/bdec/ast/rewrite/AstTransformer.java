@@ -2,8 +2,29 @@ package com.bingbaihanji.bdec.ast.rewrite;
 
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.AstVisitor;
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
+import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.CastExpr;
+import com.bingbaihanji.bdec.ast.expr.CondExpr;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
+import com.bingbaihanji.bdec.ast.expr.NewExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
+import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
+import com.bingbaihanji.bdec.ast.stmt.SynchronizedStatement;
+import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
+import com.bingbaihanji.bdec.ast.stmt.TryStatement;
+import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -119,24 +140,29 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
 
     protected Expression transformCast(CastExpr e) {
         Expression op = transformExpr(e.operand());
-        return (op != e.operand()) ? new CastExpr(e.targetType(), op) : e;
+        return (op != e.operand())
+                ? new CastExpr(e.targetType(), op, e.typeAnnotations()) : e;
     }
 
     protected Expression transformInstanceOf(InstanceOfExpr e) {
         Expression op = transformExpr(e.operand());
-        return (op != e.operand()) ? new InstanceOfExpr(op, e.targetType()) : e;
+        return (op != e.operand())
+                ? new InstanceOfExpr(op, e.targetType(), e.typeAnnotations()) : e;
     }
 
     protected Expression transformNew(NewExpr e) {
         List<Expression> args = transformExprList(e.constructorArgs());
         if (args != e.constructorArgs()) {
-            return new NewExpr(e.instantiatedType(), e.dimensions(), args);
+            return new NewExpr(e.instantiatedType(), e.dimensions(), args,
+                    e.anonymousBody(), e.arrayInitializer(), e.typeAnnotations());
         }
         return e;
     }
 
     protected Expression transformLambda(LambdaExpr e) {
-        if (e.isMethodRef()) return e;
+        if (e.isMethodRef()) {
+            return e;
+        }
         if (e.isExpressionBody() && e.bodyExpr() != null) {
             Expression b = transformExpr(e.bodyExpr());
             return (b != e.bodyExpr())
@@ -176,7 +202,9 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
         List<SwitchStatement.CaseGroup> newCases = new ArrayList<>();
         for (SwitchStatement.CaseGroup cg : s.cases()) {
             List<Statement> body = transformStmtList(cg.body());
-            if (body != cg.body()) changed = true;
+            if (body != cg.body()) {
+                changed = true;
+            }
             newCases.add(new SwitchStatement.CaseGroup(cg.labels(), body, cg.isDefault()));
         }
         return changed ? new SwitchStatement(disc, newCases, s.isExpression()) : s;
@@ -188,18 +216,24 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
         List<TryStatement.CatchClause> newCatches = new ArrayList<>();
         for (TryStatement.CatchClause cc : s.catchClauses()) {
             Statement body = transformStmt(cc.body());
-            if (body != cc.body()) changed = true;
+            if (body != cc.body()) {
+                changed = true;
+            }
             newCatches.add(new TryStatement.CatchClause(
                     cc.exceptionType(), cc.varName(), body));
         }
         Statement finBody = s.finallyBody() != null
                 ? transformStmt(s.finallyBody()) : null;
-        if (finBody != s.finallyBody()) changed = true;
+        if (finBody != s.finallyBody()) {
+            changed = true;
+        }
         return changed ? new TryStatement(tryBody, newCatches, finBody) : s;
     }
 
     protected Statement transformReturn(ReturnStatement s) {
-        if (s.value() == null) return s;
+        if (s.value() == null) {
+            return s;
+        }
         Expression v = transformExpr(s.value());
         return (v != s.value()) ? new ReturnStatement(v) : s;
     }
@@ -215,10 +249,12 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
     }
 
     protected Statement transformVarDecl(VariableDeclaration s) {
-        if (s.initializer() == null) return s;
+        if (s.initializer() == null) {
+            return s;
+        }
         Expression init = transformExpr(s.initializer());
         return (init != s.initializer())
-                ? new VariableDeclaration(s.type(), s.name(), init) : s;
+                ? new VariableDeclaration(s.type(), s.name(), init, s.typeAnnotations()) : s;
     }
 
     protected Statement transformSynchronized(SynchronizedStatement s) {
@@ -231,26 +267,37 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
     // ==================== 列表遍历 ====================
 
     protected List<Expression> transformExprList(List<Expression> list) {
-        if (list == null || list.isEmpty()) return list;
+        if (list == null || list.isEmpty()) {
+            return list;
+        }
         List<Expression> r = new ArrayList<>(list.size());
         boolean ch = false;
         for (Expression e : list) {
             Expression t = transformExpr(e);
             r.add(t);
-            if (t != e) ch = true;
+            if (t != e) {
+                ch = true;
+            }
         }
         return ch ? r : list;
     }
 
     protected List<Statement> transformStmtList(List<Statement> list) {
-        if (list == null || list.isEmpty()) return list;
+        if (list == null || list.isEmpty()) {
+            return list;
+        }
         List<Statement> r = new ArrayList<>(list.size());
         boolean ch = false;
         for (Statement s : list) {
             Statement t = transformStmt(s);
-            if (t != s) ch = true;
-            if (t != null) r.add(t);
-            else ch = true;
+            if (t != s) {
+                ch = true;
+            }
+            if (t != null) {
+                r.add(t);
+            } else {
+                ch = true;
+            }
         }
         return ch ? r : list;
     }

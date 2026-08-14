@@ -39,6 +39,9 @@ public class TryResourceRewriter implements RewriteRule {
     public String name() {return "try-resource";}
 
     @Override
+    public RewriteRuleKind kind() {return RewriteRuleKind.TRY_RESOURCE;}
+
+    @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
         List<TypeDeclaration> types = new ArrayList<>();
         for (TypeDeclaration td : unit.types()) {
@@ -57,15 +60,12 @@ public class TryResourceRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(),
-                        md.body() != null ? rewriteBlock(md.body()) : null));
+                members.add(withBody(md, md.body() != null ? rewriteBlock(md.body()) : null));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /**

@@ -41,6 +41,9 @@ public final class LambdaExpr extends Expression {
     /** 方法引用的方法名(如 {@code Class::method} 中的 {@code "method"}) */
     private final String methodRefName;
 
+    /** 方法引用接收者上的 JSR-308 类型注解(JVMS 0x45/0x46,渲染于所有者前,如 {@code @A C::id}) */
+    private final List<String> methodRefReceiverAnnotations;
+
     /** 函数式接口的返回类型 */
     private final JavaType functionalType;
 
@@ -49,13 +52,15 @@ public final class LambdaExpr extends Expression {
      */
     private LambdaExpr(List<Param> parameters, Expression bodyExpr, BlockStatement bodyBlock,
                        boolean isMethodRef, String methodRefOwner, String methodRefName,
-                       JavaType functionalType) {
+                       List<String> methodRefReceiverAnnotations, JavaType functionalType) {
         this.parameters = List.copyOf(parameters);
         this.bodyExpr = bodyExpr;
         this.bodyBlock = bodyBlock;
         this.isMethodRef = isMethodRef;
         this.methodRefOwner = methodRefOwner;
         this.methodRefName = methodRefName;
+        this.methodRefReceiverAnnotations = methodRefReceiverAnnotations != null
+                ? List.copyOf(methodRefReceiverAnnotations) : List.of();
         this.functionalType = functionalType;
     }
 
@@ -68,7 +73,7 @@ public final class LambdaExpr extends Expression {
      * @return Lambda表达式节点
      */
     public static LambdaExpr expression(List<Param> params, Expression body, JavaType funcType) {
-        return new LambdaExpr(params, body, null, false, null, null, funcType);
+        return new LambdaExpr(params, body, null, false, null, null, null, funcType);
     }
 
     /**
@@ -80,7 +85,7 @@ public final class LambdaExpr extends Expression {
      * @return Lambda表达式节点
      */
     public static LambdaExpr block(List<Param> params, BlockStatement body, JavaType funcType) {
-        return new LambdaExpr(params, null, body, false, null, null, funcType);
+        return new LambdaExpr(params, null, body, false, null, null, null, funcType);
     }
 
     /**
@@ -92,7 +97,22 @@ public final class LambdaExpr extends Expression {
      * @return Lambda表达式节点
      */
     public static LambdaExpr methodRef(String owner, String name, JavaType funcType) {
-        return new LambdaExpr(List.of(), null, null, true, owner, name, funcType);
+        return methodRef(owner, name, funcType, List.of());
+    }
+
+    /**
+     * 创建方法引用:{@code 所有者::方法名}(含接收者类型注解).
+     *
+     * @param owner               方法所有者类名
+     * @param name                方法名称
+     * @param funcType            函数式接口类型
+     * @param receiverAnnotations 接收者上的类型注解(渲染于所有者前,如 {@code @A C::id})
+     * @return Lambda表达式节点
+     */
+    public static LambdaExpr methodRef(String owner, String name, JavaType funcType,
+                                       List<String> receiverAnnotations) {
+        return new LambdaExpr(List.of(), null, null, true, owner, name,
+                receiverAnnotations, funcType);
     }
 
     /**
@@ -104,7 +124,7 @@ public final class LambdaExpr extends Expression {
      * @return Lambda表达式节点
      */
     public static LambdaExpr placeholder(List<Param> params, String bodyHint, JavaType funcType) {
-        return new LambdaExpr(params, new VarExpr(bodyHint), null, false, null, null, funcType);
+        return new LambdaExpr(params, new VarExpr(bodyHint), null, false, null, null, null, funcType);
     }
 
     /** @return 参数列表 */
@@ -124,6 +144,9 @@ public final class LambdaExpr extends Expression {
 
     /** @return 方法引用方法名 */
     public String methodRefName() {return methodRefName;}
+
+    /** @return 方法引用接收者上的类型注解(渲染于所有者前) */
+    public List<String> methodRefReceiverAnnotations() {return methodRefReceiverAnnotations;}
 
     /** @return 函数式接口类型 */
     public JavaType functionalType() {return functionalType;}

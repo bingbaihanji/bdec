@@ -22,11 +22,11 @@ public final class ConstantPoolParser {
      *
      * @param pool  常量池数组
      * @param index 常量池索引
-     * @return 对应的 UTF-8 字符串,若索引无效则返回 {@code "<invalid utf8>"}
+     * @return 对应的 UTF-8 字符串,若索引无效则返回 {@code null}
      */
     public static String utf8(ConstantPoolEntry[] pool, int index) {
         if (index <= 0 || index >= pool.length || !(pool[index] instanceof CpUtf8)) {
-            return "<invalid utf8>";
+            return null;
         }
         return ((CpUtf8) pool[index]).value();
     }
@@ -38,13 +38,43 @@ public final class ConstantPoolParser {
      *
      * @param pool      常量池数组
      * @param classIndex 指向 {@code CONSTANT_Class_info} 的索引
-     * @return 类的内部名称,若索引无效则返回 {@code "<invalid class>"}
+     * @return 类的内部名称,若索引无效则返回 {@code null}
      */
     public static String className(ConstantPoolEntry[] pool, int classIndex) {
         if (classIndex <= 0 || classIndex >= pool.length || !(pool[classIndex] instanceof CpClass c)) {
-            return "<invalid class>";
+            return null;
         }
         return utf8(pool, c.nameIndex());
+    }
+
+    /**
+     * 从常量池指定索引处提取模块名(CONSTANT_Module).
+     *
+     * @param pool      常量池数组
+     * @param moduleIndex 指向 {@code CONSTANT_Module_info} 的索引
+     * @return 模块名,若索引无效则返回 {@code null}
+     */
+    public static String moduleName(ConstantPoolEntry[] pool, int moduleIndex) {
+        if (moduleIndex <= 0 || moduleIndex >= pool.length
+                || !(pool[moduleIndex] instanceof CpModule m)) {
+            return null;
+        }
+        return utf8(pool, m.nameIndex());
+    }
+
+    /**
+     * 从常量池指定索引处提取包名(CONSTANT_Package).
+     *
+     * @param pool       常量池数组
+     * @param packageIndex 指向 {@code CONSTANT_Package_info} 的索引
+     * @return 包名(以斜杠分隔),若索引无效则返回 {@code null}
+     */
+    public static String packageName(ConstantPoolEntry[] pool, int packageIndex) {
+        if (packageIndex <= 0 || packageIndex >= pool.length
+                || !(pool[packageIndex] instanceof CpPackage p)) {
+            return null;
+        }
+        return utf8(pool, p.nameIndex());
     }
 
     /**

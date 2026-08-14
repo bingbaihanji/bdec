@@ -1,8 +1,8 @@
 package com.bytecode.test;
 
 /**
- * 简单测试字符串拼接的反编译。
- * 验证 makeConcatWithConstants 被重写为 + 表达式。
+ * 简单测试字符串拼接的反编译.
+ * 验证 makeConcatWithConstants 被重写为 + 表达式.
  */
 public class SimpleStringTest {
 

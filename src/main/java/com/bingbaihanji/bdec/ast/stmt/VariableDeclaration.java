@@ -4,10 +4,12 @@ import com.bingbaihanji.bdec.ast.AstKind;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.AstVisitor;
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.bytecode.model.TypePathElement;
 import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 局部变量声明节点,表示方法体内的变量声明语句.
@@ -26,6 +28,9 @@ public final class VariableDeclaration extends Statement {
     /** 变量初始化表达式,可为 null */
     private final Expression initializer;
 
+    /** 变量类型上的 JSR-308 类型注解(按类型路径分组,已渲染的源码行) */
+    private final Map<List<TypePathElement>, List<String>> typeAnnotations;
+
     /**
      * 构造一个局部变量声明.
      *
@@ -34,9 +39,20 @@ public final class VariableDeclaration extends Statement {
      * @param initializer 初始化表达式,可为 null
      */
     public VariableDeclaration(JavaType type, String name, Expression initializer) {
+        this(type, name, initializer, Map.of());
+    }
+
+    /**
+     * 构造一个局部变量声明(含类型注解).
+     *
+     * @param typeAnnotations 变量类型上的注解(按类型路径分组)
+     */
+    public VariableDeclaration(JavaType type, String name, Expression initializer,
+                               Map<List<TypePathElement>, List<String>> typeAnnotations) {
         this.type = type;
         this.name = name;
         this.initializer = initializer;
+        this.typeAnnotations = Map.copyOf(typeAnnotations);
     }
 
     /** @return 变量类型 */
@@ -47,6 +63,9 @@ public final class VariableDeclaration extends Statement {
 
     /** @return 初始化表达式,可为 null */
     public Expression initializer() {return initializer;}
+
+    /** @return 变量类型上的 JSR-308 类型注解(按类型路径分组) */
+    public Map<List<TypePathElement>, List<String>> typeAnnotations() {return typeAnnotations;}
 
     @Override
     public AstKind kind() {return AstKind.VARIABLE_DECL;}

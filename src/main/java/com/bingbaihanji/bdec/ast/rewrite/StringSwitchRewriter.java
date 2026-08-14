@@ -63,6 +63,9 @@ public class StringSwitchRewriter implements RewriteRule {
     public String name() {return "string-switch";}
 
     @Override
+    public RewriteRuleKind kind() {return RewriteRuleKind.STRING_SWITCH;}
+
+    @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
         List<TypeDeclaration> types = new ArrayList<>();
         for (TypeDeclaration td : unit.types()) {
@@ -81,16 +84,12 @@ public class StringSwitchRewriter implements RewriteRule {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof MethodDeclaration md) {
-                members.add(new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
-                        md.parameterNames(), md.parameterTypes(),
-                        md.typeParameters(),
-                        md.body() != null ? rewriteBlock(md.body()) : null));
+                members.add(withBody(md, md.body() != null ? rewriteBlock(md.body()) : null));
             } else {
                 members.add(m);
             }
         }
-        return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
-                td.superName(), td.interfaceNames(), td.typeParameters(), members);
+        return withMembers(td, members);
     }
 
     /**
@@ -113,11 +112,7 @@ public class StringSwitchRewriter implements RewriteRule {
                     i.elseBranch() != null ? rewriteBlock(i.elseBranch()) : null);
         }
         if (s instanceof LoopStatement l) {
-            if (l.loopKind() == LoopStatement.LoopKind.FOR_EACH) {
-                return new LoopStatement(l.loopKind(), l.forEachVar(), l.condition(),
-                        rewriteBlock(l.body()));
-            }
-            return new LoopStatement(l.loopKind(), l.condition(), rewriteBlock(l.body()));
+            return withLoopBody(l, rewriteBlock(l.body()));
         }
         if (s instanceof SwitchStatement sw) {
             // 递归重写嵌套的 switch
@@ -146,8 +141,25 @@ public class StringSwitchRewriter implements RewriteRule {
         do {
             changed = false;
             for (int i = 0; i < stmts.size() - 1; i++) {
-                // 寻找两个相邻的 SwitchStatement
-                if (!(stmts.get(i) instanceof SwitchStatement hashSwitch)) {
+                // 寻找两个相邻的 SwitchStatement.
+                // hash switch 可能被前置声明包装(如 "String var2 = s;
+                // int var3 = -1;" 与 hash switch 同在一个块中),也可能
+                // 被其他重写器扁平化,声明位于 switch 之前的相邻语句.
+                // 两种形态都识别:包装块(最后一个语句为 switch)或
+                // 直接相邻(前置的 temp/stringVar 声明语句).
+                SwitchStatement hashSwitch = null;
+                List<Statement> preStmts = new ArrayList<>();
+                if (stmts.get(i) instanceof SwitchStatement sw) {
+                    hashSwitch = sw;
+                } else if (stmts.get(i) instanceof BlockStatement wrap) {
+                    List<Statement> inner = wrap.statements();
+                    if (!inner.isEmpty()
+                            && inner.get(inner.size() - 1) instanceof SwitchStatement sw2) {
+                        hashSwitch = sw2;
+                        preStmts.addAll(inner.subList(0, inner.size() - 1));
+                    }
+                }
+                if (hashSwitch == null) {
                     continue;
                 }
                 if (!(stmts.get(i + 1) instanceof SwitchStatement tempSwitch)) {
@@ -166,16 +178,69 @@ public class StringSwitchRewriter implements RewriteRule {
                     continue;
                 }
 
+                // 前置声明中,临时变量与字符串副本变量(name 与 stringVar
+                // 同名的声明)在还原后不再使用——丢弃,保持输出干净.
+                // 字符串副本(String var2 = s;)的初始值即原始判别式:
+                // 副本变量被丢弃后,switch 判别式必须替换为其初始值.
+                String stringVarName = hashMatch.stringVar instanceof VarExpr sv
+                        ? sv.name() : null;
+                // 直接相邻形态:收集 hash switch 之前的相邻 temp/stringVar 声明
+                int removedBefore = 0;
+                if (preStmts.isEmpty()) {
+                    int j = i - 1;
+                    while (j >= 0) {
+                        Statement c = stmts.get(j);
+                        if (c instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
+                                && (vd.name().equals(hashMatch.tempVarName)
+                                || (stringVarName != null
+                                && vd.name().equals(stringVarName)))) {
+                            preStmts.add(0, c);
+                            removedBefore++;
+                            j--;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                Expression discriminantOverride = null;
+                List<Statement> keptPre = new ArrayList<>();
+                for (Statement ps : preStmts) {
+                    if (ps instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
+                            && vd.name().equals(hashMatch.tempVarName)) {
+                        continue;
+                    }
+                    if (ps instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
+                            && stringVarName != null && vd.name().equals(stringVarName)
+                            && vd.initializer() != null) {
+                        discriminantOverride = vd.initializer();
+                        continue;
+                    }
+                    keptPre.add(ps);
+                }
+
                 // 构造新的原生字符串 switch
-                SwitchStatement stringSwitch = buildStringSwitch(hashMatch, tempMatch);
+                SwitchStatement stringSwitch = buildStringSwitch(
+                        hashMatch, tempMatch, discriminantOverride);
                 if (stringSwitch == null) {
                     continue;
                 }
 
-                // 用新 switch 替换原有的两个 switch
+                // 用新 switch 替换原有的两个 switch(及已收集的前置声明).
+                // 前置声明连续位于索引 i-removedBefore..i-1,
+                // 移除第一个后其余前移——重复移除同一索引.
                 stmts.remove(i + 1);
                 stmts.remove(i);
-                stmts.add(i, stringSwitch);
+                for (int k = 0; k < removedBefore; k++) {
+                    stmts.remove(i - removedBefore);
+                }
+                int insertAt = i - removedBefore;
+                if (keptPre.isEmpty()) {
+                    stmts.add(insertAt, stringSwitch);
+                } else {
+                    List<Statement> merged = new ArrayList<>(keptPre);
+                    merged.add(stringSwitch);
+                    stmts.add(insertAt, new BlockStatement(merged));
+                }
                 changed = true;
                 break;
             }
@@ -414,7 +479,8 @@ public class StringSwitchRewriter implements RewriteRule {
      * @param tempMatch temp switch 匹配结果
      * @return 构建成功则返回新的 SwitchStatement,否则返回 {@code null}
      */
-    private SwitchStatement buildStringSwitch(HashCodeMatch hashMatch, TempSwitchMatch tempMatch) {
+    private SwitchStatement buildStringSwitch(HashCodeMatch hashMatch, TempSwitchMatch tempMatch,
+                                              Expression discriminantOverride) {
         // 构建临时整数值到字符串字面量的映射
         Map<Integer, String> tempToString = new LinkedHashMap<>();
         for (Map.Entry<Integer, Integer> entry : hashMatch.hashToTemp.entrySet()) {
@@ -455,8 +521,12 @@ public class StringSwitchRewriter implements RewriteRule {
             newCases.add(new SwitchStatement.CaseGroup(List.of(), defCase.body(), true));
         }
 
-        // 新判别式为原始字符串变量(而非 hashCode 的目标)
-        return new SwitchStatement(hashMatch.stringVar, newCases);
+        // 新判别式为原始字符串变量(而非 hashCode 的目标).
+        // 若字符串变量是副本(String var2 = s;)且其声明已被丢弃,
+        // 判别式替换为其初始值(switch (s)).
+        Expression discriminant = discriminantOverride != null
+                ? discriminantOverride : hashMatch.stringVar;
+        return new SwitchStatement(discriminant, newCases);
     }
 
     /** hashCode-switch 模式的匹配结果,保存提取到的映射关系. */

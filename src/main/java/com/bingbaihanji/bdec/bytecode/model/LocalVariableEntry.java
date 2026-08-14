@@ -14,14 +14,18 @@ package com.bingbaihanji.bdec.bytecode.model;
  * @param name     局部变量名(来自 UTF8 常量池)
  * @param slot     局部变量槽位索引
  * @param typeDesc 变量类型描述符(如 {@code I}, {@code Ljava/lang/String;})
+ * @param typeSignature 变量泛型签名(来自 LocalVariableTypeTable,
+ *                      如 {@code Ljava/util/List<Ljava/lang/String;>;},无则 null)
  */
 public record LocalVariableEntry(
         int startPc,
         int length,
         String name,
         int slot,
-        String typeDesc
+        String typeDesc,
+        String typeSignature
 ) {
+
     /** 检查此条目在给定字节码偏移量处是否有效 */
     public boolean covers(int pc) {
         return pc >= startPc && pc < startPc + length;

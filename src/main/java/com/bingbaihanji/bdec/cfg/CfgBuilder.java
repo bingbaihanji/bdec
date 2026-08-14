@@ -176,8 +176,10 @@ public final class CfgBuilder {
                                 int low = operands.size() > 1 ? operands.get(1) : 0;
                                 caseValue = low + (t - 1);
                             } else {
-                                // LOOKUPSWITCH操作数格式:[default偏移, 匹配对数, match0, off0, ...]
-                                int matchIdx = 2 + (t - 1) * 2;
+                                // LOOKUPSWITCH rawOperands 格式:
+                                // [default偏移, 匹配对数, match0, match1, ...]
+                                // 跳转偏移量在 jumpTargets 中,不在 rawOperands 里.
+                                int matchIdx = 2 + (t - 1);
                                 caseValue = operands.size() > matchIdx ? operands.get(matchIdx) : t - 1;
                             }
                             edges.add(new ControlFlowEdge(block, caseBlock,

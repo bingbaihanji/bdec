@@ -3,8 +3,8 @@ package com.bytecode.test;
 import java.util.ArrayList;
 
 /**
- * 简单测试 NEW + INIT 合并。
- * 验证 new Xxx(args) 不会被拆分成多条语句。
+ * 简单测试 NEW + INIT 合并.
+ * 验证 new Xxx(args) 不会被拆分成多条语句.
  */
 public class SimpleNewTest {
 

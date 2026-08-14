@@ -98,4 +98,19 @@ public class InstructionDecoderTest {
         assertEquals("iadd", insns.get(2).mnemonic());
         assertEquals("ireturn", insns.get(3).mnemonic());
     }
+
+    @Test
+    public void testOneByteOperandNonIndexInstructionsKeepVarIndexNegative() throws IOException {
+        // 非索引的单字节操作数指令(BIPUSH/LDC/NEWARRAY)不应把操作数误当成变量索引.
+        assertEquals(-1, decode(new byte[]{0x10, 0x2A}).varIndex());           // bipush 42
+        assertEquals(-1, decode(new byte[]{0x12, 0x07}).varIndex());           // ldc 7
+        assertEquals(-1, decode(new byte[]{(byte) 0xBC, 0x0A}).varIndex());    // newarray T_INT(10)
+        // 显式索引指令(ILOAD)的操作数才是变量索引.
+        assertEquals(5, decode(new byte[]{0x15, 0x05}).varIndex());            // iload 5
+    }
+
+    private static Instruction decode(byte[] code) throws IOException {
+        return new InstructionDecoder().decode(
+                new DataInputStream(new ByteArrayInputStream(code)), 0);
+    }
 }
