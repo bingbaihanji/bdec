@@ -4,12 +4,17 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.AssignExpr;
 import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
 import com.bingbaihanji.bdec.ast.expr.CastExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.LitExpr;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
@@ -19,6 +24,7 @@ import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
+import com.bingbaihanji.bdec.type.TypeKind;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -110,7 +116,21 @@ public class ForEachRewriter implements RewriteRule {
         boolean changed;
         do {
             changed = false;
-            for (int i = 0; i < stmts.size() - 1; i++) {
+            for (int i = 0; i < stmts.size(); i++) {
+                // 数组 for-each:int[] var2 = a; int var4 = 0; while(var4 < var2.length){...}
+                ForEachCandidate arrayResult = matchArrayForEach(stmts, i);
+                if (arrayResult != null) {
+                    stmts.remove(i + 2);
+                    stmts.remove(i + 1);
+                    stmts.remove(i);
+                    stmts.add(i, buildForEach(arrayResult));
+                    changed = true;
+                    break;
+                }
+
+                if (i >= stmts.size() - 1) {
+                    continue;
+                }
                 Statement s = stmts.get(i);
                 // 查找:包含 iterator() 方法调用的表达式语句
                 ForEachCandidate candidate = matchIteratorDecl(s);
@@ -130,42 +150,143 @@ public class ForEachRewriter implements RewriteRule {
                     continue;
                 }
 
-                // 构建增强 for-each 循环
-                LoopStatement forEach = new LoopStatement(
-                        LoopStatement.LoopKind.FOR_EACH,
-                        result.elementVar,
-                        candidate.iterableExpr,
-                        result.body);
-
-                // 元素类型合并:循环体中元素变量全部被转型为同一类型 T
-                //(如 println((String) element))时,把 T 提升为元素变量类型
-                // 并移除转型——还原 for (String item : list) 形式.
-                String elemName = ((com.bingbaihanji.bdec.ast.expr.VarExpr) result.elementVar).name();
-                com.bingbaihanji.bdec.type.JavaType elemType = findCastType(result.body, elemName);
-                if (System.getenv("BDEC_DEBUG_TMP") != null) {
-                    System.err.println("[FEDBG] elemName=" + elemName + " elemType=" + elemType);
-                }
-                if (elemType != null) {
-                    forEach = new LoopStatement(LoopStatement.LoopKind.FOR_EACH,
-                            forEach.initExpr(), forEach.condition(), forEach.incrExpr(),
-                            stripCasts(result.body, elemName),
-                            result.elementVar, elemType);
-                    if (System.getenv("BDEC_DEBUG_TMP") != null) {
-                        System.err.println("[FEDBG] built forEachVarType="
-                                + forEach.forEachVarType());
-                    }
-                }
-
                 // 用增强 for-each 循环替换 Iterator 声明和 while 循环
                 stmts.remove(i + 1);
                 stmts.remove(i);
-                stmts.add(i, forEach);
+                stmts.add(i, buildForEach(result));
                 changed = true;
                 break;
             }
         } while (changed);
 
         return new BlockStatement(stmts);
+    }
+
+    /**
+     * 根据匹配结果构建增强 for-each 循环:元素类型优先取自循环体转型
+     * (如 println((String) element)),否则回退到元素声明类型
+     * (如 int x = ((Integer)it.next()).intValue()).
+     */
+    private LoopStatement buildForEach(ForEachCandidate result) {
+        String elemName = ((VarExpr) result.elementVar).name();
+        com.bingbaihanji.bdec.type.JavaType elemType = findCastType(result.body, elemName);
+        if (elemType == null) {
+            elemType = result.elementType;
+        }
+        if (System.getenv("BDEC_DEBUG_TMP") != null) {
+            System.err.println("[FEDBG] elemName=" + elemName + " elemType=" + elemType);
+        }
+        if (elemType != null) {
+            return new LoopStatement(LoopStatement.LoopKind.FOR_EACH,
+                    result.elementVar, result.iterableExpr,
+                    stripCasts(result.body, elemName), elemType);
+        }
+        return new LoopStatement(LoopStatement.LoopKind.FOR_EACH,
+                result.elementVar, result.iterableExpr, result.body);
+    }
+
+    /**
+     * 匹配数组增强 for-each 的去糖化形态:
+     * <pre>
+     *   T[] arr = expr;
+     *   int idx = 0;
+     *   while (idx &lt; arr.length) { T elem = arr[idx]; ...body...; idx++; }
+     * </pre>
+     * 还原为 {@code for (T elem : expr) { ...body... }}.
+     */
+    private ForEachCandidate matchArrayForEach(List<Statement> stmts, int i) {
+        if (i + 2 >= stmts.size()) {
+            return null;
+        }
+        // 数组声明:T[] var2 = a;
+        Statement s0 = stmts.get(i);
+        if (!(s0 instanceof VariableDeclaration arrVd)
+                || arrVd.initializer() == null
+                || arrVd.type().kind() != TypeKind.ARRAY) {
+            return null;
+        }
+        String arrVar = arrVd.name();
+        Expression arrayExpr = arrVd.initializer();
+
+        // 索引声明:int var4 = 0;
+        Statement s1 = stmts.get(i + 1);
+        if (!(s1 instanceof VariableDeclaration idxVd)
+                || idxVd.initializer() == null
+                || idxVd.type().kind() != TypeKind.INT
+                || !isIntLiteral(idxVd.initializer(), 0)) {
+            return null;
+        }
+        String idxVar = idxVd.name();
+
+        // while(idxVar < arrVar.length)
+        Statement s2 = stmts.get(i + 2);
+        if (!(s2 instanceof LoopStatement loop)
+                || loop.loopKind() != LoopStatement.LoopKind.WHILE
+                || !(loop.condition() instanceof BinExpr cond)
+                || cond.operator() != BinaryOperator.LT
+                || !(cond.left() instanceof VarExpr leftIdx)
+                || !idxVar.equals(leftIdx.name())
+                || !(cond.right() instanceof FieldAccessExpr len)
+                || !"length".equals(len.fieldName())
+                || !(len.target() instanceof VarExpr lenArr)
+                || !arrVar.equals(lenArr.name())) {
+            return null;
+        }
+
+        // 循环体:首条 T elem = arr[idx]; 末条 idx++;
+        List<Statement> bodyStmts = getBodyStatements(loop.body());
+        if (bodyStmts.size() < 2) {
+            return null;
+        }
+        Statement first = bodyStmts.get(0);
+        if (!(first instanceof VariableDeclaration elemVd)
+                || !(elemVd.initializer() instanceof ArrayAccessExpr aae)
+                || !(aae.array() instanceof VarExpr aav)
+                || !arrVar.equals(aav.name())
+                || !(aae.index() instanceof VarExpr aiv)
+                || !idxVar.equals(aiv.name())) {
+            return null;
+        }
+        Statement last = bodyStmts.get(bodyStmts.size() - 1);
+        if (!(last instanceof ExpressionStatement incEs)
+                || !(incEs.expression() instanceof UnExpr inc)
+                || inc.operator() != UnaryOperator.POST_INC
+                || !(inc.operand() instanceof VarExpr incVar)
+                || !idxVar.equals(incVar.name())) {
+            return null;
+        }
+
+        // 剩余循环体(去掉首条元素声明与末条 idx++)
+        List<Statement> rest = new ArrayList<>(bodyStmts.subList(1, bodyStmts.size() - 1));
+        Statement body = rest.isEmpty() ? new BlockStatement(List.of())
+                : rest.size() == 1 ? rest.get(0) : new BlockStatement(rest);
+
+        // 元素类型:引用数组的 aaload 被类型推断擦除为 Object,
+        // 而数组声明类型携带正确的组件类型(如 String[] → String);
+        // 仅在元素变量被推断为 Object 时回退到组件类型,保留协变
+        // 场景(Number n : Integer[])的声明类型.
+        com.bingbaihanji.bdec.type.JavaType elemType = elemVd.type();
+        if (isObjectType(elemType)) {
+            com.bingbaihanji.bdec.type.JavaType componentType =
+                    com.bingbaihanji.bdec.type.JavaType.elementOf(arrVd.type());
+            if (componentType != null && !isObjectType(componentType)) {
+                elemType = componentType;
+            }
+        }
+        return new ForEachCandidate(arrVar, arrayExpr,
+                new VarExpr(elemVd.name()), body, elemType);
+    }
+
+    /** 判断类型是否为裸 java.lang.Object */
+    private boolean isObjectType(com.bingbaihanji.bdec.type.JavaType t) {
+        return t.kind() == TypeKind.CLASS && "java/lang/Object".equals(t.internalName());
+    }
+
+    /** 判断表达式是否为指定整数值的字面量(如 0) */
+    private boolean isIntLiteral(Expression e, int value) {
+        return e instanceof LitExpr lit
+                && lit.value() instanceof Number n
+                && n.intValue() == value;
     }
 
     /** 若循环体中元素变量的所有引用均转型为同一类型,返回该类型;
@@ -389,26 +510,31 @@ public class ForEachRewriter implements RewriteRule {
         }
 
         Statement first = bodyStmts.get(0);
-        Expression elementVar;
+        Expression elementVar = null;
+        com.bingbaihanji.bdec.type.JavaType elementType = null;
 
         // 形式1:VariableDeclaration——如 "String item = (String) iter.next()"
+        // 或 "int x = ((Integer) iter.next()).intValue()"(转型/拆箱包裹的 next())
         if (first instanceof VariableDeclaration vd
-                && vd.initializer() instanceof InvocationExpr inv
-                && "next".equals(inv.methodName())
-                && inv.target() instanceof VarExpr nextVar
-                && candidate.iterVar.equals(nextVar.name())) {
-            elementVar = new VarExpr(vd.name());
+                && vd.initializer() != null) {
+            VarExpr nextIter = extractNextIterVar(vd.initializer());
+            if (nextIter != null && candidate.iterVar.equals(nextIter.name())) {
+                elementVar = new VarExpr(vd.name());
+                elementType = vd.type();
+            }
         }
         // 形式2:ExpressionStatement(AssignExpr)——如 "item = iter.next()"
-        else if (first instanceof ExpressionStatement es
+        if (elementVar == null
+                && first instanceof ExpressionStatement es
                 && es.expression() instanceof AssignExpr assign
                 && assign.value() instanceof InvocationExpr inv2
                 && "next".equals(inv2.methodName())
                 && inv2.target() instanceof VarExpr nextVar2
                 && candidate.iterVar.equals(nextVar2.name())) {
             elementVar = assign.target();
-        } else {
-            // 形式3:next() 被内联到表达式中——如 "println(iter.next())"
+        }
+        // 形式3:next() 被内联到表达式中——如 "println(iter.next())"
+        if (elementVar == null) {
             // 查找循环体中所有 iterVar.next() 调用并替换为元素变量
             String elementName = "element";
             if (!containsNextCall(loop.body(), candidate.iterVar)) {
@@ -422,10 +548,8 @@ public class ForEachRewriter implements RewriteRule {
         List<Statement> newBodyStmts = new ArrayList<>(bodyStmts);
         // 若首条语句是 next() 赋值,则移除它(已提取为 for-each 元素变量)
         boolean firstIsNextAssign = (first instanceof VariableDeclaration vd
-                && vd.initializer() instanceof InvocationExpr inv
-                && "next".equals(inv.methodName())
-                && inv.target() instanceof VarExpr nv
-                && candidate.iterVar.equals(nv.name()))
+                && vd.initializer() != null
+                && isNextOf(vd.initializer(), candidate.iterVar))
                 || (first instanceof ExpressionStatement es
                 && es.expression() instanceof AssignExpr assign
                 && assign.value() instanceof InvocationExpr inv2
@@ -452,7 +576,49 @@ public class ForEachRewriter implements RewriteRule {
         }
 
         return new ForEachCandidate(candidate.iterVar, candidate.iterableExpr,
-                elementVar, newBody);
+                elementVar, newBody, elementType);
+    }
+
+    /**
+     * 剥离转型与拆箱包裹层,返回元素声明初始化表达式核心的 {@code iter.next()}
+     * 调用目标迭代器变量(形如 {@code ((Integer) iter.next()).intValue()});
+     * 若核心不是 {@code iter.next()} 则返回 {@code null}.
+     */
+    private VarExpr extractNextIterVar(Expression e) {
+        Expression cur = e;
+        while (true) {
+            if (cur instanceof CastExpr c) {
+                cur = c.operand();
+            } else if (cur instanceof InvocationExpr inv
+                    && inv.arguments().isEmpty()
+                    && isUnboxingMethod(inv.methodName())
+                    && inv.target() != null) {
+                cur = inv.target();
+            } else {
+                break;
+            }
+        }
+        if (cur instanceof InvocationExpr inv
+                && "next".equals(inv.methodName())
+                && inv.target() instanceof VarExpr v) {
+            return v;
+        }
+        return null;
+    }
+
+    /** 判断表达式核心是否为 {@code iterVar.next()}(剥离转型/拆箱) */
+    private boolean isNextOf(Expression e, String iterVar) {
+        VarExpr v = extractNextIterVar(e);
+        return v != null && iterVar.equals(v.name());
+    }
+
+    /** 是否为基本类型包装类的拆箱方法(如 {@code intValue()},{@code longValue()}) */
+    private boolean isUnboxingMethod(String name) {
+        return switch (name) {
+            case "intValue", "longValue", "floatValue", "doubleValue",
+                 "shortValue", "byteValue", "charValue", "booleanValue" -> true;
+            default -> false;
+        };
     }
 
     /** 提取语句中的子语句列表(若为块语句则展开,否则包装为单元素列表) */
@@ -590,6 +756,9 @@ public class ForEachRewriter implements RewriteRule {
         /** for-each 的循环变量表达式(声明模式中为 null) */
         final Expression elementVar;
 
+        /** 元素变量声明类型(形式1 VariableDeclaration 中提取,其余为 null) */
+        final com.bingbaihanji.bdec.type.JavaType elementType;
+
         /** 循环体语句(声明模式中为 null) */
         final Statement body;
 
@@ -598,15 +767,18 @@ public class ForEachRewriter implements RewriteRule {
             this.iterVar = iterVar;
             this.iterableExpr = iterableExpr;
             this.elementVar = null;
+            this.elementType = null;
             this.body = null;
         }
 
         /** 用于 while 循环匹配模式的构造器 */
         ForEachCandidate(String iterVar, Expression iterableExpr,
-                         Expression elementVar, Statement body) {
+                         Expression elementVar, Statement body,
+                         com.bingbaihanji.bdec.type.JavaType elementType) {
             this.iterVar = iterVar;
             this.iterableExpr = iterableExpr;
             this.elementVar = elementVar;
+            this.elementType = elementType;
             this.body = body;
         }
     }

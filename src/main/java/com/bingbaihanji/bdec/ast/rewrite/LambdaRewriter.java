@@ -232,7 +232,7 @@ public class LambdaRewriter implements RewriteRule {
     }
 
     /** 从 lambda 合成方法中提取参数列表(类型优先使用 Signature 属性,名称来自 LVT) */
-    private static List<LambdaExpr.Param> buildLambdaParams(MethodModel m) {
+    private static List<LambdaExpr.Param> buildLambdaParams(MethodModel m, int capturedCount) {
         List<LambdaExpr.Param> params = new ArrayList<>();
         // 优先使用 Signature 属性获取泛型参数类型(而非擦除后的描述符类型).
         // 例如 lambda 方法描述符为 (Object,Object)Object,
@@ -249,7 +249,11 @@ public class LambdaRewriter implements RewriteRule {
             }
         }
         String[] names = ParameterNameResolver.resolveNames(m, "arg");
-        for (int i = 0; i < paramTypes.length; i++) {
+        // 合成方法的前 capturedCount 个参数是被捕获的外部变量(this/局部变量),
+        // 而非 lambda 自身的形参——javac 把捕获变量编码为合成方法的前导参数,
+        // 真正的 lambda 形参紧随其后.跳过前导捕获参数,仅保留 lambda 形参,
+        // 否则 `() -> x + 1` 会被误渲染为 `(int x) -> x + 1`(捕获变量当形参).
+        for (int i = capturedCount; i < paramTypes.length; i++) {
             params.add(new LambdaExpr.Param(names[i], paramTypes[i]));
         }
         return params;
@@ -495,8 +499,11 @@ public class LambdaRewriter implements RewriteRule {
             return placeholder;
         }
 
-        // 从 lambda 方法自身提取参数类型和名称
-        List<LambdaExpr.Param> params = buildLambdaParams(lambdaMethod);
+        // 从 lambda 方法自身提取参数类型和名称.
+        // 占位符的 parameters() 是 INDY 操作数(= 捕获变量)构建的列表,
+        // 其数量即合成方法前导捕获参数的数量,须从 lambda 形参中剔除.
+        List<LambdaExpr.Param> params =
+                buildLambdaParams(lambdaMethod, placeholder.parameters().size());
 
         try {
             CfgBuilder cfgBuilder = new CfgBuilder();

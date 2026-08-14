@@ -72,31 +72,31 @@ class StructureParser {
                 int attrNameIdx = in.readUnsignedShort();
                 int attrLen = in.readInt();
                 String attrName = ConstantPoolParser.utf8(pool, attrNameIdx);
-                if ("Signature".equals(attrName)) {
-                    int sigIdx = in.readUnsignedShort();
-                    signature = ConstantPoolParser.utf8(pool, sigIdx);
-                } else if ("ConstantValue".equals(attrName)) {
-                    int cvIdx = in.readUnsignedShort();
-                    ConstantPoolEntry entry = pool[cvIdx];
-                    constValue = switch (entry) {
-                        case CpInteger ci -> ci.value();
-                        case CpFloat cf -> cf.value();
-                        case CpLong cl -> cl.value();
-                        case CpDouble cd -> cd.value();
-                        case CpString cs -> ConstantPoolParser.utf8(pool, cs.stringIndex());
-                        default -> "<unknown constant>";
-                    };
-                } else if ("RuntimeVisibleAnnotations".equals(attrName)) {
-                    anns = annotationParser.parseAnnotations(in, pool);
-                } else if ("RuntimeVisibleTypeAnnotations".equals(attrName)) {
-                    // JSR-308 类型注解(字段类型上的注解)
-                    typeAnns = annotationParser.parseTypeAnnotations(in, pool);
-                } else {
-                    in.skipBytes(attrLen);
+                switch (attrName) {
+                    case "Signature" -> {
+                        int sigIdx = in.readUnsignedShort();
+                        signature = ConstantPoolParser.utf8(pool, sigIdx);
+                    }
+                    case "ConstantValue" -> {
+                        int cvIdx = in.readUnsignedShort();
+                        ConstantPoolEntry entry = pool[cvIdx];
+                        constValue = switch (entry) {
+                            case CpInteger ci -> ci.value();
+                            case CpFloat cf -> cf.value();
+                            case CpLong cl -> cl.value();
+                            case CpDouble cd -> cd.value();
+                            case CpString cs -> ConstantPoolParser.utf8(pool, cs.stringIndex());
+                            default -> "<unknown constant>";
+                        };
+                    }
+                    case "RuntimeVisibleAnnotations" -> anns = annotationParser.parseAnnotations(in, pool);
+                    case "RuntimeVisibleTypeAnnotations" ->
+                        // JSR-308 类型注解(字段类型上的注解)
+                            typeAnns = annotationParser.parseTypeAnnotations(in, pool);
+                    case null, default -> in.skipBytes(attrLen);
                 }
             }
-            fields.add(new FieldModel(accessFlags, name, type, constValue, signature, anns,
-                    typeAnns));
+            fields.add(new FieldModel(accessFlags, name, type, constValue, signature, anns, typeAnns));
         }
         return fields;
     }
@@ -147,48 +147,52 @@ class StructureParser {
                 int attrLen = in.readInt();
                 String attrName = ConstantPoolParser.utf8(pool, attrNameIdx);
 
-                if ("Signature".equals(attrName)) {
-                    int sigIdx = in.readUnsignedShort();
-                    signature = ConstantPoolParser.utf8(pool, sigIdx);
-                } else if ("RuntimeVisibleAnnotations".equals(attrName)) {
-                    // 方法级注解
-                    anns = annotationParser.parseAnnotations(in, pool);
-                } else if ("RuntimeVisibleTypeAnnotations".equals(attrName)) {
-                    // JSR-308 类型注解(返回类型/参数类型/throws 上的注解)
-                    typeAnns = annotationParser.parseTypeAnnotations(in, pool);
-                } else if ("RuntimeVisibleParameterAnnotations".equals(attrName)) {
-                    // 参数级注解(JVMS 4.7.18):num_parameters 个参数注解列表
-                    int numParams = in.readUnsignedByte();
-                    List<List<AnnotationEntry>> pAnns = new ArrayList<>();
-                    for (int p = 0; p < numParams; p++) {
-                        pAnns.add(annotationParser.parseAnnotations(in, pool));
+                switch (attrName) {
+                    case "Signature" -> {
+                        int sigIdx = in.readUnsignedShort();
+                        signature = ConstantPoolParser.utf8(pool, sigIdx);
                     }
-                    paramAnns = pAnns;
-                } else if ("AnnotationDefault".equals(attrName)) {
-                    // 注解方法元素的默认值(element_value)
-                    annotationDefault = annotationParser.parseElementValue(in, pool);
-                } else if ("Exceptions".equals(attrName)) {
-                    // Exceptions 属性:方法声明中 throws 的受检异常列表
-                    int n = in.readUnsignedShort();
-                    for (int x = 0; x < n; x++) {
-                        int classIdx = in.readUnsignedShort();
-                        String internalName = ConstantPoolParser.className(pool, classIdx);
-                        if (internalName != null) {
-                            declaredExceptions.add(internalName);
+                    case "RuntimeVisibleAnnotations" ->
+                        // 方法级注解
+                            anns = annotationParser.parseAnnotations(in, pool);
+                    case "RuntimeVisibleTypeAnnotations" ->
+                        // JSR-308 类型注解(返回类型/参数类型/throws 上的注解)
+                            typeAnns = annotationParser.parseTypeAnnotations(in, pool);
+                    case "RuntimeVisibleParameterAnnotations" -> {
+                        // 参数级注解(JVMS 4.7.18):num_parameters 个参数注解列表
+                        int numParams = in.readUnsignedByte();
+                        List<List<AnnotationEntry>> pAnns = new ArrayList<>();
+                        for (int p = 0; p < numParams; p++) {
+                            pAnns.add(annotationParser.parseAnnotations(in, pool));
+                        }
+                        paramAnns = pAnns;
+                    }
+                    case "AnnotationDefault" ->
+                        // 注解方法元素的默认值(element_value)
+                            annotationDefault = annotationParser.parseElementValue(in, pool);
+                    case "Exceptions" -> {
+                        // Exceptions 属性:方法声明中 throws 的受检异常列表
+                        int n = in.readUnsignedShort();
+                        for (int x = 0; x < n; x++) {
+                            int classIdx = in.readUnsignedShort();
+                            String internalName = ConstantPoolParser.className(pool, classIdx);
+                            if (internalName != null) {
+                                declaredExceptions.add(internalName);
+                            }
                         }
                     }
-                } else if ("Code".equals(attrName)) {
-                    // Code 属性核心结构(指令,异常处理器表,局部变量表)
-                    CodeAttributeParser.CodeAttribute codeAttr = codeParser.parseCode(in, pool);
-                    maxStack = codeAttr.maxStack();
-                    maxLocals = codeAttr.maxLocals();
-                    instructions = codeAttr.instructions();
-                    handlers = codeAttr.handlers();
-                    localVarNames = codeAttr.localVarNames();
-                    lvtEntries = codeAttr.lvtEntries();
-                    codeTypeAnns = codeAttr.codeTypeAnns();
-                } else {
-                    in.skipBytes(attrLen);
+                    case "Code" -> {
+                        // Code 属性核心结构(指令,异常处理器表,局部变量表)
+                        CodeAttributeParser.CodeAttribute codeAttr = codeParser.parseCode(in, pool);
+                        maxStack = codeAttr.maxStack();
+                        maxLocals = codeAttr.maxLocals();
+                        instructions = codeAttr.instructions();
+                        handlers = codeAttr.handlers();
+                        localVarNames = codeAttr.localVarNames();
+                        lvtEntries = codeAttr.lvtEntries();
+                        codeTypeAnns = codeAttr.codeTypeAnns();
+                    }
+                    case null, default -> in.skipBytes(attrLen);
                 }
             }
             // 合并方法级与 Code 级类型注解(局部变量注解位于 Code 属性内)

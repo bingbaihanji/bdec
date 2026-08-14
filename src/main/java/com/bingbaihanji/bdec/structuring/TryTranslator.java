@@ -13,6 +13,8 @@ import com.bingbaihanji.bdec.cfg.EdgeKind;
 import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.IrOpcode;
 import com.bingbaihanji.bdec.ir.LinearIr;
+import com.bingbaihanji.bdec.ir.Value;
+import com.bingbaihanji.bdec.ir.Variable;
 import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayDeque;
@@ -90,7 +92,7 @@ public final class TryTranslator {
                     Set<BasicBlock> union = new HashSet<>(existing.tryBlocks());
                     union.addAll(tci.tryBlocks());
                     mergedTcis.set(mi, new TryCatchInfo(union, existing.handlerBlock(),
-                            existing.catchType(),
+                            mergeCatchTypes(existing.catchType(), tci.catchType()),
                             Math.min(existing.startPc(), tci.startPc()),
                             Math.max(existing.endPc(), tci.endPc())));
                     mergedIntoExisting = true;
@@ -224,6 +226,31 @@ public final class TryTranslator {
                     }
                 }
             }
+            // 过滤退出块:仅纳入 finally 副本块 + 尾部返回块(tail return),
+            // 排除 try 之后的后续代码.
+            // 正常退出路径 = [finally 副本] [tail return 或 后续代码].
+            // try { return X; } finally {...} 的 return X 值在 try 区准备(存临时变量),
+            // 属于 try 体,应拉入;而 try {...} finally {...} return X; 的 return X
+            // 值在退出块计算(getfield 等),属 try 之后的代码,不应拉入 try 体.
+            Set<BasicBlock> pullInExitBlocks = new java.util.LinkedHashSet<>();
+            for (BasicBlock b : exitBlocks) {
+                boolean hasReturn = false;
+                for (IrInstruction insn : ir.instructionsOf(b)) {
+                    if (insn.opcode() == IrOpcode.RETURN) {
+                        hasReturn = true;
+                        break;
+                    }
+                }
+                if (hasReturn) {
+                    if (isTailReturn(b, ir, tci.tryBlocks())) {
+                        pullInExitBlocks.add(b);
+                    }
+                    break; // 返回块及其后不再拉入 try 体
+                }
+                pullInExitBlocks.add(b); // finally 副本块(无 return),继续
+            }
+            exitBlocks = pullInExitBlocks;
+
             Set<Integer> exitGroupSet = new java.util.LinkedHashSet<>();
             if (!exitBlocks.isEmpty()) {
                 for (int i = 0; i < groups.size(); i++) {
@@ -528,10 +555,7 @@ public final class TryTranslator {
 
         // 常规 catch 子句
         List<TryStatement.CatchClause> catchClauses = new ArrayList<>();
-        String excType = info.catchType();
-        if (excType != null && excType.contains("/")) {
-            excType = excType.substring(excType.lastIndexOf('/') + 1);
-        }
+        String excType = shortCatchType(info.catchType());
         // 若处理器创建了新的异常对象(如 record 模式匹配的 MatchException),
         // 则这是编译器生成的基础设施,而非用户代码.
         // 此时生成最小化的空 catch 体以保持代码可编译,
@@ -557,6 +581,93 @@ public final class TryTranslator {
                 "e",
                 handlerBody));
         return new TryStatement(tryBody, catchClauses, null);
+    }
+
+    /**
+     * 合并两个捕获类型:相同时保持单一;不同时(多 catch 联合类型,如
+     * {@code catch (IOException | RuntimeException e)})以 "|" 连接内部名称.
+     *
+     * <p>javac 为同一 try 区域,同一处理器块发送多个异常表项,每项一个
+     * catchType;反编译器须将其合并为单一 union 类型,而非丢到只剩一个.</p>
+     */
+    private static String mergeCatchTypes(String a, String b) {
+        if (a == null) {
+            return b;
+        }
+        if (b == null || a.equals(b)) {
+            return a;
+        }
+        return a + "|" + b;
+    }
+
+    /**
+     * 将 catchType(内部名称,可能以 "|" 连接多 catch 联合)转为源码短名,
+     * 多类型以 " | " 连接(如 "IOException | RuntimeException").
+     */
+    private static String shortCatchType(String internal) {
+        if (internal == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        int start = 0;
+        for (int i = 0; i <= internal.length(); i++) {
+            if (i == internal.length() || internal.charAt(i) == '|') {
+                String part = internal.substring(start, i);
+                int slash = part.lastIndexOf('/');
+                String shortName = slash >= 0 ? part.substring(slash + 1) : part;
+                if (sb.length() > 0) {
+                    sb.append(" | ");
+                }
+                sb.append(shortName);
+                start = i + 1;
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 判断退出块是否为尾部返回(tail return):RETURN 的值是 try 区内
+     * STORE 的临时变量.
+     *
+     * <p>{@code try { return X; } finally {...}} 中,X 在 try 区被求值并存入
+     * 临时变量,退出块的 RETURN 直接返回该临时变量(应保留在 try 体内,
+     * 使 X 在 finally 之前求值).而 {@code try {...} finally {...} return X;}
+     * 中,return X 的值在退出块计算(字段加载/表达式),属 try 之后的代码,
+     * 不应拉入 try 体.</p>
+     */
+    private static boolean isTailReturn(BasicBlock block, LinearIr ir, Set<BasicBlock> tryRegion) {
+        for (IrInstruction insn : ir.instructionsOf(block)) {
+            if (insn.opcode() != IrOpcode.RETURN) {
+                continue;
+            }
+            if (insn.operands().isEmpty()) {
+                return false; // void return,非 tail return
+            }
+            Value v = insn.operands().get(0);
+            if (!(v instanceof Variable var)) {
+                return false; // 返回计算值(字段加载/表达式),非 try 区临时变量
+            }
+            // 该变量是否在 try 区内被 STORE(即 return 值在 try 区准备)
+            for (BasicBlock rb : tryRegion) {
+                for (IrInstruction ri : ir.instructionsOf(rb)) {
+                    if (ri.opcode() == IrOpcode.STORE && storesTo(ri, var)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        return false; // 块内无 RETURN
+    }
+
+    /** STORE 指令的目标变量是否为 var(按 slot+version 匹配). */
+    private static boolean storesTo(IrInstruction insn, Variable var) {
+        if (insn.opcode() != IrOpcode.STORE || insn.operands().isEmpty()) {
+            return false;
+        }
+        Value target = insn.operands().get(0);
+        return target instanceof Variable sv
+                && sv.slot() == var.slot() && sv.version() == var.version();
     }
 
 }

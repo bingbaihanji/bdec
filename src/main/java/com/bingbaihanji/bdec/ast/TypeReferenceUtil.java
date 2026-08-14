@@ -165,7 +165,18 @@ public final class TypeReferenceUtil {
      *  必须替换.此前要求参数自身嵌套泛型,导致扁平泛型
      *  (Function&lt;Integer,Integer&gt;)被错误跳过,输出擦除的原始类型. */
     public static boolean hasGenericsOrWildcard(JavaType t) {
-        return t != null && !t.typeArguments().isEmpty();
+        if (t == null) {
+            return false;
+        }
+        if (!t.typeArguments().isEmpty()) {
+            return true;
+        }
+        // ARRAY 的泛型信息位于元素类型(如 List<String>[]):
+        // 签名比擦除的 List[] 更丰富,须递归元素判定.
+        if (t.kind() == TypeKind.ARRAY && t.element() != null) {
+            return hasGenericsOrWildcard(t.element());
+        }
+        return false;
     }
 
     /**

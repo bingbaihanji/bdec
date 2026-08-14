@@ -114,7 +114,9 @@ final class StatementUtils {
         } else if (e instanceof AssignExpr a) {
             Expression v2 = foldPostIncInExpr(a.value(), varName, op);
             if (v2 != a.value()) {
-                return new AssignExpr(a.target(), v2);
+                // 保留复合赋值运算符:s += j 折叠 j++ 必须得到 s += j++,
+                // 若丢弃 compoundOp 会变成 s = j++(丢失累加的左操作数,语义错误).
+                return new AssignExpr(a.target(), v2, a.compoundOp());
             }
         } else if (e instanceof UnExpr u && u.operator() != UnaryOperator.POST_INC
                 && u.operator() != UnaryOperator.POST_DEC) {

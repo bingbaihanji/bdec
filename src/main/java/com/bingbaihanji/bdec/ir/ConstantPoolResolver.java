@@ -105,6 +105,12 @@ final class ConstantPoolResolver {
         if (cpIdx > 0 && cpIdx < cp.length) {
             String className = ConstantPoolParser.className(cp, cpIdx);
             if (className != null) {
+                // 数组类引用(如 anewarray [I):类名即为数组描述符,
+                // 须解析为 ARRAY 类型,而非 internalName 含 "[" 的 CLASS,
+                // 否则渲染出非法的 "[I[]" 类型名.
+                if (className.startsWith("[")) {
+                    return TypeResolver.parseFieldType(className);
+                }
                 return JavaType.classType(className);
             }
         }

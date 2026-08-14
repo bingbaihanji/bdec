@@ -87,7 +87,8 @@ final class InlineAnalyzer {
                 }
                 Value source = insn.operands().get(1);
                 int useCount = varUseCount.getOrDefault(v, 0);
-                if (useCount == 1 && StatementUtils.isSimpleValue(source)) {
+                if (useCount == 1 && StatementUtils.isSimpleValue(source)
+                        && !isIncRead(allInsns, v)) {
                     // 检查 LOAD 是否被消费,或变量是否被直接使用(如 RETURN 操作数)
                     Integer loadId = loadIdForVar.get(v);
                     boolean canInline;
@@ -95,8 +96,11 @@ final class InlineAnalyzer {
                         // 变量通过 LOAD 加载——检查 LOAD 是否被消费
                         canInline = consumedInsnIds.contains(loadId);
                     } else {
-                        // 变量被直接使用——始终安全内联(变量自身即为使用点)
-                        canInline = true;
+                        // 变量被直接使用——通常安全内联(变量自身即为使用点),
+                        // 但被 lambda 捕获(INDY 操作数)的变量按名引用,内联会
+                        // 删除声明而 lambda 体仍引用该名(如 `return () -> x+1;`
+                        // 中 x 未定义),故被捕获变量必须保留声明.
+                        canInline = !isLambdaCaptured(allInsns, v);
                     }
                     if (canInline) {
                         // 合并点语义保护:仅当 STORE 支配其唯一使用点才可内联.
@@ -115,6 +119,49 @@ final class InlineAnalyzer {
 
         return new InlineAnalysis(Map.copyOf(varStoreSource),
                 Set.copyOf(storesToSkip), Map.copyOf(varUseCount));
+    }
+
+    /**
+     * 判断变量是否被 INC(IINC,即 i++/i--)作为旧版本读取.
+     *
+     * <p>被 INC 读取的变量是循环携带依赖:其"值"流入 INC 产生新版本,
+     * 即便恰好也被一次 LOAD 引用(如循环条件 {@code j < n}),也不能当作
+     * 单次使用的常量内联——否则会把初始值(如 {@code j = 0})错误传播进
+     * 条件,得到 {@code 0 < n}.按 slot+version 匹配(与 {@link Variable#equals}
+     * 一致),不依赖对象身份.</p>
+     */
+    static boolean isIncRead(List<IrInstruction> insns, Variable v) {
+        for (IrInstruction insn : insns) {
+            if (insn.opcode() == IrOpcode.INC && insn.operands().size() >= 2
+                    && insn.operands().get(0) instanceof Variable rv
+                    && rv.slot() == v.slot() && rv.version() == v.version()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 判断变量是否被 lambda(INDY)按名捕获.
+     *
+     * <p>INDY(lambda/方法引用)的操作数是捕获的外部变量,lambda 体通过
+     * 变量名引用它们.内联这类变量会删除声明但 lambda 体仍引用该名,
+     * 产生未定义变量.按 slot+version 匹配(与 {@link Variable#equals}
+     * 一致),不依赖对象身份.</p>
+     */
+    static boolean isLambdaCaptured(List<IrInstruction> insns, Variable v) {
+        for (IrInstruction insn : insns) {
+            if (insn.opcode() == IrOpcode.INVOKE
+                    && insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
+                for (Value op : insn.operands()) {
+                    if (op instanceof Variable ov
+                            && ov.slot() == v.slot() && ov.version() == v.version()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /**

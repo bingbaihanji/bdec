@@ -192,10 +192,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         if (s == null) {
             return true;
         }
-        if (s instanceof BlockStatement bs && bs.statements().isEmpty()) {
-            return true;
-        }
-        return false;
+        return s instanceof BlockStatement bs && bs.statements().isEmpty();
     }
 
     /**

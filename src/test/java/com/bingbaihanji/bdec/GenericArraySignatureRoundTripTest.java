@@ -32,7 +32,7 @@ public class GenericArraySignatureRoundTripTest {
                         + "}\n",
                 "S");
         DecompileTestHarness.assertContains(output,
-                "static <T> java.util.List<T>[] f(java.util.List<T>[] a)");
+                "static <T> List<T>[] f(List<T>[] a)");
         DecompileTestHarness.assertNotContains(output, "List[]");
     }
 
@@ -46,8 +46,28 @@ public class GenericArraySignatureRoundTripTest {
                         + "}\n",
                 "M");
         DecompileTestHarness.assertContains(output,
-                "static <T> java.util.List<T>[][] g(java.util.List<T>[][] a)");
+                "static <T> List<T>[][] g(List<T>[][] a)");
         DecompileTestHarness.assertNotContains(output, "List[][]");
+    }
+
+    /**
+     * 具体类型实参(非类型变量)的泛型数组签名覆盖——
+     * {@code List<String>[]} 不得擦除为 {@code List[]}.
+     * 覆盖闸门 hasGenericsOrWildcard 需递归 ARRAY 元素(元素本身携带
+     * 泛型实参),否则无类型变量的 {@code List<String>[]} 因顶层
+     * typeArguments 为空而被跳过.
+     */
+    @Test
+    public void testConcreteTypeArgArrayMethod() throws Exception {
+        String output = DecompileTestHarness.decompileWithInnerLoader(
+                "import java.util.List;\n"
+                        + "class G {\n"
+                        + "    List<String>[] m(List<String>[] p) { return p; }\n"
+                        + "}\n",
+                "G");
+        DecompileTestHarness.assertContains(output, "List<String>[] m(List<String>[] p)");
+        DecompileTestHarness.assertNotContains(output, "List[]");
+        DecompileTestHarness.assertRecompiles(output, "G", java.util.Map.of());
     }
 
     @Test

@@ -1,11 +1,13 @@
 package com.bingbaihanji.bdec.structuring;
 
+import com.bingbaihanji.bdec.ast.AnnotationRenderer;
 import com.bingbaihanji.bdec.ast.expr.*;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
+import com.bingbaihanji.bdec.bytecode.model.TypePathElement;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.DominatorTree;
@@ -93,6 +95,10 @@ public final class BlockReducer implements ReducerOps {
     /** 已被内联,需要跳过的 STORE 指令 ID 集合 */
     private Set<Integer> currentStoresToSkip = Set.of();
 
+    /** PHI 指令 ID → 已折叠的三元表达式(条件赋值折叠后,后续 STORE 翻译时
+     *  按此映射替换 PHI 解析,避免丢 false 分支值). */
+    private Map<Integer, Expression> phiReplacements = Map.of();
+
     /** 待向前折叠的后置自增语句(自增在引用语句之前的情况) */
     private Statement pendingPostInc = null;
 
@@ -123,12 +129,12 @@ public final class BlockReducer implements ReducerOps {
      * 按类型路径分组为渲染行映射.
      * 注解类型名取简单名(与声明点同包/已导入假设一致).
      */
-    private static java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+    private static java.util.Map<java.util.List<TypePathElement>,
             List<String>> renderVarTypeAnnotations(Variable v) {
         if (v.typeAnnotations() == null || v.typeAnnotations().isEmpty()) {
             return java.util.Map.of();
         }
-        return com.bingbaihanji.bdec.ast.AnnotationRenderer.groupByTypePath(v.typeAnnotations());
+        return AnnotationRenderer.groupByTypePath(v.typeAnnotations());
     }
 
     /**
@@ -228,6 +234,7 @@ public final class BlockReducer implements ReducerOps {
         currentVarStoreSource = inline.varStoreSource();
         currentStoresToSkip = inline.storesToSkip();
         globalVarUseCount = inline.varUseCount();
+        phiReplacements = new HashMap<>();
 
         // 全局预遍历:跨组合并 NEW + INVOKE <init> 对(CondenseConstruction).
         // 某些情况下 NEW 指令位于一个 BlockGroup 而对应的 <init> 调用
@@ -279,8 +286,10 @@ public final class BlockReducer implements ReducerOps {
             //(翻译逻辑见 IfTranslator.translateIf).
             if (ifInfo != null) {
                 s = IfTranslator.translateIf(this, ifInfo, group, ir, groups, consumed, graph, postDom);
-                statements.add(s);
-                stmtGroupIdx.add(gi);
+                if (s != null) {
+                    statements.add(s);
+                    stmtGroupIdx.add(gi);
+                }
                 continue;
             }
             // 循环:将组包装为 LoopStatement(仅在存在有效循环体时)
@@ -590,7 +599,8 @@ public final class BlockReducer implements ReducerOps {
                     }
                 }
                 if (loadCount == 1 && StatementUtils.isSimpleValue(source)
-                        && globalVarUseCount.getOrDefault(v, 0) == 1) {
+                        && globalVarUseCount.getOrDefault(v, 0) == 1
+                        && !InlineAnalyzer.isIncRead(allInsns, v)) {
                     for (IrInstruction other : allInsns) {
                         if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
                                 && other.operands().getFirst() instanceof Variable lv
@@ -754,7 +764,8 @@ public final class BlockReducer implements ReducerOps {
                     }
                 }
                 if (loadCount == 1 && StatementUtils.isSimpleValue(source)
-                        && globalVarUseCount.getOrDefault(v, 0) == 1) {
+                        && globalVarUseCount.getOrDefault(v, 0) == 1
+                        && !InlineAnalyzer.isIncRead(allInsns, v)) {
                     // 检查唯一的 LOAD 是否被消费
                     for (IrInstruction other : allInsns) {
                         if (other.opcode() == IrOpcode.LOAD && !other.operands().isEmpty()
@@ -944,6 +955,16 @@ public final class BlockReducer implements ReducerOps {
                 }
             } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
                 // 独立表达式(结果未被任何指令消费)——仍输出
+                Expression e = translateExpr(insn);
+                if (e != null && !StatementUtils.isIgnorableExpr(e)) {
+                    stmts.add(new ExpressionStatement(e));
+                }
+            } else if (insn.opcode() == IrOpcode.NEW
+                    && currentNewToInit.containsKey(insn.id())
+                    && isBareConstruction(insn, allInsns, currentNewToInit.get(insn.id()))) {
+                // 裸 new 表达式语句(构造器有副作用,结果被 pop):
+                // new FileInputStream("x") —— 结果仅被合并的 <init> 消费,
+                // 不能因"结果被消费"而丢弃整条语句.
                 Expression e = translateExpr(insn);
                 if (e != null && !StatementUtils.isIgnorableExpr(e)) {
                     stmts.add(new ExpressionStatement(e));
@@ -1685,6 +1706,12 @@ public final class BlockReducer implements ReducerOps {
             // 选取定义指令位于这些块中的 PHI 操作数.
             // 否则选取第一个非平凡操作数.
             case PHI -> {
+                // 条件赋值折叠已把此 PHI 折叠为三元表达式(见 IfTranslator)——
+                // 后续 STORE 翻译时直接返回折叠结果,避免丢 false 分支值.
+                Expression replaced = phiReplacements.get(insn.id());
+                if (replaced != null) {
+                    yield replaced;
+                }
                 Expression resolved = null;
                 if (currentBranchBlocks != null) {
                     for (Value op : insn.operands()) {
@@ -1693,6 +1720,14 @@ public final class BlockReducer implements ReducerOps {
                             resolved = translateExpr(ref.instruction());
                             break;
                         }
+                    }
+                }
+                if (resolved == null) {
+                    // value 位置(无分支上下文)的三元重建:PHI 作为 CONDITION/BINARY
+                    // 等指令的操作数被消费时,按 CFG 菱形还原为 CondExpr,避免取首
+                    // 操作数静默丢 false 分支值.
+                    if (currentBranchBlocks == null && currentIr != null) {
+                        resolved = IfTranslator.resolvePhiAsTernary(this, insn, currentIr);
                     }
                 }
                 if (resolved == null) {
@@ -1797,17 +1832,68 @@ public final class BlockReducer implements ReducerOps {
         return false;
     }
 
-    /** 按指定块上下文解析 follow 块中的 PHI 值. */
+    /** 按指定块上下文解析 follow 块中的 PHI 值.
+     *
+     *  <p>PHI 操作数按 {@code cfg.predecessorsOf(follow)} 的前驱顺序排列(IrBuilder
+     *  的 {@code mergePredecessorStates} 依次取各前驱的栈值).因此直接按前驱
+     *  顺序将分支块与 PHI 操作数对齐,而非仅靠 {@link InstructionRef#blockId()}
+     *  匹配——参数等直接以 {@link Variable} 形式入栈的操作数不携带块 id,
+     *  靠 blockId 匹配会漏掉它们(嵌套三元 {@code a ? (b ? c : d) : e} 的叶值
+     *  即此情形,曾一律取首操作数 {@code c} 而丢 {@code d}/{@code e}).</p> */
     public Expression resolvePhiAt(BasicBlock follow, LinearIr ir) {
         if (follow == null) {
             return null;
         }
         for (IrInstruction fi : ir.instructionsOf(follow)) {
-            if (fi.opcode() == IrOpcode.PHI) {
-                return valueToExpr(new InstructionRef(fi, fi.resultType()));
+            if (fi.opcode() != IrOpcode.PHI) {
+                continue;
             }
+            if (currentBranchBlocks != null) {
+                List<BasicBlock> preds = ir.controlFlowGraph().predecessorsOf(follow);
+                for (int i = 0; i < preds.size() && i < fi.operands().size(); i++) {
+                    if (currentBranchBlocks.contains(preds.get(i).id())) {
+                        return valueToExpr(fi.operands().get(i));
+                    }
+                }
+            }
+            return valueToExpr(new InstructionRef(fi, fi.resultType()));
         }
         return null;
+    }
+
+    /** 注册 PHI 折叠结果:后续 STORE 翻译时,该 PHI 解析为给定三元表达式. */
+    @Override
+    public void registerPhiReplacement(int phiId, Expression expr) {
+        if (phiReplacements.isEmpty()) {
+            phiReplacements = new HashMap<>();
+        }
+        phiReplacements.put(phiId, expr);
+    }
+
+    /**
+     * 判断 NEW 指令是否为"裸 new 语句":其结果仅被合并的 {@code <init>} 调用
+     * 消费,随后被 pop(无任何 STORE/字段赋值/数组元素等真正消费方).
+     *
+     * <p>构造器本身有副作用({@code new FileInputStream("x")}),即便结果被丢弃
+     * 也必须作为表达式语句输出,而不能因"结果被消费"而整体消失.</p>
+     */
+    private boolean isBareConstruction(IrInstruction newInsn, List<IrInstruction> allInsns,
+                                       List<IrInstruction> mergedInits) {
+        Set<Integer> initIds = new HashSet<>();
+        for (IrInstruction init : mergedInits) {
+            initIds.add(init.id());
+        }
+        for (IrInstruction insn : allInsns) {
+            if (initIds.contains(insn.id())) {
+                continue; // 合并的 <init> 不算真正消费方
+            }
+            for (Value op : insn.operands()) {
+                if (op instanceof InstructionRef ref && ref.instruction().id() == newInsn.id()) {
+                    return false; // 被非 <init> 的指令消费(如 STORE/字段赋值)
+                }
+            }
+        }
+        return true;
     }
 
     /** 将处理器指令(去除最后的 THROW)翻译为 Statement 体.

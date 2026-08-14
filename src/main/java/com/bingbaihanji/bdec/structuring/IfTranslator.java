@@ -1,5 +1,6 @@
 package com.bingbaihanji.bdec.structuring;
 
+import com.bingbaihanji.bdec.ast.expr.CondExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
@@ -10,8 +11,12 @@ import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
 import com.bingbaihanji.bdec.cfg.PostDominatorTree;
+import com.bingbaihanji.bdec.ir.InstructionRef;
+import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.IrOpcode;
 import com.bingbaihanji.bdec.ir.LinearIr;
+import com.bingbaihanji.bdec.ir.Value;
+import com.bingbaihanji.bdec.ir.Variable;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 
@@ -132,6 +137,64 @@ public final class IfTranslator {
                     }
                 }
                 return new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(retCond);
+            }
+        }
+
+        // 合并 return 三元折叠:两个分支体的表达式汇入尾部 return 的 PHI,
+        // 实为 "return cond ? trueVal : falseVal".例:"return b ? 1 : 2" 被
+        // javac 编译为单一 ireturn(goto 汇合),PHI 在 return 块合并两分支值.
+        // 布尔 return 已由上方布尔折叠处理,此处覆盖非布尔及复杂表达式情形.
+        if (!ifInfo.negateCondition()
+                && isTernaryShaped(thenBody)
+                && isTernaryShaped(elseBody)
+                && cond != null
+                && !ifInfo.elseBlocks().isEmpty()
+                && isTailReturnPhi(ifInfo.follow(), ir)) {
+            BasicBlock ifFollow = ifInfo.follow();
+            Expression trueVal = resolveBranchValue(ops, ifFollow, ir, ifInfo.thenBlocks(), graph);
+            Expression falseVal = resolveBranchValue(ops, ifFollow, ir, ifInfo.elseBlocks(), graph);
+            if (trueVal != null && falseVal != null) {
+                // 消费 if 的 follow 组(尾部 return 由本折叠替代)
+                for (BlockGroup fg : groups) {
+                    if (fg.blocks().contains(ifFollow)) {
+                        consumed.add(fg);
+                    }
+                }
+                // 规范化:!x ? a : b → x ? b : a(与 TernaryRewriter 一致)
+                if (cond instanceof UnExpr ue && ue.operator() == UnaryOperator.NOT) {
+                    return new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
+                            new CondExpr(ue.operand(), falseVal, trueVal));
+                }
+                return new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
+                        new CondExpr(cond, trueVal, falseVal));
+            }
+        }
+
+        // 合并条件赋值折叠:两个分支体的表达式汇入尾部 STORE 的 PHI,
+        // 实为 "Type y = cond ? trueVal : falseVal".例:"int y = b ? 1 : 2"
+        // 被 javac 编译为单一 istore(goto 汇合),PHI 在 store 块合并两分支值.
+        // 此处仅注册 PHI 折叠结果并抑制空 if,声明语句由 follow 组后续翻译生成.
+        if (!ifInfo.negateCondition()
+                && isTernaryShaped(thenBody)
+                && isTernaryShaped(elseBody)
+                && cond != null
+                && !ifInfo.elseBlocks().isEmpty()) {
+            IrInstruction store = findStoreOfPhi(ifInfo.follow(), ir);
+            if (store != null && store.operands().size() >= 2
+                    && store.operands().get(1) instanceof InstructionRef ref) {
+                BasicBlock ifFollow = ifInfo.follow();
+                Expression trueVal = resolveBranchValue(ops, ifFollow, ir, ifInfo.thenBlocks(), graph);
+                Expression falseVal = resolveBranchValue(ops, ifFollow, ir, ifInfo.elseBlocks(), graph);
+                if (trueVal != null && falseVal != null) {
+                    IrInstruction phi = ref.instruction();
+                    // 规范化:!x ? a : b → x ? b : a(与 TernaryRewriter 一致)
+                    Expression ternary = (cond instanceof UnExpr ue
+                            && ue.operator() == UnaryOperator.NOT)
+                            ? new CondExpr(ue.operand(), falseVal, trueVal)
+                            : new CondExpr(cond, trueVal, falseVal);
+                    ops.registerPhiReplacement(phi.id(), ternary);
+                    return null; // 抑制空 if,声明由 follow 组生成
+                }
             }
         }
 
@@ -628,6 +691,231 @@ public final class IfTranslator {
             ops.setCurrentBranchBlocks(prevBranchBlocks);
             ops.popDeclaredScope(); // 弹出分支作用域
         }
+    }
+
+    /** 判断 follow 块是否为"尾部 return 的 PHI 汇合":块内 RETURN 的操作数是 PHI.
+     *  仅当 follow 确实是值返回块时才折叠,避免把 {@code int y = b ? 1 : 2;}
+     *  这类"PHI 汇入 STORE"误折叠为 return(丢失后续对 y 的使用). */
+    private static boolean isTailReturnPhi(BasicBlock follow, LinearIr ir) {
+        if (follow == null) {
+            return false;
+        }
+        IrInstruction phi = null;
+        IrInstruction ret = null;
+        for (IrInstruction i : ir.instructionsOf(follow)) {
+            if (i.opcode() == IrOpcode.PHI) {
+                phi = i;
+            } else if (i.opcode() == IrOpcode.RETURN) {
+                ret = i;
+            }
+        }
+        if (phi == null || ret == null || ret.operands().isEmpty()) {
+            return false;
+        }
+        Value op = ret.operands().getFirst();
+        return op instanceof InstructionRef ref && ref.instruction() == phi;
+    }
+
+    /** 查找 follow 块中"PHI 汇入 STORE"的 STORE 指令(即 PHI 是 STORE 的源值).
+     *  条件赋值 {@code int y = b ? 1 : 2} 编译为单一 istore,PHI 在 store 块
+     *  合并两分支值;返回 null 表示 follow 不是条件赋值汇合点. */
+    private static IrInstruction findStoreOfPhi(BasicBlock follow, LinearIr ir) {
+        if (follow == null) {
+            return null;
+        }
+        IrInstruction phi = null;
+        for (IrInstruction i : ir.instructionsOf(follow)) {
+            if (i.opcode() == IrOpcode.PHI) {
+                phi = i;
+                break;
+            }
+        }
+        if (phi == null) {
+            return null;
+        }
+        for (IrInstruction i : ir.instructionsOf(follow)) {
+            if (i.opcode() == IrOpcode.STORE && i.operands().size() >= 2
+                    && i.operands().get(1) instanceof InstructionRef ref
+                    && ref.instruction() == phi) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    /** 递归解析分支区域的值表达式(支持嵌套三元).
+     *
+     * <p>三元表达式链 {@code a ? (b ? c : d) : e} 编译后,所有分支值在同一个
+     * follow 块的 stack-PHI 中汇合,内层三元作为外层三元的某个操作数出现.
+     * 单纯按"当前分支上下文选单个 PHI 操作数"会丢失内层结构(取第一个操作数
+     * {@code c},恒返回 {@code c} 而丢 {@code d},{@code e}).本方法在分支区域内
+     * 递归查找嵌套的 CONDITION 头:若存在,则把该条件连同其 then/else 子区域
+     * 递归解析为 CondExpr;否则回退到叶子解析({@link #resolveBranchPhi})取单个
+     * PHI 操作数.</p>
+     */
+    private static Expression resolveBranchValue(ReducerOps ops, BasicBlock follow, LinearIr ir,
+                                                 Set<BasicBlock> branchBlocks,
+                                                 ControlFlowGraph graph) {
+        // 在分支区域内查找顶层嵌套三元条件头(区域 BFS 序中首个 CONDITION 块).
+        for (BasicBlock b : branchBlocks) {
+            boolean hasCond = false;
+            for (IrInstruction i : ir.instructionsOf(b)) {
+                if (i.opcode() == IrOpcode.CONDITION) {
+                    hasCond = true;
+                    break;
+                }
+            }
+            if (!hasCond) {
+                continue;
+            }
+            BasicBlock trueTarget = null, falseTarget = null;
+            for (var e : graph.outgoingOf(b)) {
+                if (e.kind() == EdgeKind.TRUE_BRANCH) {
+                    trueTarget = e.target();
+                } else if (e.kind() == EdgeKind.FALSE_BRANCH) {
+                    falseTarget = e.target();
+                }
+            }
+            // 条件头必须是真正的 if-else 三元(两个分支都不直达 follow),
+            // 否则不是纯三元,回退到叶子解析.
+            if (trueTarget == null || falseTarget == null
+                    || trueTarget == follow || falseTarget == follow) {
+                continue;
+            }
+            Set<BasicBlock> thenRegion = collectReachableBlocks(trueTarget, follow, graph);
+            Set<BasicBlock> elseRegion = collectReachableBlocks(falseTarget, follow, graph);
+            Expression cond = AstCleanup.simplifyCondition(ops.extractConditionFromHeader(b, ir));
+            Expression trueVal = resolveBranchValue(ops, follow, ir, thenRegion, graph);
+            Expression falseVal = resolveBranchValue(ops, follow, ir, elseRegion, graph);
+            if (cond == null || trueVal == null || falseVal == null) {
+                continue;
+            }
+            return new CondExpr(cond, trueVal, falseVal);
+        }
+        // 叶子:区域内无嵌套条件,直接按分支上下文解析单个 PHI 操作数.
+        return resolveBranchPhi(ops, follow, ir, branchBlocks);
+    }
+
+    /** 按分支块上下文解析 follow 块中的 PHI 值(临时切换 branch 上下文). */
+    private static Expression resolveBranchPhi(ReducerOps ops, BasicBlock follow, LinearIr ir,
+                                               Set<BasicBlock> branchBlocks) {
+        Set<Integer> prevCtx = ops.currentBranchBlocks();
+        Set<Integer> branchCtx = new HashSet<>();
+        for (BasicBlock b : branchBlocks) {
+            branchCtx.add(b.id());
+        }
+        try {
+            ops.setCurrentBranchBlocks(branchCtx);
+            return ops.resolvePhiAt(follow, ir);
+        } finally {
+            ops.setCurrentBranchBlocks(prevCtx);
+        }
+    }
+
+    /** 从 CFG 菱形结构把 value 位置的 PHI 还原为三元表达式.
+     *
+     * <p>三元作为某个表达式的操作数时(如外层三元的条件 {@code (a>0?b:c)>0},
+     * 或复合赋值右操作数 {@code s += a[i]>0 ? 1 : 0}),其值在汇合块以 stack-PHI
+     * 出现,但该 PHI 被无条件消费(作为 CONDITION/BINARY 操作数),没有分支上下文
+     * 可选取单个操作数.此前的回退取首操作数会静默丢失 false 分支值(如输出
+     * {@code s++} 恒加一).本方法依据 PHI 所在汇合块 M 及其直接支配者(菱形顶点
+     * 条件块 C)重建 {@code cond ? trueVal : falseVal};无法识别为简单二元菱形时
+     * 返回 null,交由调用方回退到单操作数解析.</p>
+     */
+    static Expression resolvePhiAsTernary(ReducerOps ops, IrInstruction phi, LinearIr ir) {
+        if (phi == null || phi.operands().size() != 2) {
+            return null;
+        }
+        // 拒绝循环携带 PHI:两个操作数为同一局部变量(槽位相同),是循环头
+        // 汇合(init/back-edge),而非条件三元.这类 PHI 应解析为变量本身.
+        if (phi.operands().get(0) instanceof Variable v0
+                && phi.operands().get(1) instanceof Variable v1
+                && v0.slot() == v1.slot()) {
+            return null;
+        }
+        ControlFlowGraph graph = ir.controlFlowGraph();
+        BasicBlock merge = null;
+        for (BasicBlock b : graph.blocks()) {
+            if (b.id() == phi.blockId()) {
+                merge = b;
+                break;
+            }
+        }
+        if (merge == null) {
+            return null;
+        }
+        // 汇合块须恰有两个非异常前驱(二元菱形)
+        if (graph.predecessorsOf(merge).size() != 2) {
+            return null;
+        }
+        // 菱形顶点 = 汇合块的直接支配者
+        BasicBlock header = graph.dominatorTree().idom(merge);
+        if (header == null || header == graph.entryBlock() || header == graph.exitBlock()) {
+            return null;
+        }
+        boolean hasCond = false;
+        for (IrInstruction i : ir.instructionsOf(header)) {
+            if (i.opcode() == IrOpcode.CONDITION) {
+                hasCond = true;
+                break;
+            }
+        }
+        if (!hasCond) {
+            return null;
+        }
+        BasicBlock trueTarget = null, falseTarget = null;
+        for (var e : graph.outgoingOf(header)) {
+            if (e.kind() == EdgeKind.TRUE_BRANCH) {
+                trueTarget = e.target();
+            } else if (e.kind() == EdgeKind.FALSE_BRANCH) {
+                falseTarget = e.target();
+            }
+        }
+        if (trueTarget == null || falseTarget == null) {
+            return null;
+        }
+        Set<BasicBlock> thenRegion = collectReachableBlocks(trueTarget, merge, graph);
+        Set<BasicBlock> elseRegion = collectReachableBlocks(falseTarget, merge, graph);
+        if (thenRegion.isEmpty() || elseRegion.isEmpty()) {
+            return null;
+        }
+        Expression cond = AstCleanup.simplifyCondition(ops.extractConditionFromHeader(header, ir));
+        Expression trueVal = resolveBranchValue(ops, merge, ir, thenRegion, graph);
+        Expression falseVal = resolveBranchValue(ops, merge, ir, elseRegion, graph);
+        if (cond == null || trueVal == null || falseVal == null) {
+            return null;
+        }
+        return new CondExpr(cond, trueVal, falseVal);
+    }
+
+    /**
+     * 判断分支体是否为空或仅由单个表达式语句构成,其值汇入合并点的 PHI.
+     *
+     * <p>用于三元折叠:常量分支(如 {@code b ? 1 : 2})的分支体为空块,
+     * 方法调用分支(如 {@code b ? foo() : bar()})的分支体为单个表达式语句
+     * ——该表达式的返回值经 {@code goto} 汇入合并点的 PHI,同样应折叠为三元,
+     * 而不能当作独立语句输出(否则 {@code foo()} 被丢弃,{@code int y = foo()}
+     * 无条件重复求值,语义错误).</p>
+     */
+    private static boolean isTernaryShaped(Statement body) {
+        if (body == null) {
+            return true;
+        }
+        Statement flat = body;
+        while (flat instanceof BlockStatement bs && bs.statements().size() == 1) {
+            flat = bs.statements().getFirst();
+        }
+        if (flat instanceof BlockStatement bs) {
+            return bs.statements().isEmpty();
+        }
+        if (flat instanceof com.bingbaihanji.bdec.ast.stmt.ExpressionStatement) {
+            return true;
+        }
+        // 嵌套三元:分支体本身是 if-else,其两个分支也都为"纯值形状".
+        if (flat instanceof IfStatement ifs) {
+            return isTernaryShaped(ifs.thenBranch()) && isTernaryShaped(ifs.elseBranch());
+        }
+        return false;
     }
 
 }

@@ -61,8 +61,7 @@ final class AstCleanup {
             return n;
         }
         if (s instanceof IfStatement i) {
-            return 1 + countStatements(i.thenBranch())
-                    + (i.elseBranch() != null ? countStatements(i.elseBranch()) : 0);
+            return 1 + countStatements(i.thenBranch()) + (i.elseBranch() != null ? countStatements(i.elseBranch()) : 0);
         }
         return 1;
     }
@@ -110,8 +109,7 @@ final class AstCleanup {
         }
         // if-else 的两个分支都终止(如守卫翻译的 if(...) { x; break; } else { y; break; })
         if (last instanceof IfStatement i && i.elseBranch() != null) {
-            return endsWithTerminatorStmt(i.thenBranch())
-                    && endsWithTerminatorStmt(i.elseBranch());
+            return endsWithTerminatorStmt(i.thenBranch()) && endsWithTerminatorStmt(i.elseBranch());
         }
         return false;
     }
@@ -178,8 +176,7 @@ final class AstCleanup {
         if (ann == null) {
             return expr;
         }
-        boolean boolVal = ann.getBoolean(
-                com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_BOOLEAN_VALUE);
+        boolean boolVal = ann.getBoolean(com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_BOOLEAN_VALUE);
         return new LitExpr(boolVal, JavaType.BOOLEAN);
     }
 
@@ -538,8 +535,7 @@ final class AstCleanup {
                 default -> null;
             };
             if (inverted != null) {
-                return new BinExpr(inverted,
-                        simplifyCondition(inner.left()), simplifyCondition(inner.right()));
+                return new BinExpr(inverted, simplifyCondition(inner.left()), simplifyCondition(inner.right()));
             }
         }
         return cond;

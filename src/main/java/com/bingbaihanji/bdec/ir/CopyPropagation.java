@@ -42,6 +42,14 @@ public final class CopyPropagation {
                         defInsn.put(slot, insn);
                     }
                 }
+            } else if (insn.opcode() == IrOpcode.INC && insn.operands().size() >= 2
+                    && insn.operands().get(1) instanceof Variable w) {
+                // IINC 写入该槽位的新版本变量(如 i++ / i--),等价于一次重新定义.
+                // 此前若该槽位被 STORE 记录为"仅定义一次且可传播",必须撤销——
+                // 否则会把初始值(如 i=0)错误地传播进循环条件(i<n → 0<n).
+                int slot = w.slot();
+                copyMap.remove(slot);
+                defInsn.put(slot, insn);
             }
         }
 

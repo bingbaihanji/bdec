@@ -242,6 +242,20 @@ public class EnumRewriter implements RewriteRule {
                                 collectedImports);
                     }
                 }
+                // 局部变量声明的类型(如 List<String> x = null;)不暴露于签名,
+                // 从变量表收集 import,否则常量体局部变量输出全限定名
+                // (与 AstBuilder.collectBodyImports 同约定).null 赋值变量的
+                // base type 为 Object,真实类型在 LVTT 的 genericType 中,两者都收集.
+                if (sm.ir() != null && sm.ir().variables() != null) {
+                    for (var v : sm.ir().variables()) {
+                        com.bingbaihanji.bdec.util.TypeText.render(v.genericType(),
+                                unit.packageName(), unit.innerClassNames(),
+                                collectedImports);
+                        com.bingbaihanji.bdec.util.TypeText.render(v.type(),
+                                unit.packageName(), unit.innerClassNames(),
+                                collectedImports);
+                    }
+                }
 
                 // 将单个方法输出为源字符串(既有 imports + 本轮新收集的 import
                 // 一起生效,使签名与局部变量类型均以短名渲染)
@@ -391,7 +405,17 @@ public class EnumRewriter implements RewriteRule {
 
     /** 类型是否携带泛型实参或通配符(签名比擦除描述符信息更丰富). */
     private static boolean hasGenericsOrWildcard(JavaType t) {
-        return t != null && !t.typeArguments().isEmpty();
+        if (t == null) {
+            return false;
+        }
+        if (!t.typeArguments().isEmpty()) {
+            return true;
+        }
+        // ARRAY 的泛型信息位于元素类型(如 List<String>[]):递归元素判定.
+        if (t.kind() == TypeKind.ARRAY && t.element() != null) {
+            return hasGenericsOrWildcard(t.element());
+        }
+        return false;
     }
 
     /** 数组的基元素是否为签名格式的类型变量(裸 {@code T[]}). */

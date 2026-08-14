@@ -79,6 +79,15 @@ public class AstBuilder {
         if (sm.ir() == null || sm.ir().instructions() == null) {
             return; // 抽象方法或本地方法没有IR
         }
+        // 局部变量声明的类型(如 List<String> x = null;)不暴露于 NEW/INVOKE
+        // 等指令,直接从变量表收集 import,否则输出全限定名(java.util.List<String>)
+        // 且 import 丢失.null 赋值变量的 base type 为 Object,真实类型在
+        // LVTT 的 genericType 中,故两者都收集.java.lang/同包/匿名类由
+        // collectImport 与 build 末尾过滤兜底.
+        for (var v : sm.ir().variables()) {
+            TypeReferenceUtil.collectImport(v.genericType(), imports, thisClass);
+            TypeReferenceUtil.collectImport(v.type(), imports, thisClass);
+        }
         for (var insn : sm.ir().instructions()) {
             // 静态方法调用:检查DECLARING_CLASS注解
             for (var ann : insn.annotations()) {
