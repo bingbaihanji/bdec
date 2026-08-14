@@ -409,13 +409,21 @@ public final class TryTranslator {
                     break;
                 }
             }
-            if (isJoin) {
+            // 重抛终点(try-with-resources 的 throw t 共享块)仍是处理器的一部分,
+            // 不能当作汇合点提前停止,否则重抛丢失,异常被吞.
+            if (isJoin && !isRethrowTerminal(next, ir)) {
                 break;
             }
             group.add(next);
             current = next;
         }
         return group;
+    }
+
+    /** 判断块是否为重抛终点(以 THROW 指令结尾). */
+    private static boolean isRethrowTerminal(BasicBlock block, LinearIr ir) {
+        List<IrInstruction> insns = ir.instructionsOf(block);
+        return !insns.isEmpty() && insns.getLast().opcode() == IrOpcode.THROW;
     }
 
     /** 收集处理器的所有 IR 指令,沿 fallthrough 链追踪.
@@ -444,7 +452,7 @@ public final class TryTranslator {
             if (next == null || next == cfg.exitBlock()) {
                 break;
             }
-            // 停止于汇合点(与 buildHandlerBlockGroup 同理)
+            // 停止于汇合点(与 buildHandlerBlockGroup 同理);但重抛终点仍是处理器的一部分
             boolean isJoin = false;
             for (var pe : cfg.incomingOf(next)) {
                 if (pe.kind() != EdgeKind.EXCEPTION && !visited.contains(pe.source())) {
@@ -452,7 +460,7 @@ public final class TryTranslator {
                     break;
                 }
             }
-            if (isJoin) {
+            if (isJoin && !isRethrowTerminal(next, ir)) {
                 break;
             }
             current = next;

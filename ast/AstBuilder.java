@@ -90,6 +90,18 @@ public class AstBuilder {
                                 imports, thisClass);
                     }
                 }
+                if (ann.is(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
+                    // lambda/方法引用:SAM 函数式接口类型(如 Function,Supplier)
+                    // 与实现所有者类型(方法引用的接收者,如 ArrayList::new 的 ArrayList)
+                    // 均需收集 import,否则发射器只能输出全限定名或裸短名.
+                    TypeReferenceUtil.collectImport(insn.resultType(), imports, thisClass);
+                    String implOwner = ann.getString("implOwner");
+                    if (implOwner != null) {
+                        TypeReferenceUtil.collectImport(
+                                com.bingbaihanji.bdec.type.JavaType.classType(implOwner),
+                                imports, thisClass);
+                    }
+                }
             }
             // NEW指令:从resultType提取类型
             if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.NEW) {
@@ -231,11 +243,15 @@ public class AstBuilder {
             // 跳过 ACC_SYNTHETIC 字段,但保留内部类的 this$X 外围引用字段,
             // 因为内部类作为独立顶层类输出时需要 this$X 字段来访问外围成员.
             // 若移除该字段,外围字段访问(如 counter)会因作用域原因而无法编译.
-            // 同时保留 $assertionsDisabled——assert 的反编译输出引用它
+            // 同时保留 val$X 捕获局部变量字段——内部类清理重写器(InnerClassRewriter /
+            // AnonymousClassRewriter)需要完整的字段信息才能把 val$X 还原为原局部变量名,
+            // 否则引用会被 SourceCleanup 兜底成 "int val$local = 0" 造成语义错误.
+            // 也保留 $assertionsDisabled——assert 的反编译输出引用它
             //(assert 尚未重构为 assert 语句),缺少字段声明无法编译.
             boolean isSynthetic = (field.accessFlags() & AccessFlags.ACC_SYNTHETIC) != 0;
             boolean isOuterThis = field.name().startsWith("this$");
-            if (isSynthetic && !isOuterThis
+            boolean isCapturedLocal = field.name().startsWith("val$");
+            if (isSynthetic && !isOuterThis && !isCapturedLocal
                     && !"$assertionsDisabled".equals(field.name())) {
                 continue;
             }
@@ -538,30 +554,10 @@ public class AstBuilder {
                 superName, interfaceNames, classTypeParams, members, typeAnnotations,
                 superAnns, interfaceAnnotations);
 
-        // 构建import列表(过滤java.lang.*和同包类型)
-        List<String> importList = new ArrayList<>();
-        String pkg = packageName(classFile.internalName());
-        for (String imp : imports) {
-            // 仅跳过java.lang直接包中的类型,不跳过子包中的类型
-            // (例如java.lang.annotation.Annotation仍需显式导入)
-            if (imp.startsWith("java.lang.")
-                    && imp.indexOf('.', "java.lang.".length()) < 0) {
-                continue; // java.lang.* 自动导入
-            }
-            if (!imp.contains(".")) {
-                continue;
-            }
-            String impPkg = imp.substring(0, imp.lastIndexOf('.'));
-            if (impPkg.equals(pkg)) {
-                continue; // 同包类型无需导入
-            }
-            importList.add(imp);
-        }
-        java.util.Collections.sort(importList);
-
         // 构建内部类友好名称映射:简单内部名称(如 TestClass2$StaticNested) → 友好名称(如 StaticNested).
         // 匿名类(无友好名称)也添加到映射中,键和值均为字节码名称,以确保
         // ExpressionEmitter.typeName() 能将其解析为文件内的简单名称.
+        // 先于 import 过滤构建,以便剔除本编译单元自身嵌套类的 import.
         java.util.Map<String, String> innerNames = new java.util.HashMap<>();
         for (var ice : classFile.innerClasses()) {
             if (ice.innerClass() == null) {
@@ -578,6 +574,35 @@ public class AstBuilder {
                 innerNames.put(rawSimple, rawSimple);
             }
         }
+        java.util.Set<String> innerFriendly = new java.util.HashSet<>(innerNames.values());
+
+        // 构建import列表(过滤java.lang.*,同包类型和自身嵌套类)
+        List<String> importList = new ArrayList<>();
+        String pkg = packageName(classFile.internalName());
+        for (String imp : imports) {
+            // 仅跳过java.lang直接包中的类型,不跳过子包中的类型
+            // (例如java.lang.annotation.Annotation仍需显式导入)
+            if (imp.startsWith("java.lang.")
+                    && imp.indexOf('.', "java.lang.".length()) < 0) {
+                continue; // java.lang.* 自动导入
+            }
+            if (!imp.contains(".")) {
+                continue;
+            }
+            String impPkg = imp.substring(0, imp.lastIndexOf('.'));
+            if (impPkg.equals(pkg)) {
+                continue; // 同包类型无需导入
+            }
+            // 剔除本编译单元自身嵌套类的 import(如 InnerAccess.Inner——
+            // Inner 是 InnerAccess 的成员,同文件内声明,无需也无法导入)
+            int lastDot = imp.lastIndexOf('.');
+            if (lastDot > 0 && imp.substring(0, lastDot).equals(simpleName)
+                    && innerFriendly.contains(imp.substring(lastDot + 1))) {
+                continue;
+            }
+            importList.add(imp);
+        }
+        java.util.Collections.sort(importList);
 
         return new CompilationUnit(pkg, importList, List.of(td), innerNames);
     }

@@ -35,8 +35,7 @@ public record DecompilerDiagnostic(
     }
 
     /** 创建方法级别的错误诊断(含异常原因) */
-    public static DecompilerDiagnostic error(String phase, String className,
-                                             String methodName, int offset, String message, Throwable cause) {
+    public static DecompilerDiagnostic error(String phase, String className, String methodName, int offset, String message, Throwable cause) {
         return new DecompilerDiagnostic(DiagnosticLevel.ERROR, phase, className, methodName, offset, message, cause);
     }
 }

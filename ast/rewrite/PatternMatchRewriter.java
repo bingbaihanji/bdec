@@ -9,6 +9,9 @@ import com.bingbaihanji.bdec.ast.expr.BinExpr;
 import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
 import com.bingbaihanji.bdec.ast.expr.CastExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
@@ -83,7 +86,11 @@ public class PatternMatchRewriter implements RewriteRule {
 
     /**
      * 检测模式:{@code if(obj instanceof Type) { Type v = (Type)obj; ... }}
+     * 或内联强转 {@code if(obj instanceof Type) { ... (Type)obj ... }}
      * 合并为:{@code if(obj instanceof Type v) { ... }}
+     *
+     * <p>模式变量 v 仅在其对应的 then 分支作用域内有效,因此带 else 分支时
+     * 也可安全合并(else 分支不引用 v).</p>
      */
     private Statement detectPatternMatch(BlockStatement bs) {
         List<Statement> stmts = new ArrayList<>(bs.statements());
@@ -92,45 +99,67 @@ public class PatternMatchRewriter implements RewriteRule {
             if (!(s instanceof IfStatement ifStmt)) {
                 continue;
             }
-            if (ifStmt.elseBranch() != null) {
-                continue; // 仅处理纯 if-then 结构(无 else 分支)
-            }
 
-            // 检查条件:obj instanceof Type
-            if (!(ifStmt.condition() instanceof BinExpr be)) {
+            // 去否定:!(o instanceof T) 形式,模式变量绑定在 else 分支
+            boolean negated = false;
+            Expression cond = ifStmt.condition();
+            if (cond instanceof UnExpr u && u.operator() == UnaryOperator.NOT) {
+                negated = true;
+                cond = u.operand();
+            }
+            // 检查条件:obj instanceof Type(兼容 InstanceOfExpr 与旧 BinExpr 表示)
+            InstanceofMatch match = extractInstanceof(cond);
+            if (match == null) {
                 continue;
             }
-            if (be.operator() != BinaryOperator.INSTANCEOF) {
-                continue;
-            }
-            if (!(be.right() instanceof VarExpr typeExpr)) {
-                continue;
-            }
-            Expression testedObj = be.left();
+            Expression testedObj = match.testExpr;
+            String typeName = match.typeName;
 
-            // 检查 then 分支体:首条语句为 Type v = (Type)obj;
-            List<Statement> thenStmts = getBodyStatements(ifStmt.thenBranch());
-            if (thenStmts.isEmpty()) {
+            // 模式变量绑定在 instanceof 为真的分支(去否定后):正→then,负→else
+            Statement bindBranch = negated ? ifStmt.elseBranch() : ifStmt.thenBranch();
+            if (bindBranch == null) {
                 continue;
             }
-            Statement first = thenStmts.get(0);
-
-            String varName = extractVarDecl(first, typeExpr.name(), testedObj);
-            if (varName == null) {
+            List<Statement> bindStmts = getBodyStatements(bindBranch);
+            if (bindStmts.isEmpty()) {
                 continue;
+            }
+            Statement first = bindStmts.get(0);
+
+            // 模式 A:首条语句为 Type v = (Type) obj; 声明 → 复用声明名
+            String varName = extractVarDecl(first, typeName, testedObj);
+            List<Statement> newBind;
+            if (varName != null) {
+                newBind = new ArrayList<>(bindStmts);
+                newBind.remove(0);
+            } else {
+                // 模式 B:强制转型被内联到表达式(如 return (Type) obj;),
+                // 变量声明已被 SSA 复制传播消除 → 引入新模式变量并替换内联强转
+                varName = freshPatternName(typeName);
+                InlineCastReplacer replacer = new InlineCastReplacer(
+                        typeName, testedObj, varName);
+                newBind = new ArrayList<>();
+                for (Statement st : bindStmts) {
+                    newBind.add(replacer.transformStmt(st));
+                }
+                if (!replacer.replaced) {
+                    continue;
+                }
             }
 
             // 构建新条件表达式:obj instanceof Type varName
             Expression newCondition = new BinExpr(BinaryOperator.INSTANCEOF,
-                    testedObj, new VarExpr(typeExpr.name() + " " + varName));
+                    testedObj, new VarExpr(typeName + " " + varName));
 
-            // 构建新 then 分支体(移除强制转型声明语句)
-            List<Statement> newThen = new ArrayList<>(thenStmts);
-            newThen.remove(0);
-            Statement newThenBody = newThen.size() == 1 ? newThen.get(0)
-                    : new BlockStatement(newThen);
+            // 构建新绑定分支体(移除强制转型声明语句或已内联强转)
+            Statement newBindBody = newBind.size() == 1 ? newBind.get(0)
+                    : new BlockStatement(newBind);
 
-            stmts.set(i, new IfStatement(newCondition, newThenBody, null));
+            // 去否定后重建:then = 绑定分支,else = 另一分支
+            Statement newThen = newBindBody;
+            Statement newElse = negated ? ifStmt.thenBranch() : ifStmt.elseBranch();
+
+            stmts.set(i, new IfStatement(newCondition, newThen, newElse));
             return new BlockStatement(stmts);
         }
         return bs;
@@ -175,5 +204,93 @@ public class PatternMatchRewriter implements RewriteRule {
             return new ArrayList<>(bs.statements());
         }
         return new ArrayList<>(List.of(s));
+    }
+
+    /** 为模式变量生成全新名称:类型简单名首字母小写(String → string,
+     *  Integer → integer).原始变量名已被复制传播消除,无法从 AST 恢复. */
+    private String freshPatternName(String typeName) {
+        if (typeName == null || typeName.isEmpty()) {
+            return "v";
+        }
+        return Character.toLowerCase(typeName.charAt(0)) + typeName.substring(1);
+    }
+
+    /** 从条件表达式中提取 instanceof 的被测对象与类型简单名,兼容
+     *  {@link InstanceOfExpr}(BlockReducer 现代表示)与旧 {@code BinExpr(INSTANCEOF,...)}. */
+    private InstanceofMatch extractInstanceof(Expression cond) {
+        if (cond instanceof BinExpr be && be.operator() == BinaryOperator.INSTANCEOF
+                && be.right() instanceof VarExpr typeVar) {
+            return new InstanceofMatch(be.left(), typeVar.name());
+        }
+        if (cond instanceof InstanceOfExpr ioe && ioe.targetType() != null
+                && ioe.targetType().internalName() != null) {
+            return new InstanceofMatch(ioe.operand(),
+                    simplifyTypeName(ioe.targetType().internalName()));
+        }
+        return null;
+    }
+
+    /** 内部名简化为类型简单名(java/lang/String → String). */
+    private String simplifyTypeName(String internalName) {
+        int slash = internalName.lastIndexOf('/');
+        int dollar = internalName.lastIndexOf('$');
+        int cut = Math.max(slash, dollar);
+        return cut >= 0 ? internalName.substring(cut + 1) : internalName;
+    }
+
+    /** instanceof 提取结果:被测对象表达式 + 类型简单名. */
+    private record InstanceofMatch(Expression testExpr, String typeName) {}
+
+    /**
+     * 内联强转替换器:把 then 分支体中的 {@code (Type) testedObj} 强转
+     * 替换为模式变量引用 {@code varName},并记录是否发生替换.
+     */
+    private static final class InlineCastReplacer extends AstTransformer {
+
+        private final String typeName;
+
+        private final Expression testedObj;
+
+        private final String varName;
+
+        private boolean replaced = false;
+
+        InlineCastReplacer(String typeName, Expression testedObj, String varName) {
+            this.typeName = typeName;
+            this.testedObj = testedObj;
+            this.varName = varName;
+        }
+
+        @Override
+        protected Expression transformCast(CastExpr e) {
+            if (matchesType(e.targetType()) && sameExpr(e.operand(), testedObj)) {
+                replaced = true;
+                return new VarExpr(varName);
+            }
+            return super.transformCast(e);
+        }
+
+        /** 强转目标类型的简单名是否匹配 instanceof 的类型名 */
+        private boolean matchesType(com.bingbaihanji.bdec.type.JavaType t) {
+            if (t == null || t.internalName() == null) {
+                return false;
+            }
+            String internal = t.internalName();
+            String shortName = internal.contains("/")
+                    ? internal.substring(internal.lastIndexOf('/') + 1) : internal;
+            int dollar = shortName.lastIndexOf('$');
+            if (dollar >= 0) {
+                shortName = shortName.substring(dollar + 1);
+            }
+            return shortName.equals(typeName);
+        }
+
+        /** 强转操作数是否与 instanceof 的被测对象一致(常见为同名 VarExpr) */
+        private boolean sameExpr(Expression a, Expression b) {
+            if (a instanceof VarExpr va && b instanceof VarExpr vb) {
+                return va.name().equals(vb.name());
+            }
+            return a == b;
+        }
     }
 }

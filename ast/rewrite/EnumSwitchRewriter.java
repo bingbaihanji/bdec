@@ -192,7 +192,8 @@ public class EnumSwitchRewriter implements RewriteRule {
                     rewriteStatement(t.tryBody(), switchMapFieldNames),
                     newCatches,
                     t.finallyBody() != null
-                            ? rewriteStatement(t.finallyBody(), switchMapFieldNames) : null);
+                            ? rewriteStatement(t.finallyBody(), switchMapFieldNames) : null,
+                    t.resources());
         }
         if (s instanceof SynchronizedStatement sync) {
             return new SynchronizedStatement(sync.monitorObject(),

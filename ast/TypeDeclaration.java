@@ -45,6 +45,9 @@ public final class TypeDeclaration implements AstNode {
      *  与 interfaceNames 按索引对齐,无注解接口用空串占位) */
     private final List<String> interfaceAnnotations;
 
+    /** 密封类 permits 子句中的允许子类简称列表(如 ["Circle","Square"]);非密封类为空 */
+    private final List<String> permitsNames;
+
     /**
      * 构造一个类型声明节点(含泛型类型参数).
      *
@@ -106,6 +109,21 @@ public final class TypeDeclaration implements AstNode {
                            List<AstNode> m, List<String> annotations,
                            List<String> superAnnotations,
                            List<String> interfaceAnnotations) {
+        this(af, sn, kn, superName, interfaceNames, typeParams, m, annotations,
+                superAnnotations, interfaceAnnotations, List.of());
+    }
+
+    /**
+     * 构造一个类型声明节点(含类级注解,父类型注解,接口注解与 sealed permits 子类).
+     *
+     * @param permitsNames 密封类 permits 子句中的允许子类简称列表;非密封类传空列表
+     */
+    public TypeDeclaration(int af, String sn, String kn, String superName,
+                           List<String> interfaceNames, List<String> typeParams,
+                           List<AstNode> m, List<String> annotations,
+                           List<String> superAnnotations,
+                           List<String> interfaceAnnotations,
+                           List<String> permitsNames) {
         this.accessFlags = af;
         this.simpleName = sn;
         this.kindName = kn;
@@ -116,6 +134,7 @@ public final class TypeDeclaration implements AstNode {
         this.annotations = List.copyOf(annotations);
         this.superAnnotations = List.copyOf(superAnnotations);
         this.interfaceAnnotations = List.copyOf(interfaceAnnotations);
+        this.permitsNames = List.copyOf(permitsNames);
     }
 
     /**
@@ -147,6 +166,9 @@ public final class TypeDeclaration implements AstNode {
 
     /** @return 接口注解(已渲染的源码行,与 interfaceNames 按索引对齐,无注解为空串) */
     public List<String> interfaceAnnotations() {return interfaceAnnotations;}
+
+    /** @return 密封类 permits 子句中的允许子类简称列表;非密封类为空 */
+    public List<String> permitsNames() {return permitsNames;}
 
     /** @return 类型种类 */
     public String kindName() {return kindName;}

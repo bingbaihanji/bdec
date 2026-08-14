@@ -16,6 +16,8 @@ import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.TryStatement;
+import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
+import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -90,7 +92,8 @@ public class TryResourceRewriter implements RewriteRule {
             return new TryStatement(
                     rewriteBlock(ts.tryBody()),
                     ts.catchClauses(),
-                    ts.finallyBody() != null ? rewriteBlock(ts.finallyBody()) : null);
+                    ts.finallyBody() != null ? rewriteBlock(ts.finallyBody()) : null,
+                    ts.resources());
         }
         return stmt;
     }
@@ -99,25 +102,22 @@ public class TryResourceRewriter implements RewriteRule {
      * 在代码块中查找 try-finally 前声明的资源变量,
      * 若其 close() 在 finally 体中被调用,则转换为 try-with-resources.
      *
+     * <p>javac 对 {@code try (var r = new Resource(...))} 的去糖化会生成:</p>
+     * <pre>
+     *   ResourceType r = new Resource(...);
+     *   try { ... } finally { r.close(); }
+     * </pre>
+     * 本方法识别该模式并把资源声明并入 {@code try (...)}.
+     *
      * @param bs 待检测的代码块
      * @return 转换后的代码块
      */
     private Statement detectTryResource(BlockStatement bs) {
         List<Statement> stmts = new ArrayList<>(bs.statements());
         for (int i = 0; i < stmts.size() - 1; i++) {
-            Statement s = stmts.get(i);
-
-            // 查找变量声明:Type r = new Resource(...)
-            String varName = null;
-            Expression initExpr = null;
-            if (s instanceof ExpressionStatement es
-                    && es.expression() instanceof AssignExpr assign) {
-                if (assign.target() instanceof VarExpr vx) {
-                    varName = vx.name();
-                    initExpr = assign.value();
-                }
-            }
-            if (varName == null) {
+            // 查找资源声明:Type r = new Resource(...) 或 r = new Resource(...)
+            TryStatement.Resource res = asResourceDeclaration(stmts.get(i), stmts, i);
+            if (res == null) {
                 continue;
             }
 
@@ -130,30 +130,137 @@ public class TryResourceRewriter implements RewriteRule {
             }
 
             // 检查 finally 体中是否包含对该变量的 close() 调用
-            if (!finallyContainsClose(ts.finallyBody(), varName)) {
+            if (!finallyContainsClose(ts.finallyBody(), res.varName())) {
                 continue;
             }
 
-            // 构建 try-with-resources 的资源列表
-            List<Expression> resources = new ArrayList<>();
-            resources.add(initExpr);
-
-            // 重建 try 体
+            // 重建 try 体与资源列表
             Statement newTryBody = rewriteBlock(ts.tryBody());
             List<TryStatement.CatchClause> catchClauses = ts.catchClauses();
-            Statement newFinally = removeCloseFromFinally(ts.finallyBody(), varName);
+            Statement newFinally = removeCloseFromFinally(ts.finallyBody(), res.varName());
+
+            // 保留已折叠的内层资源,外层资源置于列表首位(声明序:外层在前)
+            List<TryStatement.Resource> resources = new ArrayList<>(ts.resources());
+            resources.add(0, res);
 
             // 移除原变量声明和旧 try,插入新的 try-with-resources
             stmts.remove(i + 1);
             stmts.remove(i);
 
-            TryStatement newTry = new TryStatement(newTryBody, catchClauses, newFinally);
-            // 注意:当前 TryStatement 模型没有 resources 字段,
-            // 资源变量已在上方声明并保留以便代码生成器处理.
+            TryStatement newTry = foldInnerResources(
+                    new TryStatement(newTryBody, catchClauses, newFinally, resources));
             stmts.add(i, newTry);
             return new BlockStatement(stmts);
         }
         return bs;
+    }
+
+    /**
+     * 识别资源声明语句:Type r = new Resource(...) 或 r = new Resource(...).
+     *
+     * @param s     待识别的语句
+     * @param stmts 语句所在列表(用于赋值形式回查声明类型)
+     * @param idx   语句在列表中的下标
+     * @return 识别出的资源声明,非资源声明返回 {@code null}
+     */
+    private TryStatement.Resource asResourceDeclaration(Statement s,
+                                                        List<Statement> stmts, int idx) {
+        JavaType type = null;
+        String varName = null;
+        Expression initExpr = null;
+        if (s instanceof VariableDeclaration vd && vd.initializer() != null) {
+            type = vd.type();
+            varName = vd.name();
+            initExpr = vd.initializer();
+        } else if (s instanceof ExpressionStatement es
+                && es.expression() instanceof AssignExpr assign
+                && assign.target() instanceof VarExpr vx) {
+            varName = vx.name();
+            initExpr = assign.value();
+            // 赋值形式需要回查声明处的类型
+            type = findDeclaredType(stmts, varName, idx);
+        }
+        if (varName == null || type == null) {
+            return null;
+        }
+        return new TryStatement.Resource(type, varName, initExpr);
+    }
+
+    /**
+     * 折叠 try 体内的资源声明(多资源场景).
+     *
+     * <p>javac 对多资源 {@code try (a; b)} 的去糖化是嵌套的:
+     * {@code a = ...; try { b = ...; try { body } finally { b.close() } } finally { a.close() }}.
+     * 结构化为 AST 后内层 finally 被扁平化为 try 体内的普通 close() 语句,
+     * 本方法把位于 try 体首部的资源声明连同其 close() 语句一并折叠进 resources.</p>
+     *
+     * @param ts 待处理的 try 语句
+     * @return 折叠后的 try 语句
+     */
+    private TryStatement foldInnerResources(TryStatement ts) {
+        if (!(ts.tryBody() instanceof BlockStatement bs)) {
+            return ts;
+        }
+        List<Statement> stmts = new ArrayList<>(bs.statements());
+        List<TryStatement.Resource> resources = new ArrayList<>(ts.resources());
+        boolean changed = false;
+        while (!stmts.isEmpty()) {
+            TryStatement.Resource res = asResourceDeclaration(stmts.get(0), stmts, 0);
+            if (res == null) {
+                break;
+            }
+            int closeIdx = findCloseIndex(stmts, res.varName());
+            if (closeIdx < 0) {
+                break;
+            }
+            stmts.remove(closeIdx);
+            stmts.remove(0);
+            resources.add(res);
+            changed = true;
+        }
+        if (!changed) {
+            return ts;
+        }
+        return new TryStatement(new BlockStatement(stmts), ts.catchClauses(),
+                ts.finallyBody(), resources);
+    }
+
+    /**
+     * 在语句列表中查找对指定变量的 close() 调用语句的下标.
+     *
+     * @param stmts   语句列表
+     * @param varName 变量名
+     * @return close() 调用语句的下标,未找到返回 -1
+     */
+    private int findCloseIndex(List<Statement> stmts, String varName) {
+        for (int i = 0; i < stmts.size(); i++) {
+            Statement s = stmts.get(i);
+            if (s instanceof ExpressionStatement es
+                    && es.expression() instanceof InvocationExpr inv
+                    && "close".equals(inv.methodName())
+                    && inv.target() instanceof VarExpr vx
+                    && varName.equals(vx.name())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 回查变量在本代码块中更早位置声明的类型(用于赋值形式的资源).
+     *
+     * @param stmts   本代码块的语句列表
+     * @param varName 变量名
+     * @param before  在该下标之前查找
+     * @return 声明类型,未找到返回 null
+     */
+    private JavaType findDeclaredType(List<Statement> stmts, String varName, int before) {
+        for (int j = before - 1; j >= 0; j--) {
+            if (stmts.get(j) instanceof VariableDeclaration vd && varName.equals(vd.name())) {
+                return vd.type();
+            }
+        }
+        return null;
     }
 
     /**

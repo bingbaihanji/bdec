@@ -5,10 +5,11 @@ import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
 import com.bingbaihanji.bdec.ast.expr.BinExpr;
-import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
 import com.bingbaihanji.bdec.ast.expr.CastExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.PatternLabel;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
@@ -21,28 +22,53 @@ import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 模式匹配 switch 重写器——将 typeSwitch 去糖化产生的合成索引 switch
- * 还原为 instanceof 链.
+ * 还原为带模式 case 标签的 switch.
  *
  * <p>JEP 441 的 typeSwitch({@code SwitchBootstraps.typeSwitch}) 返回
  * 一个 int 索引(-1=null,0..N=各类型),BlockReducer 将其还原为:
  * <pre>
+ *   Object s = o;
  *   int switchKey = 0;
  *   switch (switchKey) { case -1: ...; case 0: ...; ... }
  * </pre>
- * 但 switchKey 硬编码为 0 无法表达分发逻辑.本重写器将索引 case
- * 按顺序转换为 {@code if (obj instanceof T)} 链:
+ * 本重写器将索引 case 按顺序还原为模式标签:
  * <ul>
- *   <li>case -1 → {@code if (obj == null)}</li>
- *   <li>case k  → 体内含强制转型 {@code T v = (T) obj} 时 → instanceof T</li>
- *   <li>连续同类型的 case(守卫失败贯穿)→ 合并到同一 instanceof 分支</li>
- *   <li>default → 链尾语句</li>
+ *   <li>case -1 → {@code case null}</li>
+ *   <li>case k  → 体内含守卫 {@code if (guard) return X} → {@code case T v when guard'}</li>
+ *   <li>case k  → 体内含 {@code T v = (T) obj} 声明 → {@code case T v}</li>
+ *   <li>default → {@code default}</li>
  * </ul>
+ * 判别式从 {@code switchKey} 替换为被测对象 {@code obj}(由 case 体内的强制转型提取).
  */
 public class SwitchPatternMatchRewriter implements RewriteRule {
+
+    private static boolean matchesTypeName(JavaType t, String typeName) {
+        return simplifyTypeName(t).equals(typeName);
+    }
+
+    private static boolean sameExpr(Expression a, Expression b) {
+        if (a instanceof VarExpr va && b instanceof VarExpr vb) {
+            return va.name().equals(vb.name());
+        }
+        return a == b;
+    }
+
+    private static String simplifyTypeName(JavaType t) {
+        if (t == null || t.internalName() == null) {
+            return "Object";
+        }
+        String internal = t.internalName();
+        int slash = internal.lastIndexOf('/');
+        int dollar = internal.lastIndexOf('$');
+        int cut = Math.max(slash, dollar);
+        return cut >= 0 ? internal.substring(cut + 1) : internal;
+    }
 
     @Override
     public String name() {return "switch-pattern";}
@@ -74,32 +100,27 @@ public class SwitchPatternMatchRewriter implements RewriteRule {
     private Statement rewriteStatement(Statement s) {
         if (s instanceof BlockStatement bs) {
             List<Statement> stmts = new ArrayList<>(bs.statements());
-            for (int i = 0; i < stmts.size() - 1; i++) {
+            List<Statement> result = new ArrayList<>();
+            int i = 0;
+            while (i < stmts.size()) {
                 // 模式: int switchKey = 0; switch (switchKey) {...}
-                if (stmts.get(i) instanceof VariableDeclaration vd
+                if (i + 1 < stmts.size()
+                        && stmts.get(i) instanceof VariableDeclaration vd
                         && "switchKey".equals(vd.name())
                         && stmts.get(i + 1) instanceof SwitchStatement sw
                         && sw.discriminant() instanceof VarExpr dv
                         && "switchKey".equals(dv.name())) {
-                    List<Statement> chain = buildInstanceofChain(sw);
-                    if (chain != null) {
-                        List<Statement> newStmts = new ArrayList<>();
-                        for (int k = 0; k < i; k++) {
-                            newStmts.add(rewriteStatement(stmts.get(k)));
-                        }
-                        newStmts.addAll(chain);
-                        // 丢弃 switch 之后的死代码(所有路径已在链内返回)
-                        return new BlockStatement(newStmts);
+                    SwitchStatement patternSwitch = buildPatternSwitch(sw);
+                    if (patternSwitch != null) {
+                        result.add(patternSwitch);
+                        // 丢弃 switch 之后的死代码(所有路径已在 case 内返回)
+                        return new BlockStatement(result);
                     }
                 }
-                stmts.set(i, rewriteStatement(stmts.get(i)));
+                result.add(rewriteStatement(stmts.get(i)));
+                i++;
             }
-            // 处理最后一条语句(空块跳过)
-            if (!stmts.isEmpty()) {
-                int last = stmts.size() - 1;
-                stmts.set(last, rewriteStatement(stmts.get(last)));
-            }
-            return new BlockStatement(stmts);
+            return new BlockStatement(result);
         }
         if (s instanceof IfStatement i) {
             return new IfStatement(i.condition(),
@@ -113,16 +134,17 @@ public class SwitchPatternMatchRewriter implements RewriteRule {
     }
 
     /**
-     * 将合成索引 switch 转换为 instanceof 链.
+     * 将合成索引 switch 还原为模式 switch.
      *
      * @param sw 合成 switch(判别式为 switchKey)
-     * @return instanceof 链语句列表,无法转换时返回 null
+     * @return 带模式标签的 switch,无法转换时返回 null
      */
-    private List<Statement> buildInstanceofChain(SwitchStatement sw) {
+    private SwitchStatement buildPatternSwitch(SwitchStatement sw) {
         List<SwitchStatement.CaseGroup> cases = sw.cases();
         if (cases.isEmpty()) {
             return null;
         }
+
         // 被测表达式:从第一个含强制转型的 case 体中提取
         Expression testExpr = null;
         for (SwitchStatement.CaseGroup cg : cases) {
@@ -141,8 +163,6 @@ public class SwitchPatternMatchRewriter implements RewriteRule {
             return null;
         }
 
-        List<Statement> result = new ArrayList<>();
-        int idx = 0;
         // 找到 default 组;编号 case 按 key 升序(-1=null 最前)
         SwitchStatement.CaseGroup defGroup = null;
         List<SwitchStatement.CaseGroup> numbered = new ArrayList<>();
@@ -155,53 +175,55 @@ public class SwitchPatternMatchRewriter implements RewriteRule {
         }
         numbered.sort((a, b) -> Integer.compare(caseKey(a), caseKey(b)));
 
-        while (idx < numbered.size()) {
-            SwitchStatement.CaseGroup cg = numbered.get(idx);
-            List<Expression> labels = cg.labels();
-            boolean isNullCase = !labels.isEmpty()
-                    && labels.getFirst() instanceof LitExpr lit
-                    && lit.value() instanceof Integer v && v == -1;
-
-            if (isNullCase) {
-                // if (obj == null) { <body> }
-                Expression cond = new BinExpr(BinaryOperator.EQ, testExpr,
-                        new VarExpr("null"));
-                result.add(new IfStatement(cond,
-                        blockOf(cg.body()), null));
-                idx++;
+        // 预计算每种类型的模式变量名:同类型多个 case(如守卫 + 无守卫)应
+        // 共用同一变量名,优先采用已声明的名称(T v = (T) obj),声明缺失时再生成新名.
+        Map<String, String> typeVars = new HashMap<>();
+        for (SwitchStatement.CaseGroup cg : numbered) {
+            String t = findCastType(cg.body());
+            if (t == null) {
                 continue;
             }
+            String declared = findPatternVarName(cg.body(), t, testExpr);
+            if (declared != null) {
+                typeVars.put(t, declared); // 已声明名称优先
+            } else if (!typeVars.containsKey(t)) {
+                typeVars.put(t, freshPatternName(t));
+            }
+        }
 
-            // 类型 case:体内强制转型 T v = (T) obj
+        List<SwitchStatement.CaseGroup> newCases = new ArrayList<>();
+        for (SwitchStatement.CaseGroup cg : numbered) {
+            if (isNullCase(cg)) {
+                newCases.add(new SwitchStatement.CaseGroup(
+                        List.of(PatternLabel.nullLabel()), cg.body(), false));
+                continue;
+            }
             String typeName = findCastType(cg.body());
             if (typeName == null) {
                 return null; // 无法确定类型,放弃转换
             }
-            List<Statement> body = new ArrayList<>(cg.body());
-            body = stripFirstCast(body);
+            String varName = typeVars.get(typeName);
 
-            // 合并后续同类型的 case(守卫失败贯穿到下一 case)
-            while (idx + 1 < numbered.size()) {
-                String nextType = findCastType(numbered.get(idx + 1).body());
-                if (nextType != null && nextType.equals(typeName)) {
-                    body.addAll(stripFirstCast(numbered.get(idx + 1).body()));
-                    idx++;
-                } else {
-                    break;
-                }
+            // 守卫 case:体为 [if (guard) return X] → case T v when guard'
+            IfStatement guardIf = findGuardIf(cg.body());
+            if (guardIf != null) {
+                Expression guard = rewriteGuard(guardIf.condition(), typeName, testExpr, varName);
+                newCases.add(new SwitchStatement.CaseGroup(
+                        List.of(PatternLabel.type(typeName, varName, guard)),
+                        List.of(guardIf.thenBranch()), false));
+            } else {
+                // 无守卫 case:体首条为 T v = (T) obj 声明 → 剥离后为 case T v
+                List<Statement> body = stripPatternVarDecl(cg.body());
+                newCases.add(new SwitchStatement.CaseGroup(
+                        List.of(PatternLabel.type(typeName, varName, null)), body, false));
             }
-
-            Expression cond = new BinExpr(BinaryOperator.INSTANCEOF,
-                    testExpr, new VarExpr(typeName));
-            result.add(new IfStatement(cond, blockOf(body), null));
-            idx++;
         }
 
-        // default 体作为链尾
-        if (defGroup != null && !defGroup.body().isEmpty()) {
-            result.addAll(defGroup.body());
+        // default 体保持原样
+        if (defGroup != null) {
+            newCases.add(new SwitchStatement.CaseGroup(List.of(), defGroup.body(), true));
         }
-        return result;
+        return new SwitchStatement(testExpr, newCases, false);
     }
 
     /** case 标签的数值 key(默认 -1 表示非数值) */
@@ -211,6 +233,59 @@ public class SwitchPatternMatchRewriter implements RewriteRule {
             return n.intValue();
         }
         return Integer.MAX_VALUE;
+    }
+
+    /** case 是否为 null 分支(标签 -1) */
+    private boolean isNullCase(SwitchStatement.CaseGroup cg) {
+        return !cg.labels().isEmpty()
+                && cg.labels().getFirst() instanceof LitExpr lit
+                && lit.value() instanceof Integer v && v == -1;
+    }
+
+    /** 从 case 体中提取守卫 if(体为单个无 else 的 if 语句) */
+    private IfStatement findGuardIf(List<Statement> body) {
+        if (body.size() == 1 && body.getFirst() instanceof IfStatement i
+                && i.elseBranch() == null) {
+            return i;
+        }
+        return null;
+    }
+
+    /** 从 case 体提取模式变量名:首条 {@code T v = (T) obj} 声明 */
+    private String findPatternVarName(List<Statement> body, String typeName, Expression testExpr) {
+        for (Statement st : body) {
+            if (st instanceof VariableDeclaration vd && vd.initializer() instanceof CastExpr cast) {
+                if (matchesTypeName(cast.targetType(), typeName)
+                        && sameExpr(cast.operand(), testExpr)) {
+                    return vd.name();
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 剥离 case 体首条模式变量声明({@code T v = (T) obj}) */
+    private List<Statement> stripPatternVarDecl(List<Statement> body) {
+        List<Statement> result = new ArrayList<>(body);
+        if (!result.isEmpty() && result.getFirst() instanceof VariableDeclaration vd
+                && vd.initializer() instanceof CastExpr) {
+            result.removeFirst();
+        }
+        return result;
+    }
+
+    /** 守卫表达式:把 {@code (T) obj} 强转换回模式变量,并去掉装箱的 {@code .intValue()} */
+    private Expression rewriteGuard(Expression guard, String typeName, Expression testExpr,
+                                    String varName) {
+        return new GuardRewriter(typeName, testExpr, varName).transformExpr(guard);
+    }
+
+    /** 为模式变量生成全新名称:类型简单名首字母小写(Integer → integer) */
+    private String freshPatternName(String typeName) {
+        if (typeName == null || typeName.isEmpty()) {
+            return "v";
+        }
+        return Character.toLowerCase(typeName.charAt(0)) + typeName.substring(1);
     }
 
     /** 在语句中查找强制转型表达式(递归进入 if 条件等) */
@@ -247,7 +322,7 @@ public class SwitchPatternMatchRewriter implements RewriteRule {
         if (e instanceof com.bingbaihanji.bdec.ast.expr.UnExpr u) {
             return findCastInExpr(u.operand());
         }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
+        if (e instanceof InvocationExpr inv) {
             if (inv.target() != null) {
                 CastExpr c = findCastInExpr(inv.target());
                 if (c != null) {
@@ -278,35 +353,37 @@ public class SwitchPatternMatchRewriter implements RewriteRule {
         return null;
     }
 
-    /** 剥离 case 体首条强制转型声明(instanceof 分支内重新声明) */
-    private List<Statement> stripFirstCast(List<Statement> body) {
-        List<Statement> result = new ArrayList<>(body);
-        if (!result.isEmpty() && findCastIn(result.getFirst()) != null
-                && result.getFirst() instanceof VariableDeclaration) {
-            result.removeFirst();
-        }
-        return result;
-    }
+    /** 守卫重写器:强转 {@code (T) obj} → 模式变量;后续 {@code v.intValue()} → {@code v} */
+    private static final class GuardRewriter extends AstTransformer {
 
-    private String simplifyTypeName(JavaType t) {
-        if (t == null || t.internalName() == null) {
-            return "Object";
-        }
-        String internal = t.internalName();
-        int slash = internal.lastIndexOf('/');
-        int dollar = internal.lastIndexOf('$');
-        int cut = Math.max(slash, dollar);
-        return cut >= 0 ? internal.substring(cut + 1) : internal;
-    }
+        private final String typeName;
 
-    /** 语句列表折叠为单语句或块 */
-    private Statement blockOf(List<Statement> stmts) {
-        if (stmts.isEmpty()) {
-            return new BlockStatement(List.of());
+        private final Expression testExpr;
+
+        private final String varName;
+
+        GuardRewriter(String typeName, Expression testExpr, String varName) {
+            this.typeName = typeName;
+            this.testExpr = testExpr;
+            this.varName = varName;
         }
-        if (stmts.size() == 1) {
-            return stmts.getFirst();
+
+        @Override
+        protected Expression transformCast(CastExpr e) {
+            if (matchesTypeName(e.targetType(), typeName) && sameExpr(e.operand(), testExpr)) {
+                return new VarExpr(varName);
+            }
+            return super.transformCast(e);
         }
-        return new BlockStatement(stmts);
+
+        @Override
+        protected Expression transformInvocation(InvocationExpr e) {
+            Expression r = super.transformInvocation(e);
+            if (r instanceof InvocationExpr inv && "intValue".equals(inv.methodName())
+                    && inv.target() instanceof VarExpr tv && varName.equals(tv.name())) {
+                return new VarExpr(varName);
+            }
+            return r;
+        }
     }
 }

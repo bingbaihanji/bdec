@@ -1074,8 +1074,12 @@ public final class BlockReducer implements ReducerOps {
                 //(version 0 = 参数).同时使用按作用域的追踪,
                 // 使相同 slot 上不同分支体的临时变量各自获得独立的声明.
                 Value target = insn.operands().getFirst();
+                // 排除参数(已在方法签名中声明)与 this 接收者.
+                // 注意不能用 slot() != 0 排除 this:静态方法里首个局部变量
+                // 同样落在 slot 0,会被误跳过声明,导致 SourceCleanup 用
+                // "int var = 0" 兜底(类型推断失效的根因).
                 if (target instanceof Variable v && !v.isParameter()
-                        && v.slot() != 0) {
+                        && !"this".equals(v.name())) {
                     String declName = v.name();
                     // version 1 = 此 slot 的首个局部变量 → 始终声明.
                     // version 2+ = 重新赋值 → 仅在新作用域中声明.

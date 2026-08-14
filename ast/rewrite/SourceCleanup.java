@@ -190,7 +190,7 @@ public class SourceCleanup implements RewriteRule {
                 effectiveFields.addAll(allDeclared);
                 cleaned.add(fix(c, nonVoid, retType, effectiveFields, paramNames));
             }
-            return new BlockStatement(cleaned);
+            return new BlockStatement(foldSyntheticTemps(cleaned));
         }
         if (s instanceof IfStatement i) {
             // instanceof 模式变量(如 obj instanceof RecordDemo(String name, int age))
@@ -241,20 +241,78 @@ public class SourceCleanup implements RewriteRule {
             return new BlockStatement(combined);
         }
         if (s instanceof TryStatement t) {
+            // 资源变量在 try(...) 中声明,其作用域覆盖 try 体/catch/finally,
+            // 必须纳入已声明集合,否则自动声明逻辑会误生成 "int r = 0"
+            Set<String> resourceParams = new HashSet<>(paramNames);
+            for (TryStatement.Resource r : t.resources()) {
+                resourceParams.add(r.varName());
+            }
             List<TryStatement.CatchClause> cc = new ArrayList<>();
             for (var c : t.catchClauses()) {
                 // 将 catch 子句的异常变量名纳入已声明集合,
                 // 防止自动声明逻辑在 catch 体内重复声明该变量
-                Set<String> extParams = new HashSet<>(paramNames);
+                Set<String> extParams = new HashSet<>(resourceParams);
                 extParams.add(c.varName());
                 cc.add(new TryStatement.CatchClause(c.exceptionType(), c.varName(),
                         fix(c.body(), nonVoid, retType, fieldNames, extParams)));
             }
-            return new TryStatement(fix(t.tryBody(), nonVoid, retType, fieldNames, paramNames), cc,
+            return new TryStatement(fix(t.tryBody(), nonVoid, retType, fieldNames, resourceParams), cc,
                     t.finallyBody() != null
-                            ? fix(t.finallyBody(), nonVoid, retType, fieldNames, paramNames) : null);
+                            ? fix(t.finallyBody(), nonVoid, retType, fieldNames, resourceParams) : null,
+                    t.resources());
         }
         return s;
+    }
+
+    /**
+     * 折叠合成的临时变量(模式:Type varN = v; return varN; → return v;).
+     *
+     * <p>javac 对 try-with-resources 中的 return 会引入合成临时变量保存返回值
+     * (在 finally 之前存储,finally 之后返回),反编译后呈现为
+     * {@code Type varN = v; return varN;}.该变量是合成的(名称形如 var+数字),
+     * 且仅在此 return 中使用,可安全内联.</p>
+     *
+     * @param stmts 待折叠的语句列表
+     * @return 折叠后的语句列表
+     */
+    private List<Statement> foldSyntheticTemps(List<Statement> stmts) {
+        List<Statement> result = new ArrayList<>();
+        int i = 0;
+        while (i < stmts.size()) {
+            Statement s = stmts.get(i);
+            if (s instanceof VariableDeclaration vd
+                    && vd.initializer() instanceof VarExpr init
+                    && isSyntheticTemp(vd.name())
+                    && i + 1 < stmts.size()
+                    && stmts.get(i + 1) instanceof ReturnStatement rs
+                    && rs.value() instanceof VarExpr ret && ret.name().equals(vd.name())) {
+                // 折叠:Type varN = v; return varN; → return v;
+                result.add(new ReturnStatement(init));
+                i += 2;
+                continue;
+            }
+            result.add(s);
+            i++;
+        }
+        return result;
+    }
+
+    /**
+     * 判断变量名是否为合成的临时变量(形如 var+数字,如 var4/var10).
+     *
+     * @param name 待判断的变量名
+     * @return 若为合成临时变量名则返回 {@code true}
+     */
+    private boolean isSyntheticTemp(String name) {
+        if (name == null || name.length() < 4 || !name.startsWith("var")) {
+            return false;
+        }
+        for (int i = 3; i < name.length(); i++) {
+            if (!Character.isDigit(name.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -299,17 +357,26 @@ public class SourceCleanup implements RewriteRule {
     private void collectPatternVars(Expression e, Set<String> out) {
         if (e instanceof BinExpr b
                 && b.operator() == com.bingbaihanji.bdec.ast.expr.BinaryOperator.INSTANCEOF
-                && b.right() instanceof VarExpr tv && tv.name().contains("(")) {
+                && b.right() instanceof VarExpr tv) {
             String pattern = tv.name();
             int open = pattern.indexOf('(');
-            int close = pattern.lastIndexOf(')');
-            if (open >= 0 && close > open) {
-                String[] parts = pattern.substring(open + 1, close).split(",");
-                for (String p : parts) {
-                    String[] tokens = p.trim().split("\\s+");
-                    if (tokens.length >= 2) {
-                        out.add(tokens[tokens.length - 1]);
+            if (open >= 0) {
+                // 记录解构模式:RecordDemo(String name, int age)
+                int close = pattern.lastIndexOf(')');
+                if (close > open) {
+                    String[] parts = pattern.substring(open + 1, close).split(",");
+                    for (String p : parts) {
+                        String[] tokens = p.trim().split("\\s+");
+                        if (tokens.length >= 2) {
+                            out.add(tokens[tokens.length - 1]);
+                        }
                     }
+                }
+            } else {
+                // 简单类型模式:Type name(如 "String s")
+                String[] tokens = pattern.trim().split("\\s+");
+                if (tokens.length >= 2) {
+                    out.add(tokens[tokens.length - 1]);
                 }
             }
         } else if (e instanceof UnExpr u) {

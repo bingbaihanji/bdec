@@ -48,8 +48,8 @@ public class BdecEngine implements Decompiler {
     /** 匿名类内联重写器(在内部类反编译完成后单独执行) */
     private final AnonymousClassRewriter anonymousClassRewriter = new AnonymousClassRewriter();
 
-    /** 局部类 this$0 清理重写器(与匿名类内联同阶段执行) */
-    private final LocalClassRewriter localClassRewriter = new LocalClassRewriter();
+    /** 成员内部类 this$0 清理重写器(与匿名类内联同阶段执行) */
+    private final InnerClassRewriter innerClassRewriter = new InnerClassRewriter();
 
     /** AST 重写器,包含多个重写规则,按顺序应用 */
     private final AstRewriter astRewriter = new AstRewriter(
@@ -58,14 +58,13 @@ public class BdecEngine implements Decompiler {
                     new StringConcatRewriter(), new TextBlockRewriter(),
                     new ForEachRewriter(), new ArrayInlineRewriter(),
                     new TryResourceRewriter(),
-                    new SwitchExprRewriter(), new PatternMatchRewriter(),
+                    new SwitchExprRewriter(), new RecordPatternRewriter(),
+                    new PatternMatchRewriter(),
                     new SwitchPatternMatchRewriter(),
-                    new RecordPatternRewriter(),
                     new TernaryRewriter(), new BoxingRewriter(),
                     new StringSwitchRewriter(),
                     new EnumSwitchRewriter(),
                     new EnumRewriter(),
-                    new InnerClassRewriter(),
                     new SourceCleanup()));
 
     /** 源代码输出器 */
@@ -153,10 +152,10 @@ public class BdecEngine implements Decompiler {
             // 阶段 5c:反编译内部类(成员内部类,非匿名/局部类)
             unit = innerClassDecompiler.decompileInnerClasses(unit, classFile, context);
 
-            // 阶段 5d:内联匿名类 + 清理局部类 this$0(内部类反编译后
+            // 阶段 5d:内联匿名类 + 清理成员内部类 this$0(内部类反编译后
             // 类型声明已追加到编译单元,此时才能还原)
             unit = anonymousClassRewriter.rewrite(unit, context);
-            unit = localClassRewriter.rewrite(unit, context);
+            unit = innerClassRewriter.rewrite(unit, context);
 
             // 阶段 6:生成 Java 源代码
             SourceFile source = sourceEmitter.emit(unit, config);

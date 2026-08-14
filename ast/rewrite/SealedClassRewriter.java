@@ -23,9 +23,18 @@ public class SealedClassRewriter implements RewriteRule {
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
+        // 从 class 文件模型读取 permits 子类(JVM 内部名称,如 "com/example/Circle"),
+        // 转换为源码短名(如 "Circle")后交由 rewriteType 处理.
+        List<String> permits = new ArrayList<>();
+        if (context.classFile() != null) {
+            for (String internal : context.classFile().permittedSubclasses()) {
+                int slash = internal.lastIndexOf('/');
+                permits.add(slash >= 0 ? internal.substring(slash + 1) : internal);
+            }
+        }
         List<TypeDeclaration> types = new ArrayList<>();
         for (TypeDeclaration td : unit.types()) {
-            types.add(rewriteType(td, unit.packageName(), context));
+            types.add(rewriteType(td, unit.packageName(), context, permits));
         }
         return new CompilationUnit(unit.packageName(), unit.imports(), types, unit.innerClassNames());
     }
@@ -36,31 +45,38 @@ public class SealedClassRewriter implements RewriteRule {
      * @param td      待重写的类型声明
      * @param pkg     当前包名
      * @param context 反编译上下文
+     * @param permits 当前顶层类型声明的 permits 子类短名列表(仅对顶层类型生效)
      * @return 重写后的类型声明
      */
-    private TypeDeclaration rewriteType(TypeDeclaration td, String pkg, DecompileContext context) {
-        boolean isSealed = (td.accessFlags() & AccessFlags.ACC_SEALED) != 0;
+    private TypeDeclaration rewriteType(TypeDeclaration td, String pkg,
+                                        DecompileContext context, List<String> permits) {
+        // Java 17-21 预览特性用 ACC_SEALED 标志位;Java 22+ 改用 PermittedSubclasses
+        // 属性且不再设置类标志位,因此需同时检查 permits 列表是否非空.
+        boolean isSealed = (td.accessFlags() & AccessFlags.ACC_SEALED) != 0
+                || !permits.isEmpty();
         if (isSealed) {
-            return rewriteSealedType(td);
+            return rewriteSealedType(td, permits);
         }
         // 检查是否为密封父类的非密封子类
         return rewriteNonSealedType(td, pkg, context);
     }
 
     /**
-     * 将带有 ACC_SEALED 标志的类型转换为 sealed 声明.
-     * 根据是否为接口分别生成 "sealed interface" 或 "sealed class".
+     * 将密封类型转换为 sealed 声明.
+     * 根据是否为接口分别生成 "sealed interface" 或 "sealed class",
+     * 并附带 {@code permits} 子句.
      *
-     * @param td 原始类型声明
+     * @param td      原始类型声明
+     * @param permits 允许的子类短名列表
      * @return 标记为 sealed 的类型声明
      */
-    private TypeDeclaration rewriteSealedType(TypeDeclaration td) {
+    private TypeDeclaration rewriteSealedType(TypeDeclaration td, List<String> permits) {
         String kindName = td.isInterface() ? "sealed interface" : "sealed class";
         List<String> typeParams = new ArrayList<>(td.typeParameters());
         return new TypeDeclaration(td.accessFlags() & ~AccessFlags.ACC_SEALED,
                 td.simpleName(), kindName, td.superName(),
                 td.interfaceNames(), typeParams, td.children(), td.annotations(),
-                td.superAnnotations(), td.interfaceAnnotations());
+                td.superAnnotations(), td.interfaceAnnotations(), permits);
     }
 
     /**
