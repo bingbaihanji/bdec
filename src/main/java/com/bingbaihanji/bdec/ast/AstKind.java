@@ -73,5 +73,7 @@ public enum AstKind {
     /** 构造函数 */
     CONSTRUCTOR,
     /** 静态初始化块 */
-    STATIC_INIT
+    STATIC_INIT,
+    /** 模式匹配 switch 的 case 标签(如 {@code case Integer i when i > 0}) */
+    PATTERN_LABEL
 }

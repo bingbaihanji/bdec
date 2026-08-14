@@ -18,7 +18,7 @@ bdec 已经从“骨架”进化到“能处理常见 Java 8/11 片段”，近�
 - **finally 精确去重与 break/continue/label 恢复**
 - **模式匹配 / switch 表达式 / sealed `permits` 完整支持**
 
-当前 `mvn test` 失败 4 个，其中 `TestClass2` 往返失败最典型，集中暴露了上述深层能力缺失。
+当前 `mvn test` 失败 4 个，其中 `TestClass3` 往返失败最典型，集中暴露了上述深层能力缺失。
 
 ---
 
@@ -53,7 +53,7 @@ Tests run: 93, Failures: 4
 - `ControlFlowTest.testLambda`
 - `ControlFlowTest.testMethodRef`
 
-`TestClass2` 的往返编译错误最有代表性，暴露了以下深层能力缺失：
+`TestClass3` 的往返编译错误最有代表性，暴露了以下深层能力缺失：
 
 - 局部类/匿名类被原样发射成 `TestClass2$1LocalClass`、`TestClass2$1` 等合成类引用；
 - `for-each` 退化为 `Iterator` 循环但未 import `java.util.Iterator`；
@@ -177,7 +177,7 @@ Tests run: 93, Failures: 4
    - `TypeInference` 直接回退 `Object`。
 
 7. **合成类处理为零**
-   - 匿名/局部/内部类的合成参数、access 方法、桥接方法均未处理，是 `TestClass2` 往返失败的主因。
+   - 匿名/局部/内部类的合成参数、access 方法、桥接方法均未处理，是 `TestClass3` 往返失败的主因。
 
 ---
 
@@ -196,7 +196,7 @@ Tests run: 93, Failures: 4
 3. **修 `RecordDemo` 往返**
    - 记录紧凑构造器体、canonical constructor 必须保留。
 
-4. **修 `TestClass2` 往返**
+4. **修 `TestClass3` 往返**
    - 这是综合问题，先聚焦最痛的点：
      - 内部类/匿名类合成参数消除；
      - `for-each` 还原时正确 import `Iterator`；

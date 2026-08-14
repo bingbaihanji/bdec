@@ -14,6 +14,7 @@ import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
 import com.bingbaihanji.bdec.ast.expr.NewExpr;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
@@ -74,6 +75,7 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
             case INSTANCE_OF -> transformInstanceOf((InstanceOfExpr) e);
             case NEW -> transformNew((NewExpr) e);
             case LAMBDA -> transformLambda((LambdaExpr) e);
+            case VARIABLE -> transformVarExpr((VarExpr) e);
             default -> e;
         };
     }
@@ -129,6 +131,11 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
     protected Expression transformFieldAccess(FieldAccessExpr e) {
         Expression tgt = e.target() != null ? transformExpr(e.target()) : null;
         return (tgt != e.target()) ? new FieldAccessExpr(tgt, e.fieldName()) : e;
+    }
+
+    /** 变量引用叶子节点:默认不变,子类可覆盖以重命名(如 val$x → x). */
+    protected Expression transformVarExpr(VarExpr e) {
+        return e;
     }
 
     protected Expression transformArrayAccess(ArrayAccessExpr e) {
@@ -227,7 +234,15 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
         if (finBody != s.finallyBody()) {
             changed = true;
         }
-        return changed ? new TryStatement(tryBody, newCatches, finBody) : s;
+        List<TryStatement.Resource> newResources = new ArrayList<>();
+        for (TryStatement.Resource r : s.resources()) {
+            Expression init = transformExpr(r.init());
+            if (init != r.init()) {
+                changed = true;
+            }
+            newResources.add(new TryStatement.Resource(r.type(), r.varName(), init));
+        }
+        return changed ? new TryStatement(tryBody, newCatches, finBody, newResources) : s;
     }
 
     protected Statement transformReturn(ReturnStatement s) {

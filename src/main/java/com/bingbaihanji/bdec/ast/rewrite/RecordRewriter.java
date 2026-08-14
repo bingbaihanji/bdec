@@ -4,8 +4,16 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.MethodDeclaration;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -94,6 +102,12 @@ public class RecordRewriter implements RewriteRule {
             }
             if (m instanceof MethodDeclaration md) {
                 if (isCanonicalConstructor(md, componentFields)) {
+                    // 规范构造器被移除,但其带有的紧凑构造器体(字段赋值之外的
+                    // 显式语句)需还原为 "RecordName { ... }" 紧凑构造器.
+                    List<Statement> compactBody = extractCompactBody(md, componentFields);
+                    if (!compactBody.isEmpty()) {
+                        members.add(buildCompactConstructor(md, td, compactBody));
+                    }
                     continue; // 移除规范构造器
                 }
                 if (isSyntheticAccessor(md, componentFields)) {
@@ -177,5 +191,97 @@ public class RecordRewriter implements RewriteRule {
             return false;
         }
         return fields.contains(md.name());
+    }
+
+    /**
+     * 从规范构造器体中提取紧凑构造器的显式语句.
+     * <p>
+     * javac 将紧凑构造器 {@code Range { ... }} 反糖为规范构造器:
+     * {@code Range(int lo, int hi) { super(); ...; this.lo = lo; this.hi = hi; }}.
+     * 因此需剥离前导 {@code super()},字段赋值({@code this.f = f})与末尾
+     * {@code return},余下语句即为紧凑构造器体.字段赋值可能被 BlockReducer
+     * 收进一个尾块(与末尾 return 同处),需一并识别.
+     * </p>
+     *
+     * @param md    规范构造器
+     * @param fields record 组件字段名集合
+     * @return 紧凑构造器体语句(按原顺序);若无显式语句则返回空列表
+     */
+    private List<Statement> extractCompactBody(MethodDeclaration md, Set<String> fields) {
+        if (!(md.body() instanceof BlockStatement)) {
+            return List.of();
+        }
+        // BlockReducer 可能把字段赋值与紧凑构造器语句交错收进嵌套块
+        // (如 [super(), if1, Block[if2, this.a=a, this.b=b]]),需先递归展平
+        // 才能把规范反糖(字段赋值)与用户语句彻底分离.
+        List<Statement> flat = new ArrayList<>();
+        flatten(md.body(), flat);
+        // 剥离前导 super()(无参 super 调用)
+        if (!flat.isEmpty() && isSuperCall(flat.get(0))) {
+            flat.remove(0);
+        }
+        // 剥离末尾的无返回值 return(规范构造器的隐式收尾)
+        if (!flat.isEmpty() && isBareReturn(flat.get(flat.size() - 1))) {
+            flat.remove(flat.size() - 1);
+        }
+        // 剥离字段赋值(this.f = ...),它们由 record 关键字自动生成
+        flat.removeIf(s -> isFieldAssignment(s, fields));
+        return flat;
+    }
+
+    /** 递归展平块语句,把嵌套块内的语句提升到顶层(保序). */
+    private void flatten(Statement s, List<Statement> out) {
+        if (s instanceof BlockStatement bs) {
+            for (Statement inner : bs.statements()) {
+                flatten(inner, out);
+            }
+        } else {
+            out.add(s);
+        }
+    }
+
+    /**
+     * 将提取出的紧凑构造器体构建为紧凑构造器声明节点.
+     * 紧凑构造器无参数列表,发射为 {@code RecordName { ... }}.
+     */
+    private MethodDeclaration buildCompactConstructor(MethodDeclaration md,
+                                                      TypeDeclaration td,
+                                                      List<Statement> compactBody) {
+        BlockStatement body = new BlockStatement(compactBody);
+        return new MethodDeclaration(md.accessFlags(), td.simpleName(), md.returnType(),
+                new String[0], new com.bingbaihanji.bdec.type.JavaType[0],
+                List.of(), md.throwsTypes(), md.annotationDefault(), md.annotations(),
+                md.parameterAnnotations(), md.typeAnnotations(), body, true);
+    }
+
+    /** 检查语句是否为无参 {@code super()} 调用. */
+    private boolean isSuperCall(Statement s) {
+        if (!(s instanceof ExpressionStatement es)
+                || !(es.expression() instanceof InvocationExpr inv)) {
+            return false;
+        }
+        return "super".equals(inv.methodName()) && inv.arguments().isEmpty();
+    }
+
+    /** 检查语句是否为 record 组件字段赋值({@code this.f = ...}). */
+    private boolean isFieldAssignment(Statement s, Set<String> fields) {
+        if (!(s instanceof ExpressionStatement es)
+                || !(es.expression() instanceof AssignExpr a)
+                || !(a.target() instanceof FieldAccessExpr fa)) {
+            return false;
+        }
+        if (!fields.contains(fa.fieldName())) {
+            return false;
+        }
+        // 接收者为 this(显式 this 或隐式 this)
+        if (fa.target() == null) {
+            return true;
+        }
+        return fa.target() instanceof VarExpr v && "this".equals(v.name());
+    }
+
+    /** 检查语句是否为无返回值的 {@code return;}. */
+    private boolean isBareReturn(Statement s) {
+        return s instanceof ReturnStatement r && r.value() == null;
     }
 }

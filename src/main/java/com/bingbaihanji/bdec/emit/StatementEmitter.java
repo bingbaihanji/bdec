@@ -2,6 +2,7 @@ package com.bingbaihanji.bdec.emit;
 
 import com.bingbaihanji.bdec.ast.AstVisitor;
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.PatternLabel;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
@@ -350,6 +351,17 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             return;
         }
 
+        // record 紧凑构造器:无参数列表,输出 "RecordName { ... }"
+        if (m.compactConstructor()) {
+            w.write(methodName).space();
+            if (m.body() != null) {
+                emit(m.body());
+            } else {
+                w.write("{}").newLine();
+            }
+            return;
+        }
+
         // 判断是否为构造函数(方法名与类名相同)
         boolean isConstructor = methodName.equals(className);
         if (isConstructor) {
@@ -468,12 +480,27 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         if (stmt instanceof TryStatement tryStmt) {
             boolean hasCatch = !tryStmt.catchClauses().isEmpty();
             boolean hasFinally = tryStmt.finallyBody() != null;
-            // 安全检查:try 必须至少有一个 catch 或 finally
-            if (!hasCatch && !hasFinally) {
+            boolean hasResources = !tryStmt.resources().isEmpty();
+            // 安全检查:try 必须至少有一个 catch / finally / 资源
+            if (!hasCatch && !hasFinally && !hasResources) {
                 w.write("/* empty try */ { }").newLine();
                 return;
             }
             w.token("try").space();
+            if (hasResources) {
+                w.write("(");
+                List<TryStatement.Resource> resources = tryStmt.resources();
+                for (int i = 0; i < resources.size(); i++) {
+                    if (i > 0) {
+                        w.write(";").space();
+                    }
+                    TryStatement.Resource r = resources.get(i);
+                    w.write(typeNameAnnotated(r.type(), java.util.Map.of())).space()
+                            .write(r.varName()).space().write("=").space();
+                    exprs.emit(r.init());
+                }
+                w.write(")").space();
+            }
             emitBranched(tryStmt.tryBody());
             for (TryStatement.CatchClause cc : tryStmt.catchClauses()) {
                 w.space().token("catch").space().write("(")
@@ -583,7 +610,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
                 } else {
                     for (Expression label : cg.labels()) {
                         w.token("case").space();
-                        exprs.emit(label);
+                        emitCaseLabel(label);
                         w.write(arrow);
                         if (sw.isExpression() && !cg.body().isEmpty()) {
                             Statement s = simplifyCaseBody(cg.body());
@@ -627,6 +654,31 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             w.write("// TODO: full switch emission").newLine();
             w.dedent();
             w.write("}").newLine();
+        }
+    }
+
+    /**
+     * 发射单个 case 标签.模式标签({@link PatternLabel})渲染为
+     * {@code null} 或 {@code Type var when guard},普通标签走表达式发射器.
+     *
+     * @param label case 标签表达式
+     */
+    private void emitCaseLabel(Expression label) {
+        if (label instanceof PatternLabel pl) {
+            if (pl.nullCase()) {
+                w.token("null");
+            } else {
+                w.write(pl.typeName());
+                if (pl.varName() != null && !pl.varName().isEmpty()) {
+                    w.space().write(pl.varName());
+                }
+            }
+            if (pl.guard() != null) {
+                w.space().token("when").space();
+                exprs.emit(pl.guard());
+            }
+        } else {
+            exprs.emit(label);
         }
     }
 

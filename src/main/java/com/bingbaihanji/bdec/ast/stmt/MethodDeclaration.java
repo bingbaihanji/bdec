@@ -56,6 +56,9 @@ public final class MethodDeclaration extends Statement {
     /** 方法签名上的 JSR-308 类型注解(返回/参数/throws 类型,按类型路径分组) */
     private final TypeAnnotationSet typeAnnotations;
 
+    /** 是否为 record 的紧凑构造器(无参数列表,发射为 "RecordName { ... }") */
+    private final boolean compactConstructor;
+
     /**
      * 构造一个方法声明节点(无类型参数,无 throws).
      *
@@ -139,6 +142,23 @@ public final class MethodDeclaration extends Statement {
                              String annotationDefault, List<String> annotations,
                              String[] parameterAnnotations, TypeAnnotationSet typeAnnotations,
                              Statement body) {
+        this(accessFlags, name, returnType, paramNames, paramTypes, typeParameters,
+                throwsTypes, annotationDefault, annotations, parameterAnnotations,
+                typeAnnotations, body, false);
+    }
+
+    /**
+     * 构造一个方法声明节点(含全部元数据与紧凑构造器标记).
+     *
+     * @param compactConstructor 是否为 record 的紧凑构造器
+     *                           (发射为 {@code RecordName { ... }},无参数列表)
+     */
+    public MethodDeclaration(int accessFlags, String name, JavaType returnType,
+                             String[] paramNames, JavaType[] paramTypes,
+                             List<String> typeParameters, List<String> throwsTypes,
+                             String annotationDefault, List<String> annotations,
+                             String[] parameterAnnotations, TypeAnnotationSet typeAnnotations,
+                             Statement body, boolean compactConstructor) {
         this.accessFlags = accessFlags;
         this.name = name;
         this.returnType = returnType;
@@ -151,6 +171,7 @@ public final class MethodDeclaration extends Statement {
         this.parameterAnnotations = parameterAnnotations;
         this.typeAnnotations = typeAnnotations != null ? typeAnnotations : TypeAnnotationSet.NONE;
         this.body = body;
+        this.compactConstructor = compactConstructor;
     }
 
     /** @return 访问标志位 */
@@ -188,6 +209,9 @@ public final class MethodDeclaration extends Statement {
 
     /** @return 方法签名上的 JSR-308 类型注解 */
     public TypeAnnotationSet typeAnnotations() {return typeAnnotations;}
+
+    /** @return 是否为 record 的紧凑构造器(无参数列表) */
+    public boolean compactConstructor() {return compactConstructor;}
 
     /** @return 是否为 static 方法 */
     public boolean isStatic() {return (accessFlags & AccessFlags.ACC_STATIC) != 0;}

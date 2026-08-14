@@ -65,12 +65,13 @@ public interface RewriteRule {
 
     // ── 元数据保持重建助手 ──
 
-    /** 仅替换方法体,保留注解/类型参数/throws/参数注解等全部元数据. */
+    /** 仅替换方法体,保留注解/类型参数/throws/参数注解/紧凑构造器标记等全部元数据. */
     default MethodDeclaration withBody(MethodDeclaration md, Statement newBody) {
         return new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                 md.parameterNames(), md.parameterTypes(), md.typeParameters(),
                 md.throwsTypes(), md.annotationDefault(), md.annotations(),
-                md.parameterAnnotations(), md.typeAnnotations(), newBody);
+                md.parameterAnnotations(), md.typeAnnotations(), newBody,
+                md.compactConstructor());
     }
 
     /**
@@ -98,15 +99,16 @@ public interface RewriteRule {
                 paramTypeAnns, md.typeAnnotations().onThrows());
         return new MethodDeclaration(md.accessFlags(), md.name(), md.returnType(),
                 names, types, md.typeParameters(), md.throwsTypes(),
-                md.annotationDefault(), md.annotations(), paramAnns, tas, newBody);
+                md.annotationDefault(), md.annotations(), paramAnns, tas, newBody,
+                md.compactConstructor());
     }
 
-    /** 仅替换类型成员,保留注解/父类/接口/类型参数等全部元数据. */
+    /** 仅替换类型成员,保留注解/父类/接口/类型参数/sealed permits 等全部元数据. */
     default TypeDeclaration withMembers(TypeDeclaration td, List<AstNode> newMembers) {
         return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
                 td.superName(), td.interfaceNames(), td.typeParameters(),
                 newMembers, td.annotations(), td.superAnnotations(),
-                td.interfaceAnnotations());
+                td.interfaceAnnotations(), td.permitsNames());
     }
 
     /** 替换类型成员并修改访问标志(用于 RecordRewriter/SealedClassRewriter 的标志位清理). */
@@ -115,7 +117,7 @@ public interface RewriteRule {
         return new TypeDeclaration(flags, td.simpleName(), td.kindName(),
                 td.superName(), td.interfaceNames(), td.typeParameters(),
                 newMembers, td.annotations(), td.superAnnotations(),
-                td.interfaceAnnotations());
+                td.interfaceAnnotations(), td.permitsNames());
     }
 
     /** 仅替换字段初始化器,保留字段注解与类型注解等元数据. */

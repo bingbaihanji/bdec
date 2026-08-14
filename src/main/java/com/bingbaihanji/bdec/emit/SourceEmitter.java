@@ -187,6 +187,12 @@ public class SourceEmitter {
             }
         }
 
+        // 输出密封类 permits 子句(如 " permits Circle, Square")
+        if (!type.permitsNames().isEmpty()) {
+            w.space().token("permits").space();
+            w.write(String.join(", ", type.permitsNames()));
+        }
+
         w.space().write("{").newLine();
         w.indent();
 

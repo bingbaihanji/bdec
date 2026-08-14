@@ -395,7 +395,9 @@ public class RecordPatternRewriter extends AstTransformer implements RewriteRule
         List<Statement> result = new ArrayList<>();
         for (Statement s : stmts) {
             if (s instanceof IfStatement i && isConstantTrue(i.condition())) {
-                result.addAll(flattenBlock(i.thenBranch()));
+                // 递归展平:守卫(if (1 != 0))可能嵌套(每个组件一个守卫),
+                // 内层守卫的 then 体需一并提升为顶层语句.
+                result.addAll(normalizeConstantIfs(flattenBlock(i.thenBranch())));
             } else {
                 result.add(s);
             }
