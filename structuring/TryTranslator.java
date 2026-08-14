@@ -27,10 +27,10 @@ import java.util.Set;
  * "每模式一处理器"风格提取的 try/synchronized 专用翻译逻辑.
  *
  * <p>包含:try 区域包装({@link #wrapTryStatements} 按组区间映射语句区间,
- * 分支体内 try 区域收集 {@link #collectBranchTryAnns})、finally 合并
- * ({@link #buildTryCatch} 剥离重复 finally 体)、synchronized 块保护
+ * 分支体内 try 区域收集 {@link #collectBranchTryAnns}),finally 合并
+ * ({@link #buildTryCatch} 剥离重复 finally 体),synchronized 块保护
  * ({@link #wrapSynchronized}/{@link #collectSyncBody} 与 {@link #isSynchronizedHandler}
- * 识别).依赖归约状态的能力(组翻译、处理器指令翻译)通过 {@link ReducerOps}
+ * 识别).依赖归约状态的能力(组翻译,处理器指令翻译)通过 {@link ReducerOps}
  * 回调 {@link BlockReducer},本类保持无状态.</p>
  */
 public final class TryTranslator {

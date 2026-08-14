@@ -5,10 +5,10 @@ import com.bingbaihanji.bdec.bytecode.model.AccessFlags;
 /**
  * 修饰符渲染器(里程碑 Phase 3).
  *
- * <p>统一输出类/接口、方法、字段的访问修饰符关键字
+ * <p>统一输出类/接口,方法,字段的访问修饰符关键字
  * (public/private/protected/static/final/abstract 等),依据 JVM 规范的
- * ACC_* 常量进行位判断。消除 {@link SourceEmitter} 与
- * {@link StatementEmitter} 中三处近乎复制的修饰符渲染逻辑。</p>
+ * ACC_* 常量进行位判断.消除 {@link SourceEmitter} 与
+ * {@link StatementEmitter} 中三处近乎复制的修饰符渲染逻辑.</p>
  */
 public final class ModifierRenderer {
 

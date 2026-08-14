@@ -27,8 +27,8 @@ import java.util.Map;
  * 结构解析器(里程碑 Phase 3).
  *
  * <p>负责解析类文件中字段表({@code field_info})和方法表({@code method_info})
- * 的顶层循环。注解结构解析委托 {@link AnnotationParser},Code 属性解析委托
- * {@link CodeAttributeParser}。</p>
+ * 的顶层循环.注解结构解析委托 {@link AnnotationParser},Code 属性解析委托
+ * {@link CodeAttributeParser}.</p>
  *
  * <p>该类仅在同一包内可见(package-private),作为 {@link ClassFileReader} 的辅助组件.
  */
@@ -106,7 +106,7 @@ class StructureParser {
      *
      * <p>遍历类文件中所有方法,提取每个方法的访问标志,名称,描述符,
      * 返回类型与参数类型,字节码指令,异常处理器表,签名,局部变量表等信息.
-     * {@code Code} 属性的解析委托 {@link CodeAttributeParser}。</p>
+     * {@code Code} 属性的解析委托 {@link CodeAttributeParser}.</p>
      *
      * @param in    数据输入流,定位在方法表起始位置
      * @param pool  已解析的常量池
@@ -178,7 +178,7 @@ class StructureParser {
                         }
                     }
                 } else if ("Code".equals(attrName)) {
-                    // Code 属性核心结构(指令、异常处理器表、局部变量表)
+                    // Code 属性核心结构(指令,异常处理器表,局部变量表)
                     CodeAttributeParser.CodeAttribute codeAttr = codeParser.parseCode(in, pool);
                     maxStack = codeAttr.maxStack();
                     maxLocals = codeAttr.maxLocals();

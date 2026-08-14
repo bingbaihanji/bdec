@@ -18,15 +18,15 @@ import java.util.Objects;
  * 语句/表达式结构比较工具集合——从 {@link StatementUtils} 中提取的
  * 文本化与结构等价比较逻辑(里程碑 Phase 3).
  *
- * <p>包含语句文本化({@link #statementText}、{@link #expressionText})
- * 与结构等价比较({@link #matchesAny}、{@link #expressionsEquivalent}).
+ * <p>包含语句文本化({@link #statementText},{@link #expressionText})
+ * 与结构等价比较({@link #matchesAny},{@link #expressionsEquivalent}).
  * 保持无状态.</p>
  */
 final class ComparisonUtils {
 
     private ComparisonUtils() {}
 
-/** 检查某条语句是否与候选列表中的任一语句在表达式结构上匹配 */
+    /** 检查某条语句是否与候选列表中的任一语句在表达式结构上匹配 */
     static boolean matchesAny(Statement s, List<Statement> candidates) {
         if (s instanceof ExpressionStatement es) {
             for (Statement c : candidates) {
@@ -47,7 +47,7 @@ final class ComparisonUtils {
         return false;
     }
 
-/** 两个表达式树的结构化比较 */
+    /** 两个表达式树的结构化比较 */
     static boolean expressionsEquivalent(Expression a, Expression b) {
         if (a == b) {
             return true;
@@ -91,7 +91,7 @@ final class ComparisonUtils {
         return false;
     }
 
-/** Generate a stable text representation of a statement for comparison. */
+    /** Generate a stable text representation of a statement for comparison. */
     static String statementText(Statement s) {
         if (s instanceof ExpressionStatement es && es.expression() != null) {
             return "expr:" + expressionText(es.expression());
@@ -105,7 +105,9 @@ final class ComparisonUtils {
         if (s instanceof BlockStatement bs) {
             StringBuilder sb = new StringBuilder("block{");
             for (Statement cs : bs.statements()) {
-                if (cs != null) sb.append(statementText(cs)).append(";");
+                if (cs != null) {
+                    sb.append(statementText(cs)).append(";");
+                }
             }
             return sb.append("}").toString();
         }

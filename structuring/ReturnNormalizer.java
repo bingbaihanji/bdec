@@ -20,15 +20,15 @@ import java.util.List;
  * return 归一化工具集合——从 {@link StatementUtils} 中提取的分支返回
  * 归一化逻辑(里程碑 Phase 3).
  *
- * <p>包含 return 检测({@link #hasReturnStmt})、孤儿表达式剥离
- * ({@link #stripOrphanExprs})、分支体 return 包装({@link #wrapAsReturn})
+ * <p>包含 return 检测({@link #hasReturnStmt}),孤儿表达式剥离
+ * ({@link #stripOrphanExprs}),分支体 return 包装({@link #wrapAsReturn})
  * 与布尔字面量归一化({@link #boolLiteral}). 保持无状态.</p>
  */
 final class ReturnNormalizer {
 
     private ReturnNormalizer() {}
 
-/** 检查语句树中是否包含 ReturnStatement */
+    /** 检查语句树中是否包含 ReturnStatement */
     static boolean hasReturnStmt(Statement s) {
         if (s instanceof ReturnStatement) {
             return true;
@@ -55,7 +55,7 @@ final class ReturnNormalizer {
         return false;
     }
 
-/** 从已包含 ReturnStatement 的分支体中剥离孤立的 ExpressionStatement.
+    /** 从已包含 ReturnStatement 的分支体中剥离孤立的 ExpressionStatement.
      *  这些语句通常是合并点处的块排序噪声,无实际意义. */
     static Statement stripOrphanExprs(Statement s) {
         if (s instanceof BlockStatement bs) {
@@ -91,7 +91,7 @@ final class ReturnNormalizer {
         return s;
     }
 
-/** 将分支体中的 ExpressionStatement 包装为 ReturnStatement
+    /** 将分支体中的 ExpressionStatement 包装为 ReturnStatement
      * (处理没有自身 RETURN 的分支中的孤立的 CONST).
      *  跳过 void 表达式(例如孤立的 lock.unlock() 调用)以避免
      *  "void cannot be converted to int" 编译错误. */
@@ -105,9 +105,9 @@ final class ReturnNormalizer {
             for (Statement child : bs.statements()) {
                 if (child instanceof ExpressionStatement es) {
                     Expression e = es.expression();
-                    // 保留 void 方法调用、赋值、非 void 方法调用(其结果可能
+                    // 保留 void 方法调用,赋值,非 void 方法调用(其结果可能
                     // 被后续 STORE 消费)和字段访问原样,不包装为 return.
-                    // 只有简单值(常量、变量、转换)才包装为 return.
+                    // 只有简单值(常量,变量,转换)才包装为 return.
                     if (StatementUtils.isVoidExpr(e) || StatementUtils.isAssignExpr(e)
                             || e instanceof InvocationExpr
                             || e instanceof FieldAccessExpr) {
@@ -138,7 +138,7 @@ final class ReturnNormalizer {
                     result.add(new ReturnStatement(isBoolRet
                             ? new LitExpr(false, JavaType.BOOLEAN)
                             : new LitExpr(null,
-                                    JavaType.classType("java/lang/Object"))));
+                            JavaType.classType("java/lang/Object"))));
                 }
             }
             if (result.isEmpty()) {
@@ -167,7 +167,7 @@ final class ReturnNormalizer {
         return s;
     }
 
-/** 对 boolean 返回方法,将整数字面量转为布尔值 */
+    /** 对 boolean 返回方法,将整数字面量转为布尔值 */
     static Expression boolLiteral(Expression e, boolean isBoolRet) {
         if (isBoolRet && e instanceof LitExpr lit && lit.value() instanceof Integer i) {
             return new LitExpr(i != 0, JavaType.BOOLEAN);

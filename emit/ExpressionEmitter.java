@@ -157,6 +157,21 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         };
     }
 
+    /** 在类型路径末尾追加一个元素(不可变列表). */
+    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> appendPath(
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path,
+            int kind, int index) {
+        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> next
+                = new java.util.ArrayList<>(path);
+        next.add(new com.bingbaihanji.bdec.bytecode.model.TypePathElement(kind, index));
+        return next;
+    }
+
+    /** 数组类型的元素类型(剥离最外层一维). */
+    private static JavaType elementOfArray(JavaType arrayType) {
+        return JavaType.elementOf(arrayType);
+    }
+
     /**
      * 设置内部类名称映射,用于将字节码内部名称(如 TestClass2$1LocalClass)
      * 解析为 Java 源码中的友好简单名称(如 LocalClass).
@@ -195,7 +210,9 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             StringBuilder sb = new StringBuilder(baseName);
             sb.append('<');
             for (int i = 0; i < type.typeArguments().size(); i++) {
-                if (i > 0) sb.append(", ");
+                if (i > 0) {
+                    sb.append(", ");
+                }
                 sb.append(typeName(type.typeArguments().get(i)));
             }
             sb.append('>');
@@ -302,21 +319,6 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
                     java.util.List<String>> anns) {
         return anns.getOrDefault(path, java.util.List.of());
-    }
-
-    /** 在类型路径末尾追加一个元素(不可变列表). */
-    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> appendPath(
-            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path,
-            int kind, int index) {
-        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> next
-                = new java.util.ArrayList<>(path);
-        next.add(new com.bingbaihanji.bdec.bytecode.model.TypePathElement(kind, index));
-        return next;
-    }
-
-    /** 数组类型的元素类型(剥离最外层一维). */
-    private static JavaType elementOfArray(JavaType arrayType) {
-        return JavaType.elementOf(arrayType);
     }
 
     /** 渲染不带泛型参数的基础类型名 */

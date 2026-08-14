@@ -26,20 +26,6 @@ import com.bingbaihanji.bdec.type.JavaType;
 public record DynamicConstantValue(JavaType type, Kind kind, String owner, String member,
                                    Object literal) implements Value {
 
-    /** 动态常量的表达式种类 */
-    public enum Kind {
-        /** null 常量 */
-        NULL_CONSTANT,
-        /** 基本类型类字面量(int.class 等) */
-        CLASS_LITERAL,
-        /** 限定静态引用(Enum.CONSTANT / Class.FIELD) */
-        QUALIFIED_REF,
-        /** 普通字面量 */
-        LITERAL,
-        /** 未知引导方法:类型默认值兜底 */
-        FALLBACK
-    }
-
     /** nullConstant 引导方法解析结果. */
     public static DynamicConstantValue nullConstant(JavaType type) {
         return new DynamicConstantValue(type, Kind.NULL_CONSTANT, null, null, null);
@@ -58,5 +44,19 @@ public record DynamicConstantValue(JavaType type, Kind kind, String owner, Strin
     /** 未知引导方法的类型默认值兜底. */
     public static DynamicConstantValue fallback(JavaType type) {
         return new DynamicConstantValue(type, Kind.FALLBACK, null, null, null);
+    }
+
+    /** 动态常量的表达式种类 */
+    public enum Kind {
+        /** null 常量 */
+        NULL_CONSTANT,
+        /** 基本类型类字面量(int.class 等) */
+        CLASS_LITERAL,
+        /** 限定静态引用(Enum.CONSTANT / Class.FIELD) */
+        QUALIFIED_REF,
+        /** 普通字面量 */
+        LITERAL,
+        /** 未知引导方法:类型默认值兜底 */
+        FALLBACK
     }
 }

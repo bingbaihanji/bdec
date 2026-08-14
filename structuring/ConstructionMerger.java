@@ -27,10 +27,6 @@ final class ConstructionMerger {
 
     private ConstructionMerger() {}
 
-    /** 合并结果:NEW 指令 ID → 对应 {@code <init>} 调用列表,及需跳过的 INVOKE ID. */
-    record MergeResult(Map<Integer, List<IrInstruction>> newToInit,
-                       Set<Integer> initToSkip) {}
-
     /**
      * 全局预遍历:合并跨组的 NEW + INVOKE {@code <init>} 对.
      *
@@ -80,4 +76,8 @@ final class ConstructionMerger {
         }
         return new MergeResult(newToInit, initToSkip);
     }
+
+    /** 合并结果:NEW 指令 ID → 对应 {@code <init>} 调用列表,及需跳过的 INVOKE ID. */
+    record MergeResult(Map<Integer, List<IrInstruction>> newToInit,
+                       Set<Integer> initToSkip) {}
 }

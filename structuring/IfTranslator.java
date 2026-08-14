@@ -28,20 +28,21 @@ import java.util.Set;
  * 风格提取的 if 专用翻译逻辑.
  *
  * <p>包含:if-header 检测({@link #detectIfHeader} 按 CFG 结构与后支配树
- * 计算合并点)、分支体翻译({@link #translateBranchBody} 递归结构化嵌套
- * if/loop/switch)、布尔 return 折叠与 short-branch-first 规范化
- * ({@link #translateIf}).依赖归约状态的能力(表达式翻译、作用域追踪、
+ * 计算合并点),分支体翻译({@link #translateBranchBody} 递归结构化嵌套
+ * if/loop/switch),布尔 return 折叠与 short-branch-first 规范化
+ * ({@link #translateIf}).依赖归约状态的能力(表达式翻译,作用域追踪,
  * PHI 分支上下文)通过 {@link ReducerOps} 回调 {@link BlockReducer},
  * 本类保持无状态.</p>
  */
 public final class IfTranslator {
 
     private IfTranslator() {}
+
     /**
      * 翻译 if 结构(ifInfo → IfStatement),reduce() 主循环的 if 分支.
      *
-     * <p>包含:条件提取回退链(组内 → IfInfo 头部 → 全局扫描)、布尔 return
-     * 折叠(空分支 + 尾部 PHI → {@code return cond})、short-branch-first
+     * <p>包含:条件提取回退链(组内 → IfInfo 头部 → 全局扫描),布尔 return
+     * 折叠(空分支 + 尾部 PHI → {@code return cond}),short-branch-first
      * 规范化(大 then + 简单终止 else → {@code if (!cond) { 小 } 大块}).</p>
      */
     static Statement translateIf(ReducerOps ops, IfInfo ifInfo, BlockGroup group, LinearIr ir,

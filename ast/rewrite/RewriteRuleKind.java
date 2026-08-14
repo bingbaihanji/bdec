@@ -5,9 +5,9 @@ import com.bingbaihanji.bdec.BdecConfig;
 /**
  * 重写规则的调度标识(里程碑 Phase 3).
  *
- * <p>替代 {@link AstRewriter} 中按魔法字符串匹配的启用开关。每条重写规则
+ * <p>替代 {@link AstRewriter} 中按魔法字符串匹配的启用开关.每条重写规则
  * 通过 {@link RewriteRule#kind()} 声明自身类别,由本枚举集中映射到
- * {@link BdecConfig} 对应的功能开关,消除字符串与配置项的隐式耦合。</p>
+ * {@link BdecConfig} 对应的功能开关,消除字符串与配置项的隐式耦合.</p>
  */
 public enum RewriteRuleKind {
 

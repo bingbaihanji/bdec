@@ -1,6 +1,16 @@
 package com.bingbaihanji.bdec.structuring;
 
-import com.bingbaihanji.bdec.ast.expr.*;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
+import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
@@ -17,6 +27,7 @@ import com.bingbaihanji.bdec.ir.Variable;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 import com.bingbaihanji.bdec.type.TypeResolver;
+
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -25,16 +36,16 @@ import java.util.Set;
 /**
  * 语句级工具方法集合(从 BlockReducer 抽取).
  *
- * <p>本类集中存放无状态、与归约上下文无关的纯函数:
- * 表达式/语句形状判断、后置自增折叠、循环声明提升、
- * 指令分类与布尔值判定等. 名称识别、结构比较、return 归一化
+ * <p>本类集中存放无状态,与归约上下文无关的纯函数:
+ * 表达式/语句形状判断,后置自增折叠,循环声明提升,
+ * 指令分类与布尔值判定等. 名称识别,结构比较,return 归一化
  * 已分别拆至 {@link NameUtils}/{@link ComparisonUtils}/{@link ReturnNormalizer}.</p>
  */
 final class StatementUtils {
 
     private StatementUtils() {}
 
-/** 判断指令是否产生副作用,从而应成为一条语句 */
+    /** 判断指令是否产生副作用,从而应成为一条语句 */
     static boolean isStatementRoot(IrInstruction insn) {
         return switch (insn.opcode()) {
             case STORE, RETURN, THROW, FIELD_STORE, ARRAY_STORE -> true;
@@ -46,14 +57,14 @@ final class StatementUtils {
         };
     }
 
-/** 判断表达式是否为后置自增/自减表达式 */
+    /** 判断表达式是否为后置自增/自减表达式 */
     static boolean isPostIncDec(Expression e) {
         return e instanceof UnExpr u
                 && (u.operator() == UnaryOperator.POST_INC
                 || u.operator() == UnaryOperator.POST_DEC);
     }
 
-/** 将后置自增/自减折叠进语句中对该变量的首个引用.
+    /** 将后置自增/自减折叠进语句中对该变量的首个引用.
      *  例:println(v) + v++ → println(v++).不匹配时返回 null. */
     static Statement foldPostInc(Statement s, String varName, UnaryOperator op) {
         if (s instanceof ExpressionStatement es) {
@@ -65,7 +76,7 @@ final class StatementUtils {
         return null;
     }
 
-/** 递归在表达式中查找变量引用并替换为后置自增/自减表达式 */
+    /** 递归在表达式中查找变量引用并替换为后置自增/自减表达式 */
     static Expression foldPostIncInExpr(Expression e, String varName, UnaryOperator op) {
         if (e == null) {
             return null;
@@ -115,7 +126,7 @@ final class StatementUtils {
         return e;
     }
 
-/** 判断表达式是否可忽略——仅裸变量或临时引用 */
+    /** 判断表达式是否可忽略——仅裸变量或临时引用 */
     static boolean isIgnorableExpr(Expression e) {
         if (e instanceof VarExpr v) {
             String name = v.name();
@@ -133,14 +144,14 @@ final class StatementUtils {
         return false;
     }
 
-/** 判断表达式是否产生 void 类型(如 void 方法调用) */
+    /** 判断表达式是否产生 void 类型(如 void 方法调用) */
     static boolean isVoidExpr(Expression e) {
         return e instanceof InvocationExpr inv
                 && inv.returnType() != null
                 && inv.returnType().kind() == TypeKind.VOID;
     }
 
-/** 判断表达式是否为(复合)赋值表达式.
+    /** 判断表达式是否为(复合)赋值表达式.
      *  赋值表达式不能安全地提升为 return 表达式——其类型可能与方法返回类型不匹配. */
     static boolean isAssignExpr(Expression e) {
         return e instanceof com.bingbaihanji.bdec.ast.expr.AssignExpr
@@ -151,7 +162,7 @@ final class StatementUtils {
                 == com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC);
     }
 
-/** 判断语句块是否为空或仅包含空块 */
+    /** 判断语句块是否为空或仅包含空块 */
     static boolean isEmptyBlock(Statement s) {
         if (s instanceof BlockStatement bs) {
             return bs.statements().isEmpty()
@@ -226,7 +237,7 @@ final class StatementUtils {
         }
     }
 
-/** 判断表达式是否为指定值的布尔字面量 */
+    /** 判断表达式是否为指定值的布尔字面量 */
     static boolean isBooleanLit(Expression e, boolean expected) {
         if (e instanceof LitExpr lit) {
             Object v = lit.value();
@@ -235,7 +246,7 @@ final class StatementUtils {
         return false;
     }
 
-/** 检测自增/自减模式:x = x + 1 → x++, x = x - 1 → x-- */
+    /** 检测自增/自减模式:x = x + 1 → x++, x = x - 1 → x-- */
     static UnaryOperator detectIncrement(BinExpr bin) {
         boolean isOne = bin.right() instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
                 && lr.value() instanceof Integer i && i == 1;
@@ -251,7 +262,7 @@ final class StatementUtils {
         return null;
     }
 
-/** 递归收集所有语句,展开嵌套的 BlockStatement */
+    /** 递归收集所有语句,展开嵌套的 BlockStatement */
     static List<Statement> collectStatements(Statement s) {
         List<Statement> result = new ArrayList<>();
         if (s instanceof BlockStatement bs) {
@@ -264,7 +275,7 @@ final class StatementUtils {
         return result;
     }
 
-/** 去除内部类/局部类/匿名类构造函数的隐式外围实例(this)参数.
+    /** 去除内部类/局部类/匿名类构造函数的隐式外围实例(this)参数.
      *  在 Java 源码中,{@code new InnerClass()} 不需要显式传递 this,
      *  而字节码中内部类构造函数会包含外围实例作为第一个参数. */
     static List<Expression> stripEnclosingThis(JavaType targetType, List<Expression> args) {
@@ -291,7 +302,7 @@ final class StatementUtils {
         return args;
     }
 
-/** 检查指令列表中是否包含 NEW 指令(对象创建).
+    /** 检查指令列表中是否包含 NEW 指令(对象创建).
      *  用于区分 catch 子句(创建新异常)与 finally 块(重新抛出原始异常). */
     static boolean containsNewInstruction(List<IrInstruction> insns) {
         for (IrInstruction i : insns) {
@@ -302,7 +313,7 @@ final class StatementUtils {
         return false;
     }
 
-/** 检查处理器基本块中是否包含 NEW 指令(用于区分 catch 与 finally). */
+    /** 检查处理器基本块中是否包含 NEW 指令(用于区分 catch 与 finally). */
     static boolean handlerBlockContainsNew(BasicBlock handlerBlock, LinearIr ir) {
         if (handlerBlock == null || ir == null) {
             return false;
@@ -315,7 +326,7 @@ final class StatementUtils {
         return false;
     }
 
-/** 判断值是否简单到可以内联(常量或基本表达式) */
+    /** 判断值是否简单到可以内联(常量或基本表达式) */
     static boolean isSimpleValue(Value v) {
         if (v instanceof ConstantValue) {
             return true;
@@ -329,7 +340,7 @@ final class StatementUtils {
         return false;
     }
 
-/** 判断 Value 是否表示布尔值(变量,方法返回值等).
+    /** 判断 Value 是否表示布尔值(变量,方法返回值等).
      *  用于生成正确的 {@code if(flag)} / {@code if(!flag)} 语句,
      *  而不是 {@code if(flag != 0)}——后者对布尔表达式会产生类型不匹配错误. */
     static boolean isBooleanValue(Value v) {
@@ -358,7 +369,7 @@ final class StatementUtils {
         return false;
     }
 
-/** 调试用语句描述 */
+    /** 调试用语句描述 */
     static String describeStmt(Statement s) {
         if (s instanceof BlockStatement bs) {
             return "{" + bs.statements().stream().map(StatementUtils::describeStmt)
@@ -373,12 +384,12 @@ final class StatementUtils {
         return s.getClass().getSimpleName();
     }
 
-/** continue 语句 */
+    /** continue 语句 */
     static Statement continueStmt() {
         return new com.bingbaihanji.bdec.ast.stmt.ContinueStatement();
     }
 
-/** 语句列表折叠为单语句或块 */
+    /** 语句列表折叠为单语句或块 */
     static Statement blockOf(List<Statement> stmts) {
         if (stmts.isEmpty()) {
             return new BlockStatement(List.of());
@@ -389,7 +400,7 @@ final class StatementUtils {
         return new BlockStatement(stmts);
     }
 
-/** 将字节码操作码映射为 UNARY IR 指令的一元运算符 */
+    /** 将字节码操作码映射为 UNARY IR 指令的一元运算符 */
     static UnaryOperator inferUnaryOp(int bc) {
         return switch (bc) {
             case 0x74, 0x75, 0x76, 0x77 -> UnaryOperator.NEG; // INEG, LNEG, FNEG, DNEG
@@ -397,7 +408,7 @@ final class StatementUtils {
         };
     }
 
-/**
+    /**
      * 从实现方法描述符构建带类型的参数占位符.
      * 用于无捕获变量的 lambda,此时 INDY 操作数为空,
      * 无法从操作数推导参数类型.此方法从实现方法描述符(如 "(II)I")

@@ -92,7 +92,7 @@ public final class SignatureParser {
         return extractTypeParams(signature); // 格式相同:以 <...> 开头
     }
 
-    /** 内部名 → 简短显示名(去包名、去 java.lang. 前缀) */
+    /** 内部名 → 简短显示名(去包名,去 java.lang. 前缀) */
     private static String simpleTypeName(String internalName) {
         String name = internalName.replace('/', '.');
         if (name.startsWith("java.lang.") && name.indexOf('.', 10) < 0) {
@@ -155,7 +155,7 @@ public final class SignatureParser {
      *
      * <p>类型变量产 {@code kind=TYPE_VARIABLE}(descriptor 仍为 "T名字;",
      * displayName 仍为裸变量名),与 parseClassSignature/parseGenericType
-     * 一致,CLASS 伪装已彻底消除。</p>
+     * 一致,CLASS 伪装已彻底消除.</p>
      *
      * @param signature 方法签名属性字符串(如 {@code <T:Ljava/lang/Object;>(TT;TU;)V})
      * @return {@code [paramTypes..., returnType]},解析失败返回 {@code null}
@@ -228,7 +228,7 @@ public final class SignatureParser {
     /**
      * 将类型签名字符串解析为 JavaType 结构体.
      * 类型变量产 {@code kind=TYPE_VARIABLE}(descriptor="T名字;",
-     * internalName=裸变量名),所有入口一致,无 CLASS 伪装。
+     * internalName=裸变量名),所有入口一致,无 CLASS 伪装.
      *
      * @param sig 完整签名字符串
      * @param i   当前解析起始位置
@@ -274,7 +274,7 @@ public final class SignatureParser {
             case 'T': {
                 int semi = sig.indexOf(';', i);
                 String tvName = sig.substring(i + 1, semi);
-                // 类型变量:kind=TYPE_VARIABLE,descriptor 保持 "T<名字>;"、
+                // 类型变量:kind=TYPE_VARIABLE,descriptor 保持 "T<名字>;",
                 // internalName 保持裸变量名(displayName 渲染为裸名).
                 out.set(JavaType.typeVariable(tvName));
                 return semi + 1;

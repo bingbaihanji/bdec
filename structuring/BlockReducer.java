@@ -45,19 +45,18 @@ import java.util.Set;
  * <p><b>职责拆分</b>(避免上帝类,参考 Vineflower 每模式一处理器的做法):
  * <ul>
  *   <li>{@link StatementUtils} — 无状态的语句/表达式形状判断与纯变换
- *       (后置自增折叠、return 包装、语句文本化等);</li>
- *   <li>{@link AstCleanup} — 无状态的 AST 后处理(同步前导剥离、
- *       catch 泄漏清理、finally 去重、case 终结判断、条件简化);</li>
- *   <li>{@link SwitchTranslator} — switch 模式翻译(case 区域结构化、
- *       switch 表达式结果识别、typeSwitch 守卫),经 {@link ReducerOps} 回调;</li>
- *   <li>{@link LoopTranslator} — 循环模式翻译(循环体结构化 continue/break、
+ *       (后置自增折叠,return 包装,语句文本化等);</li>
+ *   <li>{@link AstCleanup} — 无状态的 AST 后处理(同步前导剥离,
+ *       catch 泄漏清理,finally 去重,case 终结判断,条件简化);</li>
+ *   <li>{@link SwitchTranslator} — switch 模式翻译(case 区域结构化,
+ *       switch 表达式结果识别,typeSwitch 守卫),经 {@link ReducerOps} 回调;</li>
+ *   <li>{@link LoopTranslator} — 循环模式翻译(循环体结构化 continue/break,
  *       do-while/while 包装与条件引用声明提升),经 {@link ReducerOps} 回调;</li>
  *   <li>本类实现 {@link ReducerOps},仅保留依赖归约状态的编排逻辑:
- *       块分组翻译、if/try 结构化、IR→表达式树的语境化解析.</li>
+ *       块分组翻译,if/try 结构化,IR→表达式树的语境化解析.</li>
  * </ul>
  */
 public final class BlockReducer implements ReducerOps {
-
 
 
     /** 当前方法是否为实例方法 */
@@ -66,6 +65,9 @@ public final class BlockReducer implements ReducerOps {
     /** 已声明变量名的作用域栈.进入/离开分支体时压入/弹出,
      *  确保每个分支拥有独立的临时变量声明. */
     private final Deque<Set<String>> declaredVarNameStack = new ArrayDeque<>();
+
+    /** INDY 指令翻译器,将 invokedynamic 模式转换为 LambdaExpr */
+    private final IndyTranslator indyTranslator;
 
     /** NEW+INIT 合并的临时状态(CondenseConstruction 模式) */
     private Map<Integer, List<IrInstruction>> currentNewToInit = Map.of();
@@ -108,15 +110,25 @@ public final class BlockReducer implements ReducerOps {
      *  而内联变量,但该变量在其他组中仍有引用. */
     private Map<Variable, Integer> globalVarUseCount = Map.of();
 
-    /** INDY 指令翻译器,将 invokedynamic 模式转换为 LambdaExpr */
-    private final IndyTranslator indyTranslator;
-
     public BlockReducer() {this(true);}
 
     public BlockReducer(boolean isInstanceMethod) {
         this.isInstanceMethod = isInstanceMethod;
         this.indyTranslator = new IndyTranslator(
                 this::getIndyAnnotation, this::valueToExpr);
+    }
+
+    /**
+     * 渲染 Variable 携带的 JSR-308 类型注解(0x40 局部变量),
+     * 按类型路径分组为渲染行映射.
+     * 注解类型名取简单名(与声明点同包/已导入假设一致).
+     */
+    private static java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+            List<String>> renderVarTypeAnnotations(Variable v) {
+        if (v.typeAnnotations() == null || v.typeAnnotations().isEmpty()) {
+            return java.util.Map.of();
+        }
+        return com.bingbaihanji.bdec.ast.AnnotationRenderer.groupByTypePath(v.typeAnnotations());
     }
 
     /**
@@ -248,8 +260,12 @@ public final class BlockReducer implements ReducerOps {
             //(用于 when 守卫)和回边(用于 restart 循环).
             // switch 覆盖 if-else 和 loop 注解.
             if (switchInfo != null) {
-                if (ifInfo != null) ifInfo = null;
-                if (loopInfo != null) loopInfo = null;
+                if (ifInfo != null) {
+                    ifInfo = null;
+                }
+                if (loopInfo != null) {
+                    loopInfo = null;
+                }
             } else if (loopInfo != null) {
                 // 循环头块通常也是条件块(while 风格测试在顶部),
                 // 未折叠循环(体内含 continue/break)会同时携带 IfInfo——
@@ -397,12 +413,15 @@ public final class BlockReducer implements ReducerOps {
     /** 检查循环体内是否包含 switch 块(typeSwitch 重启循环). */
     private boolean loopBodyContainsSwitch(LoopInfo loop, Map<BasicBlock, SwitchInfo> switchAnns) {
         for (BasicBlock b : loop.body()) {
-            if (b.containsSwitch()) return true;
-            if (switchAnns.containsKey(b)) return true;
+            if (b.containsSwitch()) {
+                return true;
+            }
+            if (switchAnns.containsKey(b)) {
+                return true;
+            }
         }
         return false;
     }
-
 
     private IfInfo findIfAnnotation(BlockGroup group, Map<BasicBlock, IfInfo> ifAnns) {
         for (BasicBlock b : group.blocks()) {
@@ -422,7 +441,6 @@ public final class BlockReducer implements ReducerOps {
         return null;
     }
 
-
     private SwitchInfo findSwitchAnnotation(BlockGroup group, Map<BasicBlock, SwitchInfo> switchAnns) {
         for (BasicBlock b : group.blocks()) {
             if (switchAnns.containsKey(b)) {
@@ -430,26 +448,6 @@ public final class BlockReducer implements ReducerOps {
             }
         }
         return null;
-    }
-
-
-
-
-
-
-
-
-    /**
-     * 渲染 Variable 携带的 JSR-308 类型注解(0x40 局部变量),
-     * 按类型路径分组为渲染行映射.
-     * 注解类型名取简单名(与声明点同包/已导入假设一致).
-     */
-    private static java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
-            List<String>> renderVarTypeAnnotations(Variable v) {
-        if (v.typeAnnotations() == null || v.typeAnnotations().isEmpty()) {
-            return java.util.Map.of();
-        }
-        return com.bingbaihanji.bdec.ast.AnnotationRenderer.groupByTypePath(v.typeAnnotations());
     }
 
     /**
@@ -691,7 +689,6 @@ public final class BlockReducer implements ReducerOps {
         }
         return best != null ? translateExpr(best) : null;
     }
-
 
 
     /**
@@ -1215,7 +1212,6 @@ public final class BlockReducer implements ReducerOps {
         }
         return params;
     }
-
 
 
     /** 从 INDY 注解属性中获取字符串值 */
@@ -1873,10 +1869,6 @@ public final class BlockReducer implements ReducerOps {
         }
         return new BlockStatement(stmts);
     }
-
-
-
-
 
 
     /** 将单个基本块组翻译为语句列表 */

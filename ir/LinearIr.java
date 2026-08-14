@@ -28,14 +28,14 @@ public class LinearIr {
     /** 关联的控制流图 */
     private final ControlFlowGraph cfg;
 
-    /** IR指令列表(由优化 pass 通过 {@link #replaceInstructions} 整体替换) */
-    private List<IrInstruction> instructions;
-
     /** 基本块ID到指令列表的映射 */
     private final Map<Integer, List<IrInstruction>> blockInstructions;
 
     /** 变量列表 */
     private final List<Variable> variables;
+
+    /** IR指令列表(由优化 pass 通过 {@link #replaceInstructions} 整体替换) */
+    private List<IrInstruction> instructions;
 
     /** 源偏移量到IR指令列表的映射(用于合并/虚拟块的查找).
      *  每个字节码偏移量可能对应多条IR指令,因此存储为列表. */

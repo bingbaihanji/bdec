@@ -293,8 +293,8 @@ public class AstBuilder {
             // 否则 "@A U" 会破坏类型变量名匹配(输出被擦除的 Object).
             List<String> methodTypeParams = new ArrayList<>(
                     method.signature() != null && !method.signature().isEmpty()
-                    ? SignatureParser.extractMethodTypeParams(method.signature())
-                    : List.of());
+                            ? SignatureParser.extractMethodTypeParams(method.signature())
+                            : List.of());
             // 收集方法级类型参数声明注解(0x01),按参数下标缓存
             java.util.Map<Integer, String> methodTypeParamAnns = new java.util.HashMap<>();
             for (var ta : method.typeAnnotations()) {
@@ -391,7 +391,7 @@ public class AstBuilder {
             }
 
             // JSR-308 类型注解(RuntimeVisibleTypeAnnotations):
-            // 返回类型(0x14)、形式参数类型(0x16,按参数下标对齐)、throws 类型(0x17)
+            // 返回类型(0x14),形式参数类型(0x16,按参数下标对齐),throws 类型(0x17)
             var typeAnns = method.typeAnnotations();
             java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
                     List<String>> retTypeAnns = buildTypeAnnotationMap(typeAnns,
@@ -460,7 +460,7 @@ public class AstBuilder {
                 ? (isAnnotationType ? "@interface" : "interface")
                 : (classFile.accessFlags() & AccessFlags.ACC_ENUM) != 0 ? "enum" : "class";
 
-        // 解析类签名,重建父类/接口的泛型类型参数(如 Base<String>、List<Integer>).
+        // 解析类签名,重建父类/接口的泛型类型参数(如 Base<String>,List<Integer>).
         // 无签名时(非泛型)退化为简单名称.
         boolean isInterfaceType = (classFile.accessFlags() & AccessFlags.ACC_INTERFACE) != 0;
         JavaType[] superAndInterfaces = SignatureParser.parseClassSignature(classFile.signature());
@@ -495,9 +495,9 @@ public class AstBuilder {
             if (isAnnotationType && "java/lang/annotation/Annotation".equals(ifName)) {
                 continue;
             }
-            // 类签名中接口紧跟父类之后(类:父类占 index 0;接口:无父类,接口从 0 起)。
+            // 类签名中接口紧跟父类之后(类:父类占 index 0;接口:无父类,接口从 0 起).
             // 父类若为隐式 java/lang/Object,javac 仍会在签名中占位 Ljava/lang/Object;,
-            // 因此偏移量取决于是否为接口,而非显式父类是否存在。
+            // 因此偏移量取决于是否为接口,而非显式父类是否存在.
             int sigPos = (isInterfaceType ? 0 : 1) + sigInterfaceIdx;
             String simple = (superAndInterfaces != null && sigPos < superAndInterfaces.length)
                     ? TypeReferenceUtil.renderClassRef(superAndInterfaces[sigPos], ifTypeArgAnns, imports, simpleName)
@@ -654,7 +654,7 @@ public class AstBuilder {
      *
      * @param entries    方法/字段的 RuntimeVisibleTypeAnnotations 条目
      * @param targetType 目标类型(字段 0x13 / 返回 0x14 / 参数 0x16 / throws 0x17)
-     * @param targetIdx  带下标目标的索引(参数下标、throws 下标),无下标目标传 -1
+     * @param targetIdx  带下标目标的索引(参数下标,throws 下标),无下标目标传 -1
      * @return 类型路径 → 渲染后注解行列表的映射
      */
     private java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,

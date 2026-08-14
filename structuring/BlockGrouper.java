@@ -113,20 +113,35 @@ final class BlockGrouper {
         for (BlockGroup group : groups) {
             boolean hasHandler = false, hasNonHandler = false;
             for (BasicBlock b : group.blocks()) {
-                if (handlerBlocks.contains(b)) hasHandler = true;
-                else hasNonHandler = true;
+                if (handlerBlocks.contains(b)) {
+                    hasHandler = true;
+                } else {
+                    hasNonHandler = true;
+                }
             }
             if (hasHandler && hasNonHandler) {
                 BlockGroup hg = null, ng = null;
                 for (BasicBlock b : group.blocks()) {
                     if (handlerBlocks.contains(b)) {
-                        if (hg == null) hg = new BlockGroup(b); else hg.add(b);
+                        if (hg == null) {
+                            hg = new BlockGroup(b);
+                        } else {
+                            hg.add(b);
+                        }
                     } else {
-                        if (ng == null) ng = new BlockGroup(b); else ng.add(b);
+                        if (ng == null) {
+                            ng = new BlockGroup(b);
+                        } else {
+                            ng.add(b);
+                        }
                     }
                 }
-                if (hg != null) result.add(hg);
-                if (ng != null) result.add(ng);
+                if (hg != null) {
+                    result.add(hg);
+                }
+                if (ng != null) {
+                    result.add(ng);
+                }
             } else {
                 result.add(group);
             }

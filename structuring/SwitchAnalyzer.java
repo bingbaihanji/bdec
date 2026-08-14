@@ -1,12 +1,12 @@
 package com.bingbaihanji.bdec.structuring;
 
+import com.bingbaihanji.bdec.bytecode.opcode.Opcode;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowEdge;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.DominatorTree;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
 import com.bingbaihanji.bdec.cfg.PostDominatorTree;
-import com.bingbaihanji.bdec.bytecode.opcode.Opcode;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -123,7 +123,7 @@ public final class SwitchAnalyzer {
                 if (!visited.add(succ)) {
                     continue;
                 }
-                // 遇到其他 case 头、follow 块或 exit 块时停止
+                // 遇到其他 case 头,follow 块或 exit 块时停止
                 if (succ == graph.exitBlock()) {
                     continue;
                 }

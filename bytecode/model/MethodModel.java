@@ -181,8 +181,8 @@ public record MethodModel(
     /**
      * 按字节码偏移量查找局部变量的泛型签名(LocalVariableTypeTable).
      *
-     * <p>查找层次与 {@link #lookupVarName} 相同:精确作用域覆盖、
-     * (pc, pc+4] 窗口(条目 startPc 指向 STORE 之后)、
+     * <p>查找层次与 {@link #lookupVarName} 相同:精确作用域覆盖,
+     * (pc, pc+4] 窗口(条目 startPc 指向 STORE 之后),
      * startPc 不晚于 pc 的最近条目.窗口与回退层按变量名对齐,
      * 防止槽位复用时把前一个变量的泛型签名赋给新变量.</p>
      *
@@ -223,7 +223,7 @@ public record MethodModel(
      * @return 最佳条目,无匹配则返回 {@code null}
      */
     private LocalVariableEntry findWindowOrFallback(int slot, int pc,
-                                                     Predicate<LocalVariableEntry> filter) {
+                                                    Predicate<LocalVariableEntry> filter) {
         LocalVariableEntry windowBest = null;
         for (LocalVariableEntry entry : localVarEntries) {
             if (entry.slot() == slot && entry.startPc() > pc && entry.startPc() <= pc + 4

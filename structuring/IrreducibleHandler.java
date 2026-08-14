@@ -7,7 +7,7 @@ import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
  *
  * <p>当 CFG 无法完全归约为结构化形式时作为回退方案.
  * 当前为透传占位实现(直接返回原图),后续可在此实现
- * 节点分裂、标记化 break/continue、goto 回退等降级策略.
+ * 节点分裂,标记化 break/continue,goto 回退等降级策略.
  */
 public final class IrreducibleHandler {
 
