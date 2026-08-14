@@ -28,16 +28,6 @@ public record JavaType(
         JavaType element
 ) {
 
-    /**
-     * 五参兼容构造:element 为 null,与旧记录形态调用点完全一致.
-     * 经此构造的数组(element=null)在 elementOf/displayName 中
-     * 走描述符重建旧路径,行为不变.
-     */
-    public JavaType(TypeKind kind, String internalName, String descriptor,
-                    List<JavaType> typeArguments, int arrayDimensions) {
-        this(kind, internalName, descriptor, typeArguments, arrayDimensions, null);
-    }
-
     /** void 基本类型 */
     public static final JavaType VOID = primitive(TypeKind.VOID, "V");
 
@@ -64,6 +54,16 @@ public record JavaType(
 
     /** double 基本类型 */
     public static final JavaType DOUBLE = primitive(TypeKind.DOUBLE, "D");
+
+    /**
+     * 五参兼容构造:element 为 null,与旧记录形态调用点完全一致.
+     * 经此构造的数组(element=null)在 elementOf/displayName 中
+     * 走描述符重建旧路径,行为不变.
+     */
+    public JavaType(TypeKind kind, String internalName, String descriptor,
+                    List<JavaType> typeArguments, int arrayDimensions) {
+        this(kind, internalName, descriptor, typeArguments, arrayDimensions, null);
+    }
 
     /**
      * 创建基本类型的工厂方法.
@@ -111,7 +111,7 @@ public record JavaType(
      * 不再经描述符擦除丢失);若元素链含类型变量,internalName 携带
      * 首个类型变量名——AstBuilder 签名覆盖闸门的
      * {@code isClassTypeParam} 按 internalName 与类型参数名匹配,
-     * 从而使 {@code List<T>[]} 这类签名自动放行覆盖擦除描述符。</p>
+     * 从而使 {@code List<T>[]} 这类签名自动放行覆盖擦除描述符.</p>
      *
      * @param elementType 数组元素类型
      * @param dimensions  数组维度数
@@ -129,7 +129,7 @@ public record JavaType(
      *
      * <p>优先返回工厂存储的元素(保留泛型参数,如 {@code List<T>[]} →
      * {@code List<T>});element 为 null(旧式五参构造)时回退描述符
-     * 重建,行为与旧实现一致。</p>
+     * 重建,行为与旧实现一致.</p>
      *
      * @param arrayType 数组类型
      * @return 元素类型,若输入非数组类型则原样返回
@@ -149,7 +149,7 @@ public record JavaType(
      * 深度优先查找类型树中首个类型变量的名字.
      *
      * <p>CLASS/WILDCARD 沿 typeArguments 递归,ARRAY 沿 element 递归,
-     * 未找到返回 null。</p>
+     * 未找到返回 null.</p>
      *
      * @param type 待检查的类型
      * @return 首个类型变量名,无则 null
@@ -203,7 +203,7 @@ public record JavaType(
                 // 经 elementOf 重建数组元素类型时也产 TYPE_VARIABLE,
                 // 与 SignatureParser / JavaType.typeVariable 的表示一致,
                 // 不再伪装为 CLASS(旧伪装 internalName 携带整个 "TT;",
-                // 渲染出非法的 "TT;[]")。
+                // 渲染出非法的 "TT;[]").
                 if (desc.length() > 2 && desc.charAt(0) == 'T'
                         && desc.charAt(desc.length() - 1) == ';') {
                     yield typeVariable(desc.substring(1, desc.length() - 1));

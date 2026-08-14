@@ -51,7 +51,7 @@ public class ControlFlowStructurer {
      *  <p>BasicBlock 的 equals/hashCode 仅基于 id——若使用 blockCount+1000
      *  作为虚拟块 id,连续折叠时 blockCount 可能不变(折叠 N 块再新增 1 块),
      *  导致同一图中出现多个 id 相同的块,使 CFG 的 HashMap 和注解映射键碰撞,
-     *  边丢失、结构破坏.单调计数器保证全局唯一.</p> */
+     *  边丢失,结构破坏.单调计数器保证全局唯一.</p> */
     private int nextVirtualBlockId = 1_000_000;
 
     /** 最近一次折叠创建的虚拟块 ID(供 findReplacementBlock 查找) */
@@ -220,11 +220,21 @@ public class ControlFlowStructurer {
         System.err.println(title);
         for (BasicBlock b : graph.blocks()) {
             String tag = "";
-            if (b == graph.entryBlock()) tag += "[ENTRY] ";
-            if (b == graph.exitBlock()) tag += "[EXIT] ";
-            if (loopAnns.containsKey(b)) tag += "[LOOP] ";
-            if (switchAnns.containsKey(b)) tag += "[SWITCH] ";
-            if (ifAnns.containsKey(b)) tag += "[IF] ";
+            if (b == graph.entryBlock()) {
+                tag += "[ENTRY] ";
+            }
+            if (b == graph.exitBlock()) {
+                tag += "[EXIT] ";
+            }
+            if (loopAnns.containsKey(b)) {
+                tag += "[LOOP] ";
+            }
+            if (switchAnns.containsKey(b)) {
+                tag += "[SWITCH] ";
+            }
+            if (ifAnns.containsKey(b)) {
+                tag += "[IF] ";
+            }
             System.err.println("  B" + b.id() + " " + tag
                     + " off=" + b.startOffset() + " insns=" + b.instructions().size());
             for (var e : graph.outgoingOf(b)) {
@@ -312,7 +322,7 @@ public class ControlFlowStructurer {
     /** 检查循环体内是否含内部分支(continue/break 模式).
      *  <p>非头块以条件跳转结尾(体内 if),或存在指向非头体内块的 GOTO
      *  (continue 桥接块)——折叠会扁平化这些分支,丢失控制流结构.
-     *  while 风格的测试在头块、增量在 latch 的普通循环不受影响.</p> */
+     *  while 风格的测试在头块,增量在 latch 的普通循环不受影响.</p> */
     private boolean hasInternalBranches(LoopInfo loop, ControlFlowGraph graph) {
         for (BasicBlock b : loop.body()) {
             if (b == loop.header()) {
@@ -362,16 +372,24 @@ public class ControlFlowStructurer {
 
     /** 检查基本块是否为 switch 头(包含 switch 指令或存在于注解映射中) */
     private boolean isSwitchHeader(BasicBlock block, Map<BasicBlock, SwitchInfo> switchAnns) {
-        if (switchAnns.containsKey(block)) return true;
+        if (switchAnns.containsKey(block)) {
+            return true;
+        }
         // 按 ID 匹配(折叠后块 ID 可能变化)
         for (BasicBlock key : switchAnns.keySet()) {
-            if (key.id() == block.id()) return true;
+            if (key.id() == block.id()) {
+                return true;
+            }
         }
         // 按内容检测:块中是否包含 tableswitch/lookupswitch 指令
-        if (block.containsSwitch()) return true;
+        if (block.containsSwitch()) {
+            return true;
+        }
         // 按起始偏移量匹配(合并后 startOffset 可能保留)
         for (BasicBlock key : switchAnns.keySet()) {
-            if (key.startOffset() == block.startOffset()) return true;
+            if (key.startOffset() == block.startOffset()) {
+                return true;
+            }
         }
         return false;
     }

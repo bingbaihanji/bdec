@@ -17,9 +17,9 @@ import java.util.Set;
  * <p>设计参照 Vineflower 的"每模式一处理器"结构
  * ({@code EliminateLoopsHelper}/{@code IfHelper} 等聚焦助手类共享
  * 方法上下文)与 CFR 的 {@code OperationFactory} 模式
- * (操作码翻译与状态解耦):翻译器({@link SwitchTranslator}、
+ * (操作码翻译与状态解耦):翻译器({@link SwitchTranslator},
  * {@link LoopTranslator})只关心自身的模式,所需的归约状态
- * (表达式翻译、作用域追踪、PHI 分支上下文)全部通过本接口回调
+ * (表达式翻译,作用域追踪,PHI 分支上下文)全部通过本接口回调
  * {@link BlockReducer},避免翻译逻辑与归约状态相互纠缠.</p>
  */
 public interface ReducerOps {

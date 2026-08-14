@@ -287,8 +287,8 @@ public class LambdaRewriter implements RewriteRule {
                     continue;
                 }
                 members.add(withBody(md, md.body() != null
-                                ? rewriteStatement(md.body(), bootstrapMethods, cfm, ctx)
-                                : null));
+                        ? rewriteStatement(md.body(), bootstrapMethods, cfm, ctx)
+                        : null));
             } else {
                 members.add(m);
             }

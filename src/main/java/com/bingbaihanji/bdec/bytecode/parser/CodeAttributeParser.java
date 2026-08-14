@@ -16,9 +16,9 @@ import java.util.Map;
 /**
  * Code 属性解析器(里程碑 Phase 3).
  *
- * <p>解析方法的 {@code Code} 属性(JVMS 4.7.3):字节码指令、异常处理器表,
- * 以及 Code 的子属性(LocalVariableTable、LocalVariableTypeTable、
- * RuntimeVisibleTypeAnnotations)。由 {@link StructureParser#parseMethods} 复用。</p>
+ * <p>解析方法的 {@code Code} 属性(JVMS 4.7.3):字节码指令,异常处理器表,
+ * 以及 Code 的子属性(LocalVariableTable,LocalVariableTypeTable,
+ * RuntimeVisibleTypeAnnotations).由 {@link StructureParser#parseMethods} 复用.</p>
  */
 final class CodeAttributeParser {
 
@@ -27,27 +27,6 @@ final class CodeAttributeParser {
 
     /** 注解解析器,用于解析 Code 内的类型注解. */
     private final AnnotationParser annotationParser = new AnnotationParser();
-
-    /**
-     * Code 属性解析结果(方法体一次最多一个 Code 属性).
-     *
-     * @param maxStack     操作数栈最大深度
-     * @param maxLocals    局部变量表槽位数
-     * @param instructions 字节码指令列表
-     * @param handlers     异常处理器表
-     * @param localVarNames 槽位 → 局部变量名映射(最后出现的名称优先)
-     * @param lvtEntries   局部变量表条目(作用域感知)
-     * @param codeTypeAnns Code 内的类型注解
-     */
-    record CodeAttribute(
-            int maxStack,
-            int maxLocals,
-            List<Instruction> instructions,
-            List<ExceptionHandlerModel> handlers,
-            Map<Integer, String> localVarNames,
-            List<LocalVariableEntry> lvtEntries,
-            List<TypeAnnotationEntry> codeTypeAnns) {
-    }
 
     /**
      * 解析 Code 属性主体(调用方已读入 attribute_name_index 与 attribute_length).
@@ -135,7 +114,7 @@ final class CodeAttributeParser {
                     }
                 }
             } else if ("RuntimeVisibleTypeAnnotations".equals(subAttrName)) {
-                // Code 内的类型注解(局部变量 0x40/0x41、cast/new 等
+                // Code 内的类型注解(局部变量 0x40/0x41,cast/new 等
                 // 偏移量相关目标)——合并到方法级类型注解列表
                 List<TypeAnnotationEntry> codeAnns = annotationParser.parseTypeAnnotations(in, pool);
                 if (codeAnns != null && !codeAnns.isEmpty()) {
@@ -148,5 +127,26 @@ final class CodeAttributeParser {
 
         return new CodeAttribute(maxStack, maxLocals, instructions, handlers,
                 localVarNames, lvtEntries, codeTypeAnns);
+    }
+
+    /**
+     * Code 属性解析结果(方法体一次最多一个 Code 属性).
+     *
+     * @param maxStack     操作数栈最大深度
+     * @param maxLocals    局部变量表槽位数
+     * @param instructions 字节码指令列表
+     * @param handlers     异常处理器表
+     * @param localVarNames 槽位 → 局部变量名映射(最后出现的名称优先)
+     * @param lvtEntries   局部变量表条目(作用域感知)
+     * @param codeTypeAnns Code 内的类型注解
+     */
+    record CodeAttribute(
+            int maxStack,
+            int maxLocals,
+            List<Instruction> instructions,
+            List<ExceptionHandlerModel> handlers,
+            Map<Integer, String> localVarNames,
+            List<LocalVariableEntry> lvtEntries,
+            List<TypeAnnotationEntry> codeTypeAnns) {
     }
 }

@@ -28,9 +28,9 @@ import java.util.Set;
  * "每模式一处理器"风格提取的循环专用翻译逻辑.
  *
  * <p>包含:未折叠循环体的结构化翻译({@link #translateLoopBodyStructured}
- * 按体内出边分类构建 continue/break)、do-while/while 包装
+ * 按体内出边分类构建 continue/break),do-while/while 包装
  * ({@link #wrapLoopStatement} 含条件引用声明提升)等.
- * 依赖归约状态的能力(组翻译、条件提取、后置自增挂起值)
+ * 依赖归约状态的能力(组翻译,条件提取,后置自增挂起值)
  * 通过 {@link ReducerOps} 回调 {@link BlockReducer}.</p>
  */
 public final class LoopTranslator {
@@ -47,11 +47,11 @@ public final class LoopTranslator {
 
     /** 翻译循环体内的一个区域(从 start 出发,止于 latch 与循环出口) */
     static List<Statement> translateLoopRegion(ReducerOps ops, BasicBlock start, BasicBlock latch,
-                                                Set<BasicBlock> body,
-                                                Set<BasicBlock> exitTargets,
-                                                List<BlockGroup> allGroups, LinearIr ir,
-                                                Set<BlockGroup> consumed,
-                                                ControlFlowGraph graph) {
+                                               Set<BasicBlock> body,
+                                               Set<BasicBlock> exitTargets,
+                                               List<BlockGroup> allGroups, LinearIr ir,
+                                               Set<BlockGroup> consumed,
+                                               ControlFlowGraph graph) {
         Set<BasicBlock> region = new LinkedHashSet<>();
         Deque<BasicBlock> queue = new ArrayDeque<>();
         queue.add(start);
@@ -110,9 +110,9 @@ public final class LoopTranslator {
      * 另一分支的区域;latch 块(如 i++)正常翻译为循环体末尾语句.</p>
      */
     static Statement translateLoopBodyStructured(ReducerOps ops, LoopInfo loopInfo, List<BlockGroup> allGroups,
-                                                  LinearIr ir, Set<BlockGroup> consumed,
-                                                  ControlFlowGraph graph,
-                                                  PostDominatorTree postDom) {
+                                                 LinearIr ir, Set<BlockGroup> consumed,
+                                                 ControlFlowGraph graph,
+                                                 PostDominatorTree postDom) {
         Set<BasicBlock> body = loopInfo.body();
         BasicBlock header = loopInfo.header();
         BasicBlock latch = loopInfo.latches().isEmpty()
@@ -165,11 +165,11 @@ public final class LoopTranslator {
 
     /** 翻译循环体内的单个组:条件块构建 if+continue/break,普通块常规翻译 */
     static Statement translateLoopBodyGroup(ReducerOps ops, BlockGroup g, BasicBlock latch,
-                                             Set<BasicBlock> body,
-                                             Set<BasicBlock> exitTargets,
-                                             List<BlockGroup> allGroups, LinearIr ir,
-                                             Set<BlockGroup> consumed,
-                                             ControlFlowGraph graph) {
+                                            Set<BasicBlock> body,
+                                            Set<BasicBlock> exitTargets,
+                                            List<BlockGroup> allGroups, LinearIr ir,
+                                            Set<BlockGroup> consumed,
+                                            ControlFlowGraph graph) {
         BasicBlock last = g.last();
         // 嵌套循环:组是另一个循环的头——递归结构化内层循环体
         for (BasicBlock gb : g.blocks()) {
@@ -262,8 +262,8 @@ public final class LoopTranslator {
 
     /** 检查从 t 出发的所有非异常路径是否仅通向 latch(纯 goto 链,无语句内容) */
     static boolean leadsOnlyTo(BasicBlock t, BasicBlock latch, Set<BasicBlock> body,
-                                ControlFlowGraph graph, LinearIr ir,
-                                Set<BasicBlock> visited) {
+                               ControlFlowGraph graph, LinearIr ir,
+                               Set<BasicBlock> visited) {
         if (!visited.add(t)) {
             return true;
         }
@@ -293,8 +293,8 @@ public final class LoopTranslator {
 
     /** 检查从 t 出发的所有非异常路径是否仅通向循环出口(纯 goto 链,无语句内容) */
     static boolean leadsOnlyToExit(BasicBlock t, Set<BasicBlock> body,
-                                    Set<BasicBlock> exitTargets, ControlFlowGraph graph,
-                                    LinearIr ir, Set<BasicBlock> visited) {
+                                   Set<BasicBlock> exitTargets, ControlFlowGraph graph,
+                                   LinearIr ir, Set<BasicBlock> visited) {
         if (!visited.add(t)) {
             return true;
         }
@@ -347,7 +347,7 @@ public final class LoopTranslator {
         }
         {
             // 循环折叠可能把预置头块(STORE 初始化)并入循环体
-            // (do-while 的入口块、while 的头部折叠).被条件引用的
+            // (do-while 的入口块,while 的头部折叠).被条件引用的
             // 前导变量声明必须提升到循环外——声明在体内会与外部同名
             // 变量冲突(JLS 禁止局部变量遮蔽),且每次迭代重置初始值
             // 会改变语义.仅提升条件引用的声明:条件在体内声明之前

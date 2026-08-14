@@ -29,11 +29,6 @@ final class InlineAnalyzer {
 
     private InlineAnalyzer() {}
 
-    /** 分析结果:单次使用变量的 STORE→存储值内联映射与需跳过的 STORE ID. */
-    record InlineAnalysis(Map<Variable, Value> varStoreSource,
-                          Set<Integer> storesToSkip,
-                          Map<Variable, Integer> varUseCount) {}
-
     /**
      * 为单次使用的变量构建全局(跨组)的 Variable → 存储值的内联映射.
      * 这使得常量可以跨组边界内联,例如 STORE 位于 try 体组中而
@@ -183,4 +178,9 @@ final class InlineAnalyzer {
             return true;
         }
     }
+
+    /** 分析结果:单次使用变量的 STORE→存储值内联映射与需跳过的 STORE ID. */
+    record InlineAnalysis(Map<Variable, Value> varStoreSource,
+                          Set<Integer> storesToSkip,
+                          Map<Variable, Integer> varUseCount) {}
 }

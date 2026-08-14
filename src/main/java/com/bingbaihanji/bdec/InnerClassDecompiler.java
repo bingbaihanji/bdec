@@ -19,17 +19,22 @@ import java.util.List;
 /**
  * 成员内部类反编译器(里程碑 Phase 3).
  *
- * <p>反编译成员内部类,将其 {@link TypeDeclaration} 追加到编译单元中。
+ * <p>反编译成员内部类,将其 {@link TypeDeclaration} 追加到编译单元中.
  * 仅处理成员内部类(非匿名类,非局部类,非枚举);匿名/局部类在字节码中
- * 名称以 $数字 开头,由后续重写器内联处理。</p>
+ * 名称以 $数字 开头,由后续重写器内联处理.</p>
  */
 public final class InnerClassDecompiler {
 
     private final ClassFileReader classReader;
+
     private final MethodPipeline methodPipeline;
+
     private final AstBuilder astBuilder;
+
     private final AstRewriter astRewriter;
+
     private final BdecConfig config;
+
     private final DiagnosticListener diagnostics;
 
     /**
@@ -129,8 +134,8 @@ public final class InnerClassDecompiler {
                     // 可见性与 static 取自条目标志,其余(abstract/final/interface/record 等)取自 class 文件.
                     int flags = ice.accessFlags()
                             | (innerType.accessFlags()
-                                    & ~(AccessFlags.ACC_PUBLIC | AccessFlags.ACC_PRIVATE
-                                            | AccessFlags.ACC_PROTECTED | AccessFlags.ACC_STATIC));
+                            & ~(AccessFlags.ACC_PUBLIC | AccessFlags.ACC_PRIVATE
+                            | AccessFlags.ACC_PROTECTED | AccessFlags.ACC_STATIC));
                     TypeDeclaration nestedType =
                             new TypeDeclaration(
                                     flags, innerType.simpleName(), innerType.kindName(),

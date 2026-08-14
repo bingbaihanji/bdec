@@ -25,7 +25,7 @@ import java.util.Map;
  *
  * <p><b>元数据保持重建助手</b>(参考 CFR 的 StructuredStatementTransformer
  * 与 Vineflower 的 copy-with 模式):重写器应只修改自己关心的部分
- * (方法体/成员/初始化器/循环体),其余元数据(注解、类型参数、throws、泛型等)
+ * (方法体/成员/初始化器/循环体),其余元数据(注解,类型参数,throws,泛型等)
  * 通过以下 {@code withXxx} 助手原样保留. AST 节点新增字段时,
  * 只需更新这些助手的实现——不再需要逐个改动重写器的重建调用点.
  * 历史上 annotationDefault / annotations / parameterAnnotations 三个字段
@@ -75,7 +75,7 @@ public interface RewriteRule {
 
     /**
      * 替换方法体与参数列表(用于移除合成参数的场景,如枚举构造器的
-     * name/ordinal、局部类的 this$0).调用方需同时提供裁剪后的参数注解
+     * name/ordinal,局部类的 this$0).调用方需同时提供裁剪后的参数注解
      * 与类型注解数组(与裁剪后的参数列表对齐).
      */
     default MethodDeclaration withParamsAndBody(MethodDeclaration md,
@@ -87,7 +87,7 @@ public interface RewriteRule {
 
     /**
      * 替换方法体与参数列表,并显式指定裁剪后的参数类型注解
-     * (枚举构造器丢弃前 2 参、局部类丢弃 this$0 时需移位或过滤).
+     * (枚举构造器丢弃前 2 参,局部类丢弃 this$0 时需移位或过滤).
      */
     default MethodDeclaration withParamsAndBody(MethodDeclaration md,
                                                 String[] names, JavaType[] types,
@@ -125,7 +125,7 @@ public interface RewriteRule {
     }
 
     /**
-     * 仅替换循环体,保留循环类型与 for 循环的 init/cond/incr、
+     * 仅替换循环体,保留循环类型与 for 循环的 init/cond/incr,
      * for-each 的变量与元素类型等全部元数据.
      */
     default LoopStatement withLoopBody(LoopStatement l, Statement newBody) {

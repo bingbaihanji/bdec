@@ -159,11 +159,11 @@ public final class ClassFileReader {
     /**
      * 解析 {@code Module} 类属性(JVMS 4.7.25,module-info.class).
      *
-     * <p>该属性携带模块声明所需的全部信息:模块名与标志、版本、
+     * <p>该属性携带模块声明所需的全部信息:模块名与标志,版本,
      * requires/exports/opens/uses/provides 子句.</p>
      */
     private com.bingbaihanji.bdec.bytecode.model.ModuleInfo parseModule(DataInputStream in,
-            ConstantPoolEntry[] pool) throws IOException {
+                                                                        ConstantPoolEntry[] pool) throws IOException {
         int nameIdx = in.readUnsignedShort();
         String name = ConstantPoolParser.moduleName(pool, nameIdx);
         int flags = in.readUnsignedShort();

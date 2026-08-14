@@ -9,8 +9,8 @@ import java.util.List;
  * 模块声明构建器(里程碑 Phase 3).
  *
  * <p>将 {@link ClassFileModel} 的 Module 属性(JVMS 4.7.25)转换为 AST 的
- * {@link ModuleDeclaration} 节点。requires 的 transitive/static 修饰符
- * 按条目标志还原。</p>
+ * {@link ModuleDeclaration} 节点.requires 的 transitive/static 修饰符
+ * 按条目标志还原.</p>
  */
 public final class ModuleDeclBuilder {
 

@@ -186,9 +186,9 @@ public class EnumRewriter implements RewriteRule {
             // 跳过冗余桥接方法(ACC_BRIDGE):
             // javac 为带体的枚举常量生成 E$N 类时,若常量覆写了泛型接口方法
             // (如 I<T>.get()),会同时生成擦除签名版本的桥接方法
-            // (如 Object get()),其转发到真实实现。当同名、擦除后参数一致
+            // (如 Object get()),其转发到真实实现.当同名,擦除后参数一致
             // 的非桥接方法存在时必须过滤,否则输出含重复/无法编译的方法;
-            // 若桥接方法是唯一实现(罕见),则保留以免丢失语义。
+            // 若桥接方法是唯一实现(罕见),则保留以免丢失语义.
             if (isRedundantBridge(method, inner.methods())) {
                 continue;
             }
@@ -273,9 +273,9 @@ public class EnumRewriter implements RewriteRule {
     }
 
     /**
-     * 判断方法是否为冗余的 ACC_BRIDGE 桥接方法。
-     * 仅当同一类中存在同名、参数擦除后签名一致的非桥接方法时才视为冗余;
-     * 若桥接方法是唯一实现,则返回 false(必须保留)。
+     * 判断方法是否为冗余的 ACC_BRIDGE 桥接方法.
+     * 仅当同一类中存在同名,参数擦除后签名一致的非桥接方法时才视为冗余;
+     * 若桥接方法是唯一实现,则返回 false(必须保留).
      */
     private static boolean isRedundantBridge(MethodModel method, List<MethodModel> all) {
         if ((method.accessFlags() & AccessFlags.ACC_BRIDGE) == 0) {
@@ -340,10 +340,10 @@ public class EnumRewriter implements RewriteRule {
      * 应用方法的泛型签名(Signature 属性)覆盖描述符类型.
      *
      * <p>{@code MethodModel.returnType()}/{@code parameterTypes()} 来自方法描述符,
-     * 是擦除后的类型(不含泛型实参)。此处与 AstBuilder 方法路径采用同一约定:
-     * 仅当签名类型比擦除类型信息更丰富(类型参数、泛型实参/通配符、
-     * 类型变量数组元素)时才替换,防止签名解析差异破坏无泛型方法。
-     * 参数数组在调用方就地替换(与 AstBuilder 相同的约定)。
+     * 是擦除后的类型(不含泛型实参).此处与 AstBuilder 方法路径采用同一约定:
+     * 仅当签名类型比擦除类型信息更丰富(类型参数,泛型实参/通配符,
+     * 类型变量数组元素)时才替换,防止签名解析差异破坏无泛型方法.
+     * 参数数组在调用方就地替换(与 AstBuilder 相同的约定).
      *
      * @param method           方法模型
      * @param inner            常量体内部类模型(提供类级类型参数上下文)
@@ -404,6 +404,19 @@ public class EnumRewriter implements RewriteRule {
                 && baseDesc.charAt(baseDesc.length() - 1) == ';';
     }
 
+    /** 从 NEW 指令的常量池引用中提取类内部名称(如 {@code pkg/E$1}),失败返回 null. */
+    private static String classNameOfNew(Instruction insn, ConstantPoolEntry[] pool) {
+        if (insn.rawOperands().isEmpty()) {
+            return null;
+        }
+        int poolIdx = insn.rawOperands().get(0);
+        ConstantPoolEntry entry = pool[poolIdx];
+        if (entry instanceof ConstantPoolEntry.CpClass cpc) {
+            return ConstantPoolParser.utf8(pool, cpc.nameIndex());
+        }
+        return null;
+    }
+
     @Override
     public String name() {return "enum";}
 
@@ -435,11 +448,11 @@ public class EnumRewriter implements RewriteRule {
         }
 
         // 从 <clinit> 字节码中提取枚举常量的构造器参数,
-        // 以及每个带匿名类体的常量对应的内部类名(E$1 等)。
+        // 以及每个带匿名类体的常量对应的内部类名(E$1 等).
         // javac 对常量体匿名类的编号按"带体常量出现的顺序",与常量序数无必然
         // 对应关系,因此必须以 <clinit> 中 NEW 指令引用的实际类名为准
         // (枚举未声明抽象方法时 javac 仍会为带体常量生成 E$N 类,
-        // 例如实现接口的常量体、覆写 toString 的常量体)。
+        // 例如实现接口的常量体,覆写 toString 的常量体).
         Map<String, String> bodyClasses = new HashMap<>();
         Map<String, String> constArgs = extractConstantArgs(td, ctx, bodyClasses);
 
@@ -510,7 +523,7 @@ public class EnumRewriter implements RewriteRule {
         members.addAll(regularMembers);
 
         // 清除 ACC_ENUM 和 ACC_ABSTRACT 标志位,将 kindName 改为 "enum".
-        // 保留类级注解、父类型注解与接口注解(枚举的父接口注解
+        // 保留类级注解,父类型注解与接口注解(枚举的父接口注解
         // 如 "implements @A Runnable" 由 CLASS_EXTENDS 的接口下标编码)
         int flags = (td.accessFlags() & ~(AccessFlags.ACC_ENUM | AccessFlags.ACC_ABSTRACT));
         return new TypeDeclaration(flags, td.simpleName(), "enum", null,
@@ -521,7 +534,7 @@ public class EnumRewriter implements RewriteRule {
     /**
      * 通过解析 {@code <clinit>} 字节码提取每个枚举常量的构造器参数,
      * 并在 {@code bodyClasses}(可空)中记录带匿名类体的常量
-     * 对应的内部类名(字段名 → 内部名称,如 {@code A → pkg/E$1})。
+     * 对应的内部类名(字段名 → 内部名称,如 {@code A → pkg/E$1}).
      */
     private Map<String, String> extractConstantArgs(TypeDeclaration td,
                                                     DecompileContext ctx,
@@ -601,19 +614,6 @@ public class EnumRewriter implements RewriteRule {
         }
 
         return result;
-    }
-
-    /** 从 NEW 指令的常量池引用中提取类内部名称(如 {@code pkg/E$1}),失败返回 null. */
-    private static String classNameOfNew(Instruction insn, ConstantPoolEntry[] pool) {
-        if (insn.rawOperands().isEmpty()) {
-            return null;
-        }
-        int poolIdx = insn.rawOperands().get(0);
-        ConstantPoolEntry entry = pool[poolIdx];
-        if (entry instanceof ConstantPoolEntry.CpClass cpc) {
-            return ConstantPoolParser.utf8(pool, cpc.nameIndex());
-        }
-        return null;
     }
 
     /** 检查字段是否为枚举常量(public static final 且类型与枚举类型相同) */

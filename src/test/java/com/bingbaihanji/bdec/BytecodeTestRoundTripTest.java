@@ -125,8 +125,8 @@ public class BytecodeTestRoundTripTest {
     }
 
     /**
-     * 从 target/test-classes/ 加载内部类的字节加载器。
-     * EnumRewriter 依赖它读取枚举常量匿名类体(E$1.class 等)。
+     * 从 target/test-classes/ 加载内部类的字节加载器.
+     * EnumRewriter 依赖它读取枚举常量匿名类体(E$1.class 等).
      */
     private static java.util.function.Function<String, byte[]> testClassByteLoader() {
         Path testClassesDir = Paths.get("target/test-classes/");
@@ -280,8 +280,8 @@ public class BytecodeTestRoundTripTest {
 
     @Test
     public void testGenericSuperAndInterfaces() throws Exception {
-        // 父类/接口的泛型类型参数必须从 Signature 重建(Base<String>、I<Integer>),
-        // 而非退化为无泛型(extends Base、implements I).
+        // 父类/接口的泛型类型参数必须从 Signature 重建(Base<String>,I<Integer>),
+        // 而非退化为无泛型(extends Base,implements I).
         String out = harness.decompileSource("""
                 class Base<T> {}
                 interface I<T> {}

@@ -18,8 +18,8 @@ import java.util.Set;
 /**
  * {@link SourceCleanup} 的纯静态支撑工具(里程碑 Phase 3).
  *
- * <p>承载字段名收集、名称分类、顺序块扁平化与终止语句死代码截断等
- * 无实例状态的辅助逻辑,与 {@link SourceCleanup} 主递归修复逻辑解耦。</p>
+ * <p>承载字段名收集,名称分类,顺序块扁平化与终止语句死代码截断等
+ * 无实例状态的辅助逻辑,与 {@link SourceCleanup} 主递归修复逻辑解耦.</p>
  */
 final class SourceCleanupSupport {
 

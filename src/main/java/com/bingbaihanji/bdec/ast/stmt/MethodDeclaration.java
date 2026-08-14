@@ -111,7 +111,7 @@ public final class MethodDeclaration extends Statement {
     }
 
     /**
-     * 构造一个方法声明节点(含注解默认值、注解与参数注解).
+     * 构造一个方法声明节点(含注解默认值,注解与参数注解).
      *
      * @param annotationDefault     注解方法元素的默认值(已渲染的源码)
      * @param annotations           方法上的注解(已渲染的源码行)
@@ -129,7 +129,7 @@ public final class MethodDeclaration extends Statement {
     }
 
     /**
-     * 构造一个方法声明节点(含注解默认值、注解、参数注解与类型注解).
+     * 构造一个方法声明节点(含注解默认值,注解,参数注解与类型注解).
      *
      * @param typeAnnotations  方法签名上的类型注解(返回/参数/throws 类型)
      */

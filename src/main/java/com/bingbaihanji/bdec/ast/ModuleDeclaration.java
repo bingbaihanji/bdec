@@ -83,6 +83,15 @@ public final class ModuleDeclaration implements AstNode {
     /** @return provides 子句列表(不可变) */
     public List<ProvidesClause> provides() {return provides;}
 
+    @Override
+    public AstKind kind() {return AstKind.MODULE_DECL;}
+
+    @Override
+    public List<AstNode> children() {return List.of();}
+
+    @Override
+    public <R, C> R accept(AstVisitor<R, C> v, C c) {return v.visit(this, c);}
+
     /** requires 子句:{@code requires [transitive] [static] module;} */
     public record RequiresClause(String module, boolean transitive, boolean staticPhase) {}
 
@@ -94,13 +103,4 @@ public final class ModuleDeclaration implements AstNode {
 
     /** provides 子句:{@code provides service with impl1, impl2;} */
     public record ProvidesClause(String service, List<String> withImplementations) {}
-
-    @Override
-    public AstKind kind() {return AstKind.MODULE_DECL;}
-
-    @Override
-    public List<AstNode> children() {return List.of();}
-
-    @Override
-    public <R, C> R accept(AstVisitor<R, C> v, C c) {return v.visit(this, c);}
 }

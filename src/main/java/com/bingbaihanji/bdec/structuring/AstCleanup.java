@@ -1,6 +1,12 @@
 package com.bingbaihanji.bdec.structuring;
 
-import com.bingbaihanji.bdec.ast.expr.*;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
@@ -16,6 +22,7 @@ import com.bingbaihanji.bdec.ir.InstructionRef;
 import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.IrOpcode;
 import com.bingbaihanji.bdec.type.JavaType;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -24,15 +31,15 @@ import java.util.Set;
  * AST 清理与终结判断工具集(从 BlockReducer 抽取).
  *
  * <p>集中存放对已构建 AST 的后处理纯函数:
- * synchronized 前导剥离与识别、泄漏 catch 语句清理、
- * 重复 finally 去重、switch case 终结判断、孤儿语句包装等.
+ * synchronized 前导剥离与识别,泄漏 catch 语句清理,
+ * 重复 finally 去重,switch case 终结判断,孤儿语句包装等.
  * 全部为无状态 static 方法,便于独立测试与复用.</p>
  */
 final class AstCleanup {
 
     private AstCleanup() {}
 
-/** 语句是否为简单终止语句(单条 throw/return 或仅含一条的块) */
+    /** 语句是否为简单终止语句(单条 throw/return 或仅含一条的块) */
     static boolean isSimpleTerminal(Statement s) {
         if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement
                 || s instanceof com.bingbaihanji.bdec.ast.stmt.ThrowStatement) {
@@ -44,7 +51,7 @@ final class AstCleanup {
         return false;
     }
 
-/** 语句的粗略语句数量(块内语句数,非块为 1) */
+    /** 语句的粗略语句数量(块内语句数,非块为 1) */
     static int countStatements(Statement s) {
         if (s instanceof BlockStatement bs) {
             int n = 0;
@@ -60,7 +67,7 @@ final class AstCleanup {
         return 1;
     }
 
-/** 条件取反并简化 */
+    /** 条件取反并简化 */
     static Expression negateCond(Expression cond) {
         if (cond == null) {
             return new com.bingbaihanji.bdec.ast.expr.LitExpr(true, JavaType.BOOLEAN);
@@ -68,14 +75,14 @@ final class AstCleanup {
         return simplifyCondition(new UnExpr(UnaryOperator.NOT, cond));
     }
 
-/** 检查 case 体在字节码中是否以 goto 跳出 switch(对应源码中的 break).
-     *  <p>case 体内任一块存在指向 switch 外(非 case 体、非出口块)的 GOTO 边,
+    /** 检查 case 体在字节码中是否以 goto 跳出 switch(对应源码中的 break).
+     *  <p>case 体内任一块存在指向 switch 外(非 case 体,非出口块)的 GOTO 边,
      *  说明源码中该 case 以 break 结束.若为 FALL_THROUGH 落入下一个 case
      *  或自然流出 switch 末尾,则无需 break.</p> */
     static boolean caseEndsWithBreak(Set<BasicBlock> caseBlocks,
-                                      Set<BasicBlock> allCaseBlocks,
-                                      ControlFlowGraph graph,
-                                      BasicBlock restartBlock) {
+                                     Set<BasicBlock> allCaseBlocks,
+                                     ControlFlowGraph graph,
+                                     BasicBlock restartBlock) {
         for (BasicBlock b : caseBlocks) {
             for (var e : graph.outgoingOf(b)) {
                 if (e.kind() == EdgeKind.GOTO
@@ -89,7 +96,7 @@ final class AstCleanup {
         return false;
     }
 
-/** 检查语句列表是否以终止语句(return/throw/break/continue)结尾 */
+    /** 检查语句列表是否以终止语句(return/throw/break/continue)结尾 */
     static boolean endsWithTerminator(List<Statement> body) {
         if (body.isEmpty()) {
             return false;
@@ -109,7 +116,7 @@ final class AstCleanup {
         return false;
     }
 
-/** 单语句是否为终止语句 */
+    /** 单语句是否为终止语句 */
     static boolean endsWithTerminatorStmt(Statement s) {
         if (s == null) {
             return false;
@@ -130,7 +137,7 @@ final class AstCleanup {
         return false;
     }
 
-/** 将 case 体中的孤立表达式包装为 return(非 void 方法).
+    /** 将 case 体中的孤立表达式包装为 return(非 void 方法).
      *  字符串拼接等表达式作为孤立语句在 switch case 中是无效 Java.
      *  包装后,其后的语句均不可达,全部截断. */
     static List<Statement> wrapOrphansAsReturns(List<Statement> body) {
@@ -153,7 +160,7 @@ final class AstCleanup {
         return result;
     }
 
-/**
+    /**
      * 如果指令具有 BOOLEAN_RETURN 注解且表达式为数值 LitExpr,
      * 则将其替换为布尔 LitExpr.
      */
@@ -176,13 +183,13 @@ final class AstCleanup {
         return new LitExpr(boolVal, JavaType.BOOLEAN);
     }
 
-/** 检查语句树是否包含 synchronized 块注解.
+    /** 检查语句树是否包含 synchronized 块注解.
      *  通过 IR 级别标记检测的回退方案. */
     static boolean isSynchronizedBlock(Statement stmt) {
         return false; // 检测现在使用 groupHasSynchronizedAnnotation 中的 IR 级别标记
     }
 
-/** 递归检查语句树中是否包含 SynchronizedStatement */
+    /** 递归检查语句树中是否包含 SynchronizedStatement */
     static boolean containsSynchronizedStatement(Statement s) {
         if (s instanceof SynchronizedStatement) {
             return true;
@@ -196,7 +203,7 @@ final class AstCleanup {
         return false;
     }
 
-/** 从方法体中剥离 synchronized 前导代码(DUP/ASTORE),
+    /** 从方法体中剥离 synchronized 前导代码(DUP/ASTORE),
      *  生成干净的 {@code synchronized(expr) { body }} 输出.
      *  同时过滤掉从 monitorexit 异常处理器中泄露的处理器伪影
      *  (如 while(true){throw...}). */
@@ -255,8 +262,8 @@ final class AstCleanup {
                             (st instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
                                     && vd.type() != null && vd.type().descriptor() != null
                                     && vd.type().descriptor().contains("Throwable"))
-                            || st instanceof com.bingbaihanji.bdec.ast.stmt.ThrowStatement
-                            || st == null)) {
+                                    || st instanceof com.bingbaihanji.bdec.ast.stmt.ThrowStatement
+                                    || st == null)) {
                         continue;
                     }
                     if (inner.isEmpty()) {
@@ -283,19 +290,23 @@ final class AstCleanup {
         return syncStmt;
     }
 
-/** 检查变量声明是否类似于 synchronized 临时副本 */
+    /** 检查变量声明是否类似于 synchronized 临时副本 */
     static boolean isTypicalSyncTemp(com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
         String name = vd.name();
         return (name.startsWith("var") && name.length() <= 5)
                 || (vd.initializer() instanceof VarExpr v && "this".equals(v.name()));
     }
 
-/** Recursively remove catch-duplicate statements from a block. */
+    /** Recursively remove catch-duplicate statements from a block. */
     static boolean stripFromBlock(java.util.List<Statement> stmts, int idx,
-                                   java.util.Set<String> catchTexts) {
-        if (idx >= stmts.size()) return false;
+                                  java.util.Set<String> catchTexts) {
+        if (idx >= stmts.size()) {
+            return false;
+        }
         Statement s = stmts.get(idx);
-        if (s == null) return false;
+        if (s == null) {
+            return false;
+        }
         String text = ComparisonUtils.statementText(s);
         if (catchTexts.contains(text)) {
             stmts.set(idx, null);
@@ -316,7 +327,7 @@ final class AstCleanup {
         return false;
     }
 
-/**
+    /**
      * Remove statements that accidentally leaked from catch bodies into
      * the parent method body, recursively checking nested blocks.
      */
@@ -337,7 +348,9 @@ final class AstCleanup {
                 for (var cc : ts.catchClauses()) {
                     if (cc.body() instanceof BlockStatement cb) {
                         for (Statement cs : cb.statements()) {
-                            if (cs != null) catchTexts.add(ComparisonUtils.statementText(cs));
+                            if (cs != null) {
+                                catchTexts.add(ComparisonUtils.statementText(cs));
+                            }
                         }
                     }
                 }
@@ -347,12 +360,14 @@ final class AstCleanup {
                 }
             }
         }
-        if (!changed) return root;
+        if (!changed) {
+            return root;
+        }
         stmts.removeIf(java.util.Objects::isNull);
         return new BlockStatement(stmts);
     }
 
-static BlockStatement stripSyncPreambles(BlockStatement root) {
+    static BlockStatement stripSyncPreambles(BlockStatement root) {
         List<Statement> stmts = new ArrayList<>(root.statements());
         for (int i = 0; i < stmts.size() - 1; i++) {
             if (stmts.get(i + 1) instanceof SynchronizedStatement syncStmt) {
@@ -378,7 +393,7 @@ static BlockStatement stripSyncPreambles(BlockStatement root) {
         return new BlockStatement(stmts);
     }
 
-/**
+    /**
      * 从 try 体中剥离同样出现在 finally 体中的语句.
      * 基于 Expression 对象的结构化比较而非 toString().
      * 递归处理嵌套的复合语句(IfStatement,LoopStatement 等),
@@ -392,7 +407,7 @@ static BlockStatement stripSyncPreambles(BlockStatement root) {
         return stripMatchingFinally(tryBody, finallyStmts);
     }
 
-/** 递归地从复合语句中剥离与模式(finally 体语句)匹配的语句,
+    /** 递归地从复合语句中剥离与模式(finally 体语句)匹配的语句,
      *  而非仅处理顶层. */
     static Statement stripMatchingFinally(Statement s, List<Statement> patterns) {
         if (s == null) {
@@ -461,7 +476,7 @@ static BlockStatement stripSyncPreambles(BlockStatement root) {
         return s;
     }
 
-/** 简化常见的布尔冗余模式:
+    /** 简化常见的布尔冗余模式:
      *  {@code x == true} → {@code x}, {@code x != false} → {@code x},
      *  {@code x == false} → {@code !x}, {@code x != true} → {@code !x},
      *  若 x 为布尔值: {@code x == 0} → {@code !x}, {@code x != 0} → {@code x} */

@@ -96,7 +96,7 @@ public final class TypeDeclaration implements AstNode {
     }
 
     /**
-     * 构造一个类型声明节点(含类级注解、父类型注解与接口注解).
+     * 构造一个类型声明节点(含类级注解,父类型注解与接口注解).
      *
      * @param interfaceAnnotations 接口注解(已渲染的源码行,
      *                             与 interfaceNames 按索引对齐,无注解为空串)

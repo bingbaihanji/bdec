@@ -14,26 +14,26 @@ import java.util.List;
  */
 final class BlockGroup {
 
-        /** 组内的基本块列表 */
-        private final List<BasicBlock> blocks = new ArrayList<>();
+    /** 组内的基本块列表 */
+    private final List<BasicBlock> blocks = new ArrayList<>();
 
-        BlockGroup(BasicBlock first) {blocks.add(first);}
+    BlockGroup(BasicBlock first) {blocks.add(first);}
 
-        void add(BasicBlock b) {blocks.add(b);}
+    void add(BasicBlock b) {blocks.add(b);}
 
-        BasicBlock first() {return blocks.getFirst();}
+    BasicBlock first() {return blocks.getFirst();}
 
-        BasicBlock last() {return blocks.getLast();}
+    BasicBlock last() {return blocks.getLast();}
 
-        List<BasicBlock> blocks() {return blocks;}
+    List<BasicBlock> blocks() {return blocks;}
 
-        /** 收集组内所有基本块的全部 IR 指令 */
-        List<IrInstruction> allIrInstructions(LinearIr ir) {
-            List<IrInstruction> result = new ArrayList<>();
-            for (BasicBlock b : blocks) {
-                result.addAll(ir.instructionsOf(b));
-            }
-            return result;
+    /** 收集组内所有基本块的全部 IR 指令 */
+    List<IrInstruction> allIrInstructions(LinearIr ir) {
+        List<IrInstruction> result = new ArrayList<>();
+        for (BasicBlock b : blocks) {
+            result.addAll(ir.instructionsOf(b));
         }
+        return result;
     }
+}
 

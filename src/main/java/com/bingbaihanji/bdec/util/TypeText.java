@@ -12,7 +12,7 @@ import java.util.TreeSet;
  *
  * <p>类型名渲染逻辑已收敛到 {@link TypeNameRenderer}(单一事实源);本类保留
  * 面向重写器的便捷门面:{@link #render} 委托 {@code TypeNameRenderer.render}
- * (收集模式),{@link #mergeImports} 将收集到的 import 合并进编译单元列表。</p>
+ * (收集模式),{@link #mergeImports} 将收集到的 import 合并进编译单元列表.</p>
  */
 public final class TypeText {
 

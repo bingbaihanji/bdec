@@ -79,9 +79,6 @@ public final class NewExpr extends Expression {
         this.typeAnnotations = typeAnnotations == null ? Map.of() : typeAnnotations;
     }
 
-    /** @return 数组初始化器元素(空列表表示无初始化器) */
-    public List<Expression> arrayInitializer() {return arrayInitializer;}
-
     /**
      * 构造含匿名类体的对象创建表达式.
      *
@@ -94,6 +91,9 @@ public final class NewExpr extends Expression {
                    List<Expression> constructorArgs, List<AstNode> anonymousBody) {
         this(instantiatedType, dimensions, constructorArgs, anonymousBody, List.of());
     }
+
+    /** @return 数组初始化器元素(空列表表示无初始化器) */
+    public List<Expression> arrayInitializer() {return arrayInitializer;}
 
     /** @return 被实例化的类型 */
     public JavaType instantiatedType() {return instantiatedType;}

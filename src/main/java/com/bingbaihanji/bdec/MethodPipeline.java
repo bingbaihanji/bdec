@@ -27,21 +27,29 @@ import java.util.Map;
  * 逐方法反编译管线(里程碑 Phase 3).
  *
  * <p>将单个方法从字节码提升为 {@link StructuredMethod}:CFG → LinearIr → 语义重建 →
- * (可选)SSA 优化 → 结构化控制流。供 {@link BdecEngine} 主循环与内部类反编译复用,
- * 消除两份逐方法循环的重复。</p>
+ * (可选)SSA 优化 → 结构化控制流.供 {@link BdecEngine} 主循环与内部类反编译复用,
+ * 消除两份逐方法循环的重复.</p>
  */
 public final class MethodPipeline {
 
     private final BdecConfig config;
+
     private final DiagnosticListener diagnostics;
 
     private final CfgBuilder cfgBuilder = new CfgBuilder();
+
     private final IrBuilder irBuilder = new IrBuilder();
+
     private final SemanticReconstructor semanticReconstructor = new SemanticReconstructor();
+
     private final SsaBuilder ssaBuilder = new SsaBuilder();
+
     private final TypeInference typeInference = new TypeInference();
+
     private final CopyPropagation copyPropagation = new CopyPropagation();
+
     private final DeadCodeElimination dce = new DeadCodeElimination();
+
     private final ControlFlowStructurer structurer = new ControlFlowStructurer();
 
     /**
@@ -93,7 +101,7 @@ public final class MethodPipeline {
 
     /** 反编译单个方法:CFG → LinearIr → 语义重建 → (可选)SSA → 结构化. */
     private StructuredMethod decompileMethod(MethodModel method, ClassFileModel classFile,
-                                            DecompileContext context, boolean runSsa) {
+                                             DecompileContext context, boolean runSsa) {
         ControlFlowGraph cfg = cfgBuilder.build(method);
         LinearIr ir = irBuilder.build(cfg, method, classFile.constantPool(),
                 classFile.bootstrapMethods());

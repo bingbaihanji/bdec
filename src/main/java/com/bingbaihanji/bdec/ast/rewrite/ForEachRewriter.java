@@ -39,6 +39,10 @@ import java.util.List;
  */
 public class ForEachRewriter implements RewriteRule {
 
+    /** 未转型引用的哨兵(调用方按 null 处理) */
+    private static final com.bingbaihanji.bdec.type.JavaType UNCAST_MARKER =
+            com.bingbaihanji.bdec.type.JavaType.INT;
+
     @Override
     public String name() {return "for-each";}
 
@@ -184,10 +188,6 @@ public class ForEachRewriter implements RewriteRule {
         }
         return found ? result : null;
     }
-
-    /** 未转型引用的哨兵(调用方按 null 处理) */
-    private static final com.bingbaihanji.bdec.type.JavaType UNCAST_MARKER =
-            com.bingbaihanji.bdec.type.JavaType.INT;
 
     /** 语句中元素变量的转型目标类型;无引用返回 null,未转型返回哨兵 */
     private com.bingbaihanji.bdec.type.JavaType findCastTypeInStmt(Statement st, String elemName) {

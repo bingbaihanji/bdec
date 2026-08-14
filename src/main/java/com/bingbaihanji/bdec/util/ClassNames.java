@@ -13,8 +13,8 @@ public final class ClassNames {
     /**
      * 检查简单类名是否为匿名类(美元符后紧跟数字).
      *
-     * <p>匿名类的内部名称形如 {@code Use$1}、{@code Foo$2Local}——{@code $} 后紧跟
-     * 数字。此类名称在 Java 源码中不可作为类型名引用,故各类型渲染路径需据此跳过
+     * <p>匿名类的内部名称形如 {@code Use$1},{@code Foo$2Local}——{@code $} 后紧跟
+     * 数字.此类名称在 Java 源码中不可作为类型名引用,故各类型渲染路径需据此跳过
      * {@code $} → {@code .} 的转换与 import 收集.
      *
      * @param simpleName 内部名称的最后一段(不含包前缀),可为 {@code null}

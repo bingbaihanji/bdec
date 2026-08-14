@@ -181,7 +181,7 @@ public class LocalClassRewriter implements RewriteRule {
         return false;
     }
 
-    /** 清理内部类:移除 this$0 字段、构造器参数与赋值 */
+    /** 清理内部类:移除 this$0 字段,构造器参数与赋值 */
     private TypeDeclaration cleanType(TypeDeclaration td, String thisField) {
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {

@@ -54,7 +54,7 @@ import java.util.Set;
  *       target_info = [invokedynamic 偏移, 类型实参下标]),如 {@code C::<@A String>id}</li>
  *   <li>接收者(被引用类型)上的注解(目标 {@code 0x45} CONSTRUCTOR_REFERENCE /
  *       {@code 0x46} METHOD_REFERENCE,target_info = [invokedynamic 偏移]),
- *       如 {@code @A C::id}、{@code @A C::new}</li>
+ *       如 {@code @A C::id},{@code @A C::new}</li>
  * </ul></p>
  *
  * <p>设计参考 CFR 的 lambda 处理和 Vineflower 的 {@code LambdaProcessor}.
@@ -63,12 +63,33 @@ public class MethodRefRewriter implements RewriteRule {
 
     /** JVMS 4.7.20.1:构造器引用类型实参上的类型注解 */
     private static final int TARGET_CTOR_REF_TYPE_ARGUMENT = 0x4A;
+
     /** JVMS 4.7.20.1:方法引用类型实参上的类型注解 */
     private static final int TARGET_METHOD_REF_TYPE_ARGUMENT = 0x4B;
+
     /** JVMS 4.7.20.1:构造器引用接收者(被引用类型)上的类型注解 */
     private static final int TARGET_CTOR_REF_RECEIVER = 0x45;
+
     /** JVMS 4.7.20.1:方法引用接收者(被引用类型)上的类型注解 */
     private static final int TARGET_METHOD_REF_RECEIVER = 0x46;
+
+    /** 在 class 文件模型中按名称查找方法模型(重载时取首个匹配,尽力而为) */
+    private static MethodModel findMethodModel(DecompileContext context, String name) {
+        if (name == null) {
+            // AST 中构造器等方法声明的名称为 null,无对应注解可查
+            return null;
+        }
+        ClassFileModel classFile = context.classFile();
+        if (classFile == null || classFile.methods() == null) {
+            return null;
+        }
+        for (MethodModel m : classFile.methods()) {
+            if (name.equals(m.name())) {
+                return m;
+            }
+        }
+        return null;
+    }
 
     @Override
     public String name() {return "method-ref";}
@@ -102,24 +123,6 @@ public class MethodRefRewriter implements RewriteRule {
             }
         }
         return withMembers(td, members);
-    }
-
-    /** 在 class 文件模型中按名称查找方法模型(重载时取首个匹配,尽力而为) */
-    private static MethodModel findMethodModel(DecompileContext context, String name) {
-        if (name == null) {
-            // AST 中构造器等方法声明的名称为 null,无对应注解可查
-            return null;
-        }
-        ClassFileModel classFile = context.classFile();
-        if (classFile == null || classFile.methods() == null) {
-            return null;
-        }
-        for (MethodModel m : classFile.methods()) {
-            if (name.equals(m.name())) {
-                return m;
-            }
-        }
-        return null;
     }
 
     /** 递归重写语句,识别方法引用调用 */
@@ -220,20 +223,12 @@ public class MethodRefRewriter implements RewriteRule {
      */
     private static final class MethodRefAnnotator {
 
-        /** 类型注解条目:偏移,目标类型,类型实参下标,渲染后的注解行 */
-        private record Entry(int offset, int targetType, int typeArgIndex, String renderedAnn) {}
-
-        /** 经 invokedynamic 还原的方法引用信息 */
-        private static final class RefInfo {
-            String owner;                // 实现方法所有者(内部名)
-            String name;                 // 实现方法名("<init>" 为构造器)
-            String implDescriptor;       // 实现(擦除)方法描述符
-            String instantiatedDescriptor; // 实例化方法类型描述符(可含泛型)
-        }
-
         private final DecompileContext context;
+
         private final MethodModel method;
+
         private final List<Entry> entries;
+
         private int cursor;
 
         private MethodRefAnnotator(DecompileContext context, MethodModel method, List<Entry> entries) {
@@ -277,101 +272,6 @@ public class MethodRefRewriter implements RewriteRule {
             return new MethodRefAnnotator(context, method, entries);
         }
 
-        /**
-         * 为方法引用节点附着接收者注解与类型实参注解,无变化时返回原节点.
-         *
-         * <p>同一字节码偏移可同时存在接收者条目(0x45/0x46)与类型实参条目
-         * (0x4A/0x4B),如 {@code @A C::<@A String>id}——按偏移成组消费,
-         * 接收者注解渲染于所有者前,类型实参注解嵌入 {@code <...>} 实参列表.</p>
-         */
-        LambdaExpr apply(LambdaExpr node) {
-            for (int i = cursor; i < entries.size(); i++) {
-                Entry entry = entries.get(i);
-                RefInfo info = resolve(entry.offset);
-                if (info == null || !matches(node, info)) {
-                    continue;
-                }
-                List<String> receiverAnns = new ArrayList<>();
-                String newName = node.methodRefName();
-                int j = i;
-                while (j < entries.size() && entries.get(j).offset() == entry.offset) {
-                    Entry e = entries.get(j);
-                    if (e.targetType() == TARGET_METHOD_REF_RECEIVER
-                            || e.targetType() == TARGET_CTOR_REF_RECEIVER) {
-                        receiverAnns.add(e.renderedAnn());
-                    } else {
-                        String nm = buildRefName(node, e, info);
-                        if (nm != null) {
-                            newName = nm;
-                        }
-                    }
-                    j++;
-                }
-                cursor = j;
-                if (receiverAnns.isEmpty() && newName.equals(node.methodRefName())) {
-                    return node;
-                }
-                return LambdaExpr.methodRef(node.methodRefOwner(), newName,
-                        node.functionalType(), receiverAnns);
-            }
-            return node;
-        }
-
-        /** 由字节码偏移找到 invokedynamic 并还原其 BootstrapMethods 元数据 */
-        private RefInfo resolve(int offset) {
-            if (method.instructions() == null) {
-                return null;
-            }
-            for (Instruction ins : method.instructions()) {
-                if (ins.offset() != offset || !"invokedynamic".equals(ins.mnemonic())) {
-                    continue;
-                }
-                List<Integer> operands = ins.rawOperands();
-                if (operands == null || operands.isEmpty()) {
-                    return null;
-                }
-                int cpIndex = operands.get(0);
-                ClassFileModel cf = context.classFile();
-                if (cf == null || cf.constantPool() == null
-                        || cpIndex <= 0 || cpIndex >= cf.constantPool().length) {
-                    return null;
-                }
-                if (!(cf.constantPool()[cpIndex] instanceof ConstantPoolEntry.CpInvokeDynamic indy)) {
-                    return null;
-                }
-                List<BootstrapMethodEntry> boots = context.bootstrapMethods();
-                int bi = indy.bootstrapMethodAttrIndex();
-                if (boots == null || bi < 0 || bi >= boots.size()) {
-                    return null;
-                }
-                BootstrapMethodEntry boot = boots.get(bi);
-                // metafactory 参数:[0] samMethodType [1] implMethod [2] instantiatedMethodType
-                if (boot.arguments() == null || boot.arguments().size() < 3) {
-                    return null;
-                }
-                ConstantPoolEntry[] pool = cf.constantPool();
-                RefInfo info = new RefInfo();
-                ConstantPoolEntry impl = pool[boot.arguments().get(1)];
-                if (impl instanceof ConstantPoolEntry.CpMethodHandle mh) {
-                    ConstantPoolEntry ref = pool[mh.referenceIndex()];
-                    if (ref instanceof ConstantPoolEntry.CpMethodRef mr) {
-                        fillImpl(info, pool, mr.classIndex(), mr.nameAndTypeIndex());
-                    } else if (ref instanceof ConstantPoolEntry.CpInterfaceMethodRef imr) {
-                        fillImpl(info, pool, imr.classIndex(), imr.nameAndTypeIndex());
-                    }
-                }
-                ConstantPoolEntry inst = pool[boot.arguments().get(2)];
-                if (inst instanceof ConstantPoolEntry.CpMethodType mt) {
-                    info.instantiatedDescriptor = ConstantPoolParser.utf8(pool, mt.descriptorIndex());
-                }
-                if (info.name == null || info.instantiatedDescriptor == null) {
-                    return null;
-                }
-                return info;
-            }
-            return null;
-        }
-
         private static void fillImpl(RefInfo info, ConstantPoolEntry[] pool,
                                      int classIndex, int nameAndTypeIndex) {
             info.owner = ConstantPoolParser.className(pool, classIndex);
@@ -391,128 +291,6 @@ public class MethodRefRewriter implements RewriteRule {
             }
             String implName = "<init>".equals(info.name) ? "new" : info.name;
             return implName.equals(node.methodRefName());
-        }
-
-        /** 构建带注解显式类型实参的方法引用名,如 {@code <@A String>id};失败返回 null */
-        private String buildRefName(LambdaExpr node, Entry entry, RefInfo info) {
-            if (entry.targetType() == TARGET_CTOR_REF_TYPE_ARGUMENT) {
-                // 构造器引用:类型实参即被构造类的泛型实参(非泛型时为其类名)
-                List<String> instParts = methodTypeParts(info.instantiatedDescriptor);
-                String retText = instParts.isEmpty() ? null : instParts.getLast();
-                String argText;
-                if (retText != null && retText.contains("<")) {
-                    int lt = retText.indexOf('<');
-                    int gt = retText.lastIndexOf('>');
-                    if (gt <= lt) {
-                        return null;
-                    }
-                    argText = retText.substring(lt + 1, gt);
-                } else {
-                    argText = info.owner != null ? simpleName(info.owner) : null;
-                }
-                if (argText == null) {
-                    return null;
-                }
-                return "<" + entry.renderedAnn() + " " + argText + ">" + node.methodRefName();
-            }
-            List<String> args = methodRefTypeArgs(info);
-            if (args.isEmpty() || entry.typeArgIndex() >= args.size()) {
-                return null;
-            }
-            StringBuilder sb = new StringBuilder("<");
-            for (int k = 0; k < args.size(); k++) {
-                if (k > 0) {
-                    sb.append(", ");
-                }
-                if (k == entry.typeArgIndex()) {
-                    sb.append(entry.renderedAnn()).append(' ');
-                }
-                sb.append(args.get(k));
-            }
-            return sb.append('>').append(node.methodRefName()).toString();
-        }
-
-        /** 方法引用:计算显式类型实参列表(按类型形参声明顺序) */
-        private List<String> methodRefTypeArgs(RefInfo info) {
-            List<String> instParts = methodTypeParts(info.instantiatedDescriptor);
-            // 优先用实现方法的 Signature 属性做精确映射
-            MethodModel implMethod = info.implDescriptor != null
-                    ? findImplMethodModel(info.name, info.implDescriptor) : null;
-            if (implMethod != null && implMethod.signature() != null
-                    && !implMethod.signature().isEmpty()) {
-                List<String> typeVarNames = formalTypeParameterNames(implMethod.signature());
-                JavaType[] sigParts = SignatureParser.parseMethodSignature(implMethod.signature());
-                if (!typeVarNames.isEmpty() && sigParts != null
-                        && sigParts.length == instParts.size()) {
-                    java.util.Map<String, String> seen = new java.util.LinkedHashMap<>();
-                    for (int p = 0; p < sigParts.length; p++) {
-                        JavaType sig = sigParts[p];
-                        // SignatureParser 将类型变量解析为 kind=TYPE_VARIABLE、
-                        // 描述符 "T<名字>;"(internalName 携带变量名)。
-                        // CLASS 一并接受以兼容旧表示(如手工构建的 JavaType).
-                        if (sig == null || (sig.kind() != TypeKind.CLASS
-                                && sig.kind() != TypeKind.TYPE_VARIABLE)
-                                || sig.descriptor() == null
-                                || !sig.descriptor().startsWith("T")) {
-                            continue;
-                        }
-                        String varName = sig.internalName();
-                        if (varName != null) {
-                            seen.putIfAbsent(varName, instParts.get(p));
-                        }
-                    }
-                    List<String> args = new ArrayList<>();
-                    for (String n : typeVarNames) {
-                        String t = seen.get(n);
-                        if (t == null) {
-                            args = null;
-                            break;
-                        }
-                        args.add(t);
-                    }
-                    if (args != null) {
-                        return args;
-                    }
-                }
-            }
-            // 回退:实例化签名与擦除签名的差异位置(去重,按出现顺序)
-            List<String> implParts = info.implDescriptor != null
-                    ? methodTypeParts(info.implDescriptor) : null;
-            Set<String> candidates = new LinkedHashSet<>();
-            for (int p = 0; p < instParts.size(); p++) {
-                String instPart = instParts.get(p);
-                if ("void".equals(instPart)) {
-                    continue;
-                }
-                String implPart = implParts != null && p < implParts.size()
-                        ? implParts.get(p) : null;
-                if (implPart == null || !implPart.equals(instPart)) {
-                    candidates.add(instPart);
-                }
-            }
-            if (candidates.isEmpty()) {
-                // 显式类型实参与擦除签名相同(如 ::<Object>id):退回全部实例化位置
-                for (String part : instParts) {
-                    if (!"void".equals(part)) {
-                        candidates.add(part);
-                    }
-                }
-            }
-            return new ArrayList<>(candidates);
-        }
-
-        /** 在 class 文件模型中按 (名称, 描述符) 查找实现方法模型 */
-        private MethodModel findImplMethodModel(String name, String descriptor) {
-            ClassFileModel cf = context.classFile();
-            if (cf == null || cf.methods() == null) {
-                return null;
-            }
-            for (MethodModel m : cf.methods()) {
-                if (name.equals(m.name()) && descriptor.equals(m.descriptor())) {
-                    return m;
-                }
-            }
-            return null;
         }
 
         /** 提取泛型签名中的类型形参声明名列表(按声明顺序) */
@@ -614,6 +392,238 @@ public class MethodRefRewriter implements RewriteRule {
             int slash = internalName.lastIndexOf('/');
             String s = slash >= 0 ? internalName.substring(slash + 1) : internalName;
             return s.replace('$', '.');
+        }
+
+        /**
+         * 为方法引用节点附着接收者注解与类型实参注解,无变化时返回原节点.
+         *
+         * <p>同一字节码偏移可同时存在接收者条目(0x45/0x46)与类型实参条目
+         * (0x4A/0x4B),如 {@code @A C::<@A String>id}——按偏移成组消费,
+         * 接收者注解渲染于所有者前,类型实参注解嵌入 {@code <...>} 实参列表.</p>
+         */
+        LambdaExpr apply(LambdaExpr node) {
+            for (int i = cursor; i < entries.size(); i++) {
+                Entry entry = entries.get(i);
+                RefInfo info = resolve(entry.offset);
+                if (info == null || !matches(node, info)) {
+                    continue;
+                }
+                List<String> receiverAnns = new ArrayList<>();
+                String newName = node.methodRefName();
+                int j = i;
+                while (j < entries.size() && entries.get(j).offset() == entry.offset) {
+                    Entry e = entries.get(j);
+                    if (e.targetType() == TARGET_METHOD_REF_RECEIVER
+                            || e.targetType() == TARGET_CTOR_REF_RECEIVER) {
+                        receiverAnns.add(e.renderedAnn());
+                    } else {
+                        String nm = buildRefName(node, e, info);
+                        if (nm != null) {
+                            newName = nm;
+                        }
+                    }
+                    j++;
+                }
+                cursor = j;
+                if (receiverAnns.isEmpty() && newName.equals(node.methodRefName())) {
+                    return node;
+                }
+                return LambdaExpr.methodRef(node.methodRefOwner(), newName,
+                        node.functionalType(), receiverAnns);
+            }
+            return node;
+        }
+
+        /** 由字节码偏移找到 invokedynamic 并还原其 BootstrapMethods 元数据 */
+        private RefInfo resolve(int offset) {
+            if (method.instructions() == null) {
+                return null;
+            }
+            for (Instruction ins : method.instructions()) {
+                if (ins.offset() != offset || !"invokedynamic".equals(ins.mnemonic())) {
+                    continue;
+                }
+                List<Integer> operands = ins.rawOperands();
+                if (operands == null || operands.isEmpty()) {
+                    return null;
+                }
+                int cpIndex = operands.get(0);
+                ClassFileModel cf = context.classFile();
+                if (cf == null || cf.constantPool() == null
+                        || cpIndex <= 0 || cpIndex >= cf.constantPool().length) {
+                    return null;
+                }
+                if (!(cf.constantPool()[cpIndex] instanceof ConstantPoolEntry.CpInvokeDynamic indy)) {
+                    return null;
+                }
+                List<BootstrapMethodEntry> boots = context.bootstrapMethods();
+                int bi = indy.bootstrapMethodAttrIndex();
+                if (boots == null || bi < 0 || bi >= boots.size()) {
+                    return null;
+                }
+                BootstrapMethodEntry boot = boots.get(bi);
+                // metafactory 参数:[0] samMethodType [1] implMethod [2] instantiatedMethodType
+                if (boot.arguments() == null || boot.arguments().size() < 3) {
+                    return null;
+                }
+                ConstantPoolEntry[] pool = cf.constantPool();
+                RefInfo info = new RefInfo();
+                ConstantPoolEntry impl = pool[boot.arguments().get(1)];
+                if (impl instanceof ConstantPoolEntry.CpMethodHandle mh) {
+                    ConstantPoolEntry ref = pool[mh.referenceIndex()];
+                    if (ref instanceof ConstantPoolEntry.CpMethodRef mr) {
+                        fillImpl(info, pool, mr.classIndex(), mr.nameAndTypeIndex());
+                    } else if (ref instanceof ConstantPoolEntry.CpInterfaceMethodRef imr) {
+                        fillImpl(info, pool, imr.classIndex(), imr.nameAndTypeIndex());
+                    }
+                }
+                ConstantPoolEntry inst = pool[boot.arguments().get(2)];
+                if (inst instanceof ConstantPoolEntry.CpMethodType mt) {
+                    info.instantiatedDescriptor = ConstantPoolParser.utf8(pool, mt.descriptorIndex());
+                }
+                if (info.name == null || info.instantiatedDescriptor == null) {
+                    return null;
+                }
+                return info;
+            }
+            return null;
+        }
+
+        /** 构建带注解显式类型实参的方法引用名,如 {@code <@A String>id};失败返回 null */
+        private String buildRefName(LambdaExpr node, Entry entry, RefInfo info) {
+            if (entry.targetType() == TARGET_CTOR_REF_TYPE_ARGUMENT) {
+                // 构造器引用:类型实参即被构造类的泛型实参(非泛型时为其类名)
+                List<String> instParts = methodTypeParts(info.instantiatedDescriptor);
+                String retText = instParts.isEmpty() ? null : instParts.getLast();
+                String argText;
+                if (retText != null && retText.contains("<")) {
+                    int lt = retText.indexOf('<');
+                    int gt = retText.lastIndexOf('>');
+                    if (gt <= lt) {
+                        return null;
+                    }
+                    argText = retText.substring(lt + 1, gt);
+                } else {
+                    argText = info.owner != null ? simpleName(info.owner) : null;
+                }
+                if (argText == null) {
+                    return null;
+                }
+                return "<" + entry.renderedAnn() + " " + argText + ">" + node.methodRefName();
+            }
+            List<String> args = methodRefTypeArgs(info);
+            if (args.isEmpty() || entry.typeArgIndex() >= args.size()) {
+                return null;
+            }
+            StringBuilder sb = new StringBuilder("<");
+            for (int k = 0; k < args.size(); k++) {
+                if (k > 0) {
+                    sb.append(", ");
+                }
+                if (k == entry.typeArgIndex()) {
+                    sb.append(entry.renderedAnn()).append(' ');
+                }
+                sb.append(args.get(k));
+            }
+            return sb.append('>').append(node.methodRefName()).toString();
+        }
+
+        /** 方法引用:计算显式类型实参列表(按类型形参声明顺序) */
+        private List<String> methodRefTypeArgs(RefInfo info) {
+            List<String> instParts = methodTypeParts(info.instantiatedDescriptor);
+            // 优先用实现方法的 Signature 属性做精确映射
+            MethodModel implMethod = info.implDescriptor != null
+                    ? findImplMethodModel(info.name, info.implDescriptor) : null;
+            if (implMethod != null && implMethod.signature() != null
+                    && !implMethod.signature().isEmpty()) {
+                List<String> typeVarNames = formalTypeParameterNames(implMethod.signature());
+                JavaType[] sigParts = SignatureParser.parseMethodSignature(implMethod.signature());
+                if (!typeVarNames.isEmpty() && sigParts != null
+                        && sigParts.length == instParts.size()) {
+                    java.util.Map<String, String> seen = new java.util.LinkedHashMap<>();
+                    for (int p = 0; p < sigParts.length; p++) {
+                        JavaType sig = sigParts[p];
+                        // SignatureParser 将类型变量解析为 kind=TYPE_VARIABLE,
+                        // 描述符 "T<名字>;"(internalName 携带变量名).
+                        // CLASS 一并接受以兼容旧表示(如手工构建的 JavaType).
+                        if (sig == null || (sig.kind() != TypeKind.CLASS
+                                && sig.kind() != TypeKind.TYPE_VARIABLE)
+                                || sig.descriptor() == null
+                                || !sig.descriptor().startsWith("T")) {
+                            continue;
+                        }
+                        String varName = sig.internalName();
+                        if (varName != null) {
+                            seen.putIfAbsent(varName, instParts.get(p));
+                        }
+                    }
+                    List<String> args = new ArrayList<>();
+                    for (String n : typeVarNames) {
+                        String t = seen.get(n);
+                        if (t == null) {
+                            args = null;
+                            break;
+                        }
+                        args.add(t);
+                    }
+                    if (args != null) {
+                        return args;
+                    }
+                }
+            }
+            // 回退:实例化签名与擦除签名的差异位置(去重,按出现顺序)
+            List<String> implParts = info.implDescriptor != null
+                    ? methodTypeParts(info.implDescriptor) : null;
+            Set<String> candidates = new LinkedHashSet<>();
+            for (int p = 0; p < instParts.size(); p++) {
+                String instPart = instParts.get(p);
+                if ("void".equals(instPart)) {
+                    continue;
+                }
+                String implPart = implParts != null && p < implParts.size()
+                        ? implParts.get(p) : null;
+                if (implPart == null || !implPart.equals(instPart)) {
+                    candidates.add(instPart);
+                }
+            }
+            if (candidates.isEmpty()) {
+                // 显式类型实参与擦除签名相同(如 ::<Object>id):退回全部实例化位置
+                for (String part : instParts) {
+                    if (!"void".equals(part)) {
+                        candidates.add(part);
+                    }
+                }
+            }
+            return new ArrayList<>(candidates);
+        }
+
+        /** 在 class 文件模型中按 (名称, 描述符) 查找实现方法模型 */
+        private MethodModel findImplMethodModel(String name, String descriptor) {
+            ClassFileModel cf = context.classFile();
+            if (cf == null || cf.methods() == null) {
+                return null;
+            }
+            for (MethodModel m : cf.methods()) {
+                if (name.equals(m.name()) && descriptor.equals(m.descriptor())) {
+                    return m;
+                }
+            }
+            return null;
+        }
+
+        /** 类型注解条目:偏移,目标类型,类型实参下标,渲染后的注解行 */
+        private record Entry(int offset, int targetType, int typeArgIndex, String renderedAnn) {}
+
+        /** 经 invokedynamic 还原的方法引用信息 */
+        private static final class RefInfo {
+
+            String owner;                // 实现方法所有者(内部名)
+
+            String name;                 // 实现方法名("<init>" 为构造器)
+
+            String implDescriptor;       // 实现(擦除)方法描述符
+
+            String instantiatedDescriptor; // 实例化方法类型描述符(可含泛型)
         }
 
         /** 描述符片段渲染结果:源码文本与下一解析位置 */

@@ -354,7 +354,7 @@ public class RecordPatternRewriter extends AstTransformer implements RewriteRule
             // 模式变量类型用 import 感知的短名渲染并收集缺失 import,
             // 避免输出 instanceof R(Box<java.util.Map<...>> b) 全限定名
             patternStr.append(com.bingbaihanji.bdec.util.TypeText.render(
-                    cm.type(), currentPackage, innerClassNames, collectedImports))
+                            cm.type(), currentPackage, innerClassNames, collectedImports))
                     .append(" ").append(cm.name());
         }
         patternStr.append(")");

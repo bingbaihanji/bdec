@@ -14,7 +14,7 @@ import java.util.function.Function;
  * 注解渲染工具——把 {@link AnnotationEntry} 渲染为 Java 源码片段.
  *
  * <p>从 {@link AstBuilder} 中提取,供需要渲染注解的非 AST 层
- * (如 {@code IrBuilder} 为局部变量附加类型注解、
+ * (如 {@code IrBuilder} 为局部变量附加类型注解,
  * {@code BlockReducer} 构建声明)复用.</p>
  */
 public final class AnnotationRenderer {
@@ -79,10 +79,8 @@ public final class AnnotationRenderer {
             case Long l -> String.valueOf(l) + "L";
             case Float f -> String.valueOf(f) + "f";
             case Double d -> String.valueOf(d);
-            case AnnotationEntry.EnumValue ev ->
-                    simpleName.apply(ev.typeName()) + "." + ev.constName();
-            case AnnotationEntry.ClassValue cv ->
-                    simpleName.apply(cv.internalName()) + ".class";
+            case AnnotationEntry.EnumValue ev -> simpleName.apply(ev.typeName()) + "." + ev.constName();
+            case AnnotationEntry.ClassValue cv -> simpleName.apply(cv.internalName()) + ".class";
             case AnnotationEntry nested -> render(nested, simpleName);
             case java.util.List<?> list -> {
                 StringBuilder sb = new StringBuilder("{");

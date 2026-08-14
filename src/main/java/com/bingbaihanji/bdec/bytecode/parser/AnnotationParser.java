@@ -17,9 +17,9 @@ import java.util.List;
 /**
  * 注解解析器(里程碑 Phase 3).
  *
- * <p>负责解析类文件中的注解相关结构:element_value、annotation、
- * RuntimeVisibleAnnotations 与 RuntimeVisibleTypeAnnotations 属性。
- * 由 {@link StructureParser} 在解析字段/方法/Code 属性时复用。</p>
+ * <p>负责解析类文件中的注解相关结构:element_value,annotation,
+ * RuntimeVisibleAnnotations 与 RuntimeVisibleTypeAnnotations 属性.
+ * 由 {@link StructureParser} 在解析字段/方法/Code 属性时复用.</p>
  */
 final class AnnotationParser {
 
@@ -206,8 +206,7 @@ final class AnnotationParser {
             }
             case 0x42 -> new int[]{in.readUnsignedShort()};               // 异常表索引
             case 0x43, 0x44, 0x45, 0x46 -> new int[]{in.readUnsignedShort()}; // 偏移量
-            case 0x47, 0x48, 0x49, 0x4A, 0x4B ->
-                    new int[]{in.readUnsignedShort(), in.readUnsignedByte()}; // 偏移量+类型参数
+            case 0x47, 0x48, 0x49, 0x4A, 0x4B -> new int[]{in.readUnsignedShort(), in.readUnsignedByte()}; // 偏移量+类型参数
             default -> new int[0];
         };
     }

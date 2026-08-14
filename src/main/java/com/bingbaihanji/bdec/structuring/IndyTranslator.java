@@ -168,6 +168,24 @@ public final class IndyTranslator {
 
     // ── 参数构建 ──
 
+    /** 检查表达式是否为 String 类型 */
+    private static boolean isStringExpr(Expression e) {
+        return e instanceof LitExpr lit && lit.value() instanceof String;
+    }
+
+    /** 从左到右构建二元 + 链 */
+    private static Expression buildConcatChain(List<Expression> parts) {
+        Expression result = parts.get(0);
+        for (int i = 1; i < parts.size(); i++) {
+            result = new com.bingbaihanji.bdec.ast.expr.BinExpr(
+                    com.bingbaihanji.bdec.ast.expr.BinaryOperator.ADD,
+                    result, parts.get(i));
+        }
+        return result;
+    }
+
+    // ── 工具方法 ──
+
     /**
      * 将 invokedynamic INVOKE 指令翻译为 LambdaExpr 或方法引用.
      *
@@ -245,8 +263,6 @@ public final class IndyTranslator {
         String owner = resolveMethodRefOwner(implOwner, operands);
         return LambdaExpr.methodRef(owner, implName, funcType);
     }
-
-    // ── 工具方法 ──
 
     /**
      * 解析方法引用的 owner 字符串.
@@ -351,22 +367,6 @@ public final class IndyTranslator {
             args.addFirst(new LitExpr("", JavaType.classType("java/lang/String")));
         }
         return buildConcatChain(args);
-    }
-
-    /** 检查表达式是否为 String 类型 */
-    private static boolean isStringExpr(Expression e) {
-        return e instanceof LitExpr lit && lit.value() instanceof String;
-    }
-
-    /** 从左到右构建二元 + 链 */
-    private static Expression buildConcatChain(List<Expression> parts) {
-        Expression result = parts.get(0);
-        for (int i = 1; i < parts.size(); i++) {
-            result = new com.bingbaihanji.bdec.ast.expr.BinExpr(
-                    com.bingbaihanji.bdec.ast.expr.BinaryOperator.ADD,
-                    result, parts.get(i));
-        }
-        return result;
     }
 
     /** 从 INDY 操作数构建参数列表(捕获变量 + 工厂参数 → lambda 参数) */

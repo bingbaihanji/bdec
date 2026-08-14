@@ -12,9 +12,9 @@ import com.bingbaihanji.bdec.ast.stmt.SwitchStatement;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
+import com.bingbaihanji.bdec.ir.InstructionRef;
 import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.IrOpcode;
-import com.bingbaihanji.bdec.ir.InstructionRef;
 import com.bingbaihanji.bdec.ir.LinearIr;
 import com.bingbaihanji.bdec.ir.Value;
 import com.bingbaihanji.bdec.ir.Variable;
@@ -33,10 +33,10 @@ import java.util.Set;
  * "每模式一处理器"风格提取的 switch 专用翻译逻辑.
  *
  * <p>包含:两级字符串 switch 的 case 区域结构化翻译
- * ({@link #translateSwitchCaseRegion} 按 CFG 边构造 case 体内的 if)、
- * switch 表达式的结果变量识别({@link #detectSwitchFollow})、
+ * ({@link #translateSwitchCaseRegion} 按 CFG 边构造 case 体内的 if),
+ * switch 表达式的结果变量识别({@link #detectSwitchFollow}),
  * typeSwitch 守卫翻译({@link #translateTypeSwitchCase})等.
- * 所有依赖归约状态的能力(表达式翻译、块组翻译、作用域追踪、
+ * 所有依赖归约状态的能力(表达式翻译,块组翻译,作用域追踪,
  * PHI 分支上下文)通过 {@link ReducerOps} 回调 {@link BlockReducer},
  * 本类保持无状态.</p>
  */
@@ -46,8 +46,8 @@ public final class SwitchTranslator {
 
     /** 根据 switch 信息和分组块构建 SwitchStatement */
     static Statement buildSwitch(ReducerOps ops, SwitchInfo info, BlockGroup group, LinearIr ir,
-                                        List<BlockGroup> allGroups, Set<BlockGroup> consumed,
-                                        ControlFlowGraph graph) {
+                                 List<BlockGroup> allGroups, Set<BlockGroup> consumed,
+                                 ControlFlowGraph graph) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
         Expression discriminant = new VarExpr("switchKey");
         boolean isTypeSwitch = false;
@@ -228,7 +228,8 @@ public final class SwitchTranslator {
                     }
                 }
                 if (isTypeSwitch && nonVoidMethod
-                        && defBody.stream().noneMatch(x -> x instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement)) {
+                        && defBody.stream()
+                        .noneMatch(x -> x instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement)) {
                     for (BasicBlock b : info.defaultBody()) {
                         for (IrInstruction ci : ir.instructionsOf(b)) {
                             if (ci.opcode() == IrOpcode.CONST && !ci.operands().isEmpty()) {
@@ -294,8 +295,8 @@ public final class SwitchTranslator {
      * </ul>
      */
     static List<Statement> translateSwitchCaseRegion(ReducerOps ops, Set<BasicBlock> region, LinearIr ir,
-                                                      ControlFlowGraph graph,
-                                                      Set<BasicBlock> visited) {
+                                                     ControlFlowGraph graph,
+                                                     Set<BasicBlock> visited) {
         BasicBlock entry = null;
         for (BasicBlock b : region) {
             if (entry == null || b.startOffset() < entry.startOffset()) {
@@ -311,8 +312,8 @@ public final class SwitchTranslator {
 
     /** 递归翻译 case 区域内的单个块. */
     static List<Statement> translateSwitchCaseBlock(ReducerOps ops, BasicBlock b, Set<BasicBlock> region,
-                                                     LinearIr ir, ControlFlowGraph graph,
-                                                     Set<BasicBlock> visited) {
+                                                    LinearIr ir, ControlFlowGraph graph,
+                                                    Set<BasicBlock> visited) {
         if (!visited.add(b)) {
             return List.of();
         }
@@ -395,10 +396,10 @@ public final class SwitchTranslator {
      * 无守卫时返回 null(回退到常规的单值解析).
      */
     static Statement translateSwitchExprGuard(ReducerOps ops, Set<BasicBlock> blocks,
-                                               BasicBlock follow,
-                                               Variable switchResultVar,
-                                               LinearIr ir,
-                                               ControlFlowGraph graph) {
+                                              BasicBlock follow,
+                                              Variable switchResultVar,
+                                              LinearIr ir,
+                                              ControlFlowGraph graph) {
         for (BasicBlock b : blocks) {
             boolean hasCond = ir.instructionsOf(b).stream()
                     .anyMatch(i -> i.opcode() == IrOpcode.CONDITION);
@@ -445,7 +446,7 @@ public final class SwitchTranslator {
 
     /** 按指定块上下文解析 follow 中的 PHI 值 */
     static Expression resolvePhiForBlocks(ReducerOps ops, BasicBlock follow, Set<Integer> blockIds,
-                                           LinearIr ir) {
+                                          LinearIr ir) {
         Set<Integer> prev = ops.currentBranchBlocks();
         try {
             ops.setCurrentBranchBlocks(blockIds);
@@ -462,11 +463,11 @@ public final class SwitchTranslator {
      * 仅含常量结果的分支块包装为 return.
      */
     static List<Statement> translateTypeSwitchCase(ReducerOps ops, Set<BasicBlock> blocks,
-                                                    BasicBlock restartBlock,
-                                                    int switchKeySlot,
-                                                    boolean nonVoid,
-                                                    LinearIr ir,
-                                                    ControlFlowGraph graph) {
+                                                   BasicBlock restartBlock,
+                                                   int switchKeySlot,
+                                                   boolean nonVoid,
+                                                   LinearIr ir,
+                                                   ControlFlowGraph graph) {
         List<Statement> stmts = new ArrayList<>();
         Set<BasicBlock> emitted = new HashSet<>();
         for (BasicBlock b : blocks) {
@@ -535,7 +536,8 @@ public final class SwitchTranslator {
                         Expression constExpr = ops.valueToExpr(ci.operands().getFirst());
                         if (constExpr instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit
                                 && lit.value() instanceof String
-                                && bs.stream().noneMatch(x -> x instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement)) {
+                                && bs.stream()
+                                .noneMatch(x -> x instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement)) {
                             bs.add(new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(lit));
                             break;
                         }
@@ -550,13 +552,13 @@ public final class SwitchTranslator {
 
     /** 收集 typeSwitch case 体内的分支区域(从 start 出发,限于 case 体内) */
     static List<Statement> collectTypeSwitchRegion(ReducerOps ops, BasicBlock start,
-                                                    Set<BasicBlock> caseBlocks,
-                                                    BasicBlock restartBlock,
-                                                    int switchKeySlot,
-                                                    boolean nonVoid,
-                                                    Set<BasicBlock> emitted,
-                                                    LinearIr ir,
-                                                    ControlFlowGraph graph) {
+                                                   Set<BasicBlock> caseBlocks,
+                                                   BasicBlock restartBlock,
+                                                   int switchKeySlot,
+                                                   boolean nonVoid,
+                                                   Set<BasicBlock> emitted,
+                                                   LinearIr ir,
+                                                   ControlFlowGraph graph) {
         List<Statement> stmts = new ArrayList<>();
         Deque<BasicBlock> queue = new ArrayDeque<>();
         Set<BasicBlock> visited = new HashSet<>();

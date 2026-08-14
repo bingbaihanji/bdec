@@ -31,8 +31,10 @@ public record ModuleInfo(
 
     /** requires 条目:依赖模块及其修饰符与版本. */
     public record RequiresEntry(String module, int flags, String version) {
+
         /** requires transitive 标志 */
         public static final int ACC_TRANSITIVE = 0x0020;
+
         /** requires static 标志 */
         public static final int ACC_STATIC_PHASE = 0x0040;
     }

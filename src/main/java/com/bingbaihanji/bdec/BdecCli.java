@@ -31,10 +31,10 @@ public final class BdecCli {
     /** 命令行帮助信息模板 */
     private static final String HELP = """
                                        BDEC (Bingbaihanji Decompiler) v%s — Java 反编译引擎
-
+                                       
                                        用法:
                                          java -jar bdec.jar [选项]
-
+                                       
                                        选项:
                                          --help, -h               显示此帮助信息
                                          --version, -v            显示版本号
@@ -42,12 +42,12 @@ public final class BdecCli {
                                                                   输出目录默认为当前目录
                                          -jar <文件> [输出目录]    反编译 JAR 包中全部 .class 文件
                                                                   输出目录默认为当前目录
-
+                                       
                                        示例:
                                          java -jar bdec.jar -class "D:/hello/Hello.class" "D:/hello/"
                                          java -jar bdec.jar -jar "test.jar" ./
                                          java -jar bdec.jar -jar "lib.jar" ./output/
-
+                                       
                                        输出:
                                          对每个类 com.example.Foo,生成 输出目录/com/example/Foo.java
                                        """.formatted(VERSION);

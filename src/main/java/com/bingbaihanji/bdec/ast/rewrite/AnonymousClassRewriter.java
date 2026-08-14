@@ -39,6 +39,12 @@ import java.util.Map;
  */
 public class AnonymousClassRewriter implements RewriteRule {
 
+    /** 剥离类型引用中的泛型参数(如 "List<String>" → "List"),供父类型解析用. */
+    private static String stripGenericArgs(String ref) {
+        int lt = ref.indexOf('<');
+        return lt >= 0 ? ref.substring(0, lt) : ref;
+    }
+
     @Override
     public String name() {return "anonymous-class";}
 
@@ -154,12 +160,6 @@ public class AnonymousClassRewriter implements RewriteRule {
             return JavaType.classType(stripGenericArgs(anon.superName()));
         }
         return JavaType.classType("java/lang/Object");
-    }
-
-    /** 剥离类型引用中的泛型参数(如 "List<String>" → "List"),供父类型解析用. */
-    private static String stripGenericArgs(String ref) {
-        int lt = ref.indexOf('<');
-        return lt >= 0 ? ref.substring(0, lt) : ref;
     }
 
     /** 构建匿名类实例化:父类型 + 去 this$0 的参数 + 匿名类体 */

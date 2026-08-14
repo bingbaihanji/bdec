@@ -26,10 +26,10 @@ import java.util.Set;
  * synchronized 块翻译器——从 {@link TryTranslator} 中提取的 synchronized
  * 专属逻辑(里程碑 Phase 3).
  *
- * <p>包含 synchronized 处理器识别({@link #isSyncHandlerGroup}、
- * {@link #groupHasSynchronizedAnnotation}、{@link #isSynchronizedHandler})、
- * 监视器对象提取({@link #extractMonitorObject})、同步体收集
- * ({@link #collectSyncBody})与包装({@link #wrapSynchronized})。保持无状态.</p>
+ * <p>包含 synchronized 处理器识别({@link #isSyncHandlerGroup},
+ * {@link #groupHasSynchronizedAnnotation},{@link #isSynchronizedHandler}),
+ * 监视器对象提取({@link #extractMonitorObject}),同步体收集
+ * ({@link #collectSyncBody})与包装({@link #wrapSynchronized}).保持无状态.</p>
  */
 public final class SynchronizedTranslator {
 
@@ -40,8 +40,12 @@ public final class SynchronizedTranslator {
         boolean hasMonitorExit = false;
         boolean hasThrow = false;
         for (IrInstruction insn : group.allIrInstructions(ir)) {
-            if (insn.opcode() == IrOpcode.MONITOR_EXIT) hasMonitorExit = true;
-            if (insn.opcode() == IrOpcode.THROW) hasThrow = true;
+            if (insn.opcode() == IrOpcode.MONITOR_EXIT) {
+                hasMonitorExit = true;
+            }
+            if (insn.opcode() == IrOpcode.THROW) {
+                hasThrow = true;
+            }
         }
         return hasMonitorExit && hasThrow;
     }

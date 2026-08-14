@@ -53,7 +53,9 @@ public class SourceCleanup implements RewriteRule {
         Set<String> extraFields = new HashSet<>();
         if (ctx.classFile() != null) {
             for (var rc : ctx.classFile().recordComponents()) {
-                if (rc.name() != null) extraFields.add(rc.name());
+                if (rc.name() != null) {
+                    extraFields.add(rc.name());
+                }
             }
         }
         List<TypeDeclaration> types = new ArrayList<>();
@@ -364,7 +366,7 @@ public class SourceCleanup implements RewriteRule {
             }
         } else if (e instanceof FieldAccessExpr fa && fa.target() != null) {
             // 静态字段访问的目标是类型名(如 System.out,
-            // java.util.concurrent.TimeUnit.SECONDS、int.class 的 "int"),
+            // java.util.concurrent.TimeUnit.SECONDS,int.class 的 "int"),
             // 不是局部变量——仅收集实例字段访问的真实变量目标.
             if (!(fa.target() instanceof VarExpr tv && SourceCleanupSupport.isTypeName(tv.name()))) {
                 collectVarNamesInExpr(fa.target(), out);

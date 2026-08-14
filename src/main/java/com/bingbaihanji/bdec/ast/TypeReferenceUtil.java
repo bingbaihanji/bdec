@@ -14,7 +14,7 @@ import java.util.Set;
  * 类型引用渲染与 import 收集工具(里程碑 Phase 3).
  *
  * <p>从 {@link AstBuilder} 中提取,承载父类/接口泛型引用渲染(含 JSR-308
- * 类型路径注解注入)与 import 收集约定。纯静态方法,无实例状态。</p>
+ * 类型路径注解注入)与 import 收集约定.纯静态方法,无实例状态.</p>
  */
 public final class TypeReferenceUtil {
 
@@ -37,7 +37,7 @@ public final class TypeReferenceUtil {
      * <ul>
      *   <li>根节点(父类/接口自身)用简单名(依赖 import),维持原有约定;</li>
      *   <li>泛型实参递归渲染为短名并收集 import(与字段/方法类型渲染的
-     *       java.lang/同包过滤、$→. 转换约定一致);</li>
+     *       java.lang/同包过滤,$→. 转换约定一致);</li>
      *   <li>渲染时按类型路径在 TYPE_ARGUMENT 位置注入 JSR-308 类型注解
      *       (如 {@code Base<@A String>} 中的 {@code @A}).</li>
      * </ul>
@@ -148,7 +148,7 @@ public final class TypeReferenceUtil {
     /**
      * 检查一个 JavaType 是否表示指定类类型参数列表中的类型变量.
      * 类型变量在签名中以 {@code TName;} 格式出现,由 SignatureParser
-     * 统一解析为 kind=TYPE_VARIABLE;internalName 携带变量名,故按名字匹配。
+     * 统一解析为 kind=TYPE_VARIABLE;internalName 携带变量名,故按名字匹配.
      */
     public static boolean isClassTypeParam(JavaType type, List<String> classTypeParams) {
         if (type == null || classTypeParams.isEmpty()) {
@@ -161,7 +161,7 @@ public final class TypeReferenceUtil {
 
     /** 类型是否携带泛型参数或通配符(签名比擦除描述符信息更丰富).
      *  描述符是擦除后的,永不携带类型参数——只要签名类型有类型参数
-     *  (如 Function&lt;Integer, Integer&gt;、List&lt;String&gt;),签名就更丰富,
+     *  (如 Function&lt;Integer, Integer&gt;,List&lt;String&gt;),签名就更丰富,
      *  必须替换.此前要求参数自身嵌套泛型,导致扁平泛型
      *  (Function&lt;Integer,Integer&gt;)被错误跳过,输出擦除的原始类型. */
     public static boolean hasGenericsOrWildcard(JavaType t) {
@@ -170,12 +170,12 @@ public final class TypeReferenceUtil {
 
     /**
      * 数组的基元素是否为签名格式的类型变量(裸 {@code T[]}).
-     * 签名中 {@code T[]} 解析为 kind=ARRAY、descriptor={@code [TT;}
-     * (internalName 恒 null、typeArguments 恒空,前两个闸门条件对 ARRAY
+     * 签名中 {@code T[]} 解析为 kind=ARRAY,descriptor={@code [TT;}
+     * (internalName 恒 null,typeArguments 恒空,前两个闸门条件对 ARRAY
      * 全部拒绝),故按描述符判定:逐层剥掉前导 {@code [} 后剩余部分是
      * {@code "T" + 名字 + ";"} 形态即为类型变量数组,签名比擦除的
-     * {@code Object[]} 更丰富,必须替换。渲染端经 elementOf →
-     * fromDescriptor 已修复为产 TYPE_VARIABLE,输出 {@code T[]}。
+     * {@code Object[]} 更丰富,必须替换.渲染端经 elementOf →
+     * fromDescriptor 已修复为产 TYPE_VARIABLE,输出 {@code T[]}.
      */
     public static boolean hasTypeVariableArrayElement(JavaType t) {
         if (t == null || t.kind() != TypeKind.ARRAY || t.descriptor() == null) {
@@ -197,7 +197,7 @@ public final class TypeReferenceUtil {
      * </ul>
      * 仅当类型为CLASS类型且来自不同包(非当前类)时才添加到import集合中.
      * java.lang 直接成员与同包类型由 build() 末尾的 import 列表过滤统一剔除;
-     * 方法签名路径的旧 CLASS 伪装类型变量(内部名如 "T")由"无点号过滤"兜底剔除。
+     * 方法签名路径的旧 CLASS 伪装类型变量(内部名如 "T")由"无点号过滤"兜底剔除.
      *
      * @param type      需要检查的Java类型
      * @param imports   待填充的import集合
@@ -227,7 +227,7 @@ public final class TypeReferenceUtil {
             }
             case ARRAY -> collectImport(JavaType.elementOf(type), imports, thisClass);
             case WILDCARD -> {
-                // 递归通配符边界(? extends X / ? super Y 的 X、Y 若可导入需收集)
+                // 递归通配符边界(? extends X / ? super Y 的 X,Y 若可导入需收集)
                 for (JavaType bound : type.typeArguments()) {
                     collectImport(bound, imports, thisClass);
                 }
