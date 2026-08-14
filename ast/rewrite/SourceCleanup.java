@@ -125,141 +125,150 @@ public class SourceCleanup implements RewriteRule {
             }
         }
         // 修复模式1:非 void 方法中的 return void 方法调用 → 拆分为调用 + 默认值 return
-        if (s instanceof ReturnStatement rs && rs.value() != null && nonVoid) {
-            Expression v = rs.value();
-            if (v instanceof InvocationExpr inv && isVoid(inv)) {
-                return new BlockStatement(List.of(
-                        new ExpressionStatement(v),
-                        new ReturnStatement(defaultVal(retType))));
+        switch (s) {
+            case ReturnStatement rs when rs.value() != null && nonVoid -> {
+                Expression v = rs.value();
+                if (v instanceof InvocationExpr inv && isVoid(inv)) {
+                    return new BlockStatement(List.of(
+                            new ExpressionStatement(v),
+                            new ReturnStatement(defaultVal(retType))));
+                }
+                return s;
             }
-            return s;
-        }
-        // 修复模式2:throw varN 且变量未声明 → 自动声明 Throwable 类型变量
-        if (s instanceof ThrowStatement ts && ts.expression() instanceof VarExpr ve
-                && ve.name().startsWith("var")) {
-            return new BlockStatement(List.of(
-                    new VariableDeclaration(JavaType.classType("java/lang/Throwable"),
-                            ve.name(), null), s));
-        }
-        if (s instanceof BlockStatement bs) {
-            // 截断 return/throw 之后的死代码(记录模式去糖化后可能遗留)
-            List<Statement> stmts = SourceCleanupSupport.truncateAfterTerminator(bs.statements());
-            // 扁平化纯顺序的嵌套块(仅声明与表达式语句,无控制流):
-            // BlockReducer 按组输出时会把预置头声明包装为独立块
-            // (如 try 体内 { int transferCount = ...; int i = 0; }),
-            // 后续语句(while 循环等)在块外引用这些声明——
-            // 嵌套块是独立作用域,必须扁平化到父级才能被后续语句看见,
-            // 否则自动声明逻辑会生成重复/错误的 "int i = 0;".
-            stmts = SourceCleanupSupport.flattenPlainNestedBlocks(stmts);
 
-            List<Statement> cleaned = new ArrayList<>();
-            Set<String> seen = new HashSet<>();
-            // 第一趟:收集当前块(含嵌套块)中所有已声明的变量名
-            Set<String> allDeclared = new HashSet<>();
-            collectDeclared(new BlockStatement(stmts), allDeclared);
-            // 将字段名也加入已声明集合,避免自动声明时遮蔽字段
-            allDeclared.addAll(fieldNames);
-            // 将参数名也加入已声明集合,避免重复声明参数
-            allDeclared.addAll(paramNames);
-            for (Statement c : stmts) {
-                // 修复模式3:重复变量声明 → 转换为赋值语句
-                if (c instanceof VariableDeclaration vd) {
-                    if (!seen.add(vd.name()) && vd.initializer() != null) {
-                        cleaned.add(new ExpressionStatement(
-                                new AssignExpr(new VarExpr(vd.name()), vd.initializer())));
-                        continue;
+            // 修复模式2:throw varN 且变量未声明 → 自动声明 Throwable 类型变量
+            case ThrowStatement ts when ts.expression() instanceof VarExpr ve && ve.name().startsWith("var") -> {
+                return new BlockStatement(List.of(
+                        new VariableDeclaration(JavaType.classType("java/lang/Throwable"),
+                                ve.name(), null), s));
+            }
+            case BlockStatement bs -> {
+                // 截断 return/throw 之后的死代码(记录模式去糖化后可能遗留)
+                List<Statement> stmts = SourceCleanupSupport.truncateAfterTerminator(bs.statements());
+                // 扁平化纯顺序的嵌套块(仅声明与表达式语句,无控制流):
+                // BlockReducer 按组输出时会把预置头声明包装为独立块
+                // (如 try 体内 { int transferCount = ...; int i = 0; }),
+                // 后续语句(while 循环等)在块外引用这些声明——
+                // 嵌套块是独立作用域,必须扁平化到父级才能被后续语句看见,
+                // 否则自动声明逻辑会生成重复/错误的 "int i = 0;".
+                stmts = SourceCleanupSupport.flattenPlainNestedBlocks(stmts);
+                // 提升 if-else 两分支共同声明的变量到 if 之前(条件赋值的菱形合并):
+                // 两分支各自声明同名变量时作用域局限在分支内,合并点后的引用
+                // 会触发下方 "int y = 0" 误补(语义错误).提升为 "Type y;" 前置,
+                // 分支内声明转为赋值,使 y 成为块级声明.
+                stmts = hoistConditionalDecls(stmts);
+
+                List<Statement> cleaned = new ArrayList<>();
+                Set<String> seen = new HashSet<>();
+                // 第一趟:收集当前块(含嵌套块)中所有已声明的变量名
+                Set<String> allDeclared = new HashSet<>();
+                collectDeclared(new BlockStatement(stmts), allDeclared);
+                // 将字段名也加入已声明集合,避免自动声明时遮蔽字段
+                allDeclared.addAll(fieldNames);
+                // 将参数名也加入已声明集合,避免重复声明参数
+                allDeclared.addAll(paramNames);
+                for (Statement c : stmts) {
+                    // 修复模式3:重复变量声明 → 转换为赋值语句
+                    if (c instanceof VariableDeclaration vd) {
+                        if (!seen.add(vd.name()) && vd.initializer() != null) {
+                            cleaned.add(new ExpressionStatement(
+                                    new AssignExpr(new VarExpr(vd.name()), vd.initializer())));
+                            continue;
+                        }
+                    }
+                    // 修复模式4:在语句执行前检查是否存在未声明的变量引用
+                    Set<String> used = new HashSet<>();
+                    collectVarNames(c, used);
+                    for (String u : used) {
+                        if (!allDeclared.contains(u) && !seen.contains(u)
+                                && !isBuiltin(u) && !SourceCleanupSupport.looksLikeClassName(u)) {
+                            // 使用默认值自动声明(整型默认为 0,对象默认为 null)
+                            cleaned.add(new VariableDeclaration(
+                                    JavaType.INT, u,
+                                    new LitExpr(0, JavaType.INT)));
+                            seen.add(u);
+                            allDeclared.add(u);
+                        }
+                    }
+                    // 将已声明变量合并到字段集合,防止 fix 内部重复声明
+                    Set<String> effectiveFields = new HashSet<>(fieldNames);
+                    effectiveFields.addAll(seen);
+                    effectiveFields.addAll(allDeclared);
+                    cleaned.add(fix(c, nonVoid, retType, effectiveFields, paramNames));
+                }
+                return new BlockStatement(foldSyntheticTemps(cleaned));
+            }
+            case IfStatement i -> {
+                // instanceof 模式变量(如 obj instanceof RecordDemo(String name, int age))
+                // 已在模式中声明,自动声明逻辑必须知晓,否则会生成重复的 "int name = 0"
+                Set<String> patternVars = new HashSet<>();
+                if (i.condition() != null) {
+                    collectPatternVars(i.condition(), patternVars);
+                }
+                Set<String> branchDeclared = new HashSet<>(fieldNames);
+                branchDeclared.addAll(patternVars);
+                return new IfStatement(i.condition(),
+                        fix(i.thenBranch(), nonVoid, retType, branchDeclared, paramNames),
+                        i.elseBranch() != null
+                                ? fix(i.elseBranch(), nonVoid, retType, branchDeclared, paramNames) : null);
+            }
+            case LoopStatement l -> {
+                // 检查循环条件中的未声明变量(仅 WHILE/DO_WHILE;
+                // FOR_EACH 的迭代变量是 for-each 语法的一部分)
+                List<Statement> preStmts = new ArrayList<>();
+                if (l.loopKind() == LoopStatement.LoopKind.WHILE
+                        || l.loopKind() == LoopStatement.LoopKind.DO_WHILE) {
+                    Set<String> condVars = new HashSet<>();
+                    if (l.condition() != null) {
+                        collectVarNamesInExpr(l.condition(), condVars);
+                    }
+                    for (String cv : condVars) {
+                        if (!fieldNames.contains(cv) && !paramNames.contains(cv)
+                                && !isBuiltin(cv) && !SourceCleanupSupport.looksLikeClassName(cv)) {
+                            preStmts.add(new VariableDeclaration(JavaType.INT, cv,
+                                    new LitExpr(0, JavaType.INT)));
+                        }
                     }
                 }
-                // 修复模式4:在语句执行前检查是否存在未声明的变量引用
-                Set<String> used = new HashSet<>();
-                collectVarNames(c, used);
-                for (String u : used) {
-                    if (!allDeclared.contains(u) && !seen.contains(u)
-                            && !isBuiltin(u) && !SourceCleanupSupport.looksLikeClassName(u)) {
-                        // 使用默认值自动声明(整型默认为 0,对象默认为 null)
-                        cleaned.add(new VariableDeclaration(
-                                JavaType.INT, u,
-                                new LitExpr(0, JavaType.INT)));
-                        seen.add(u);
-                        allDeclared.add(u);
-                    }
+                // for-each 的迭代变量由循环语法声明,自动声明逻辑必须知晓
+                Set<String> loopDeclared = fieldNames;
+                if (l.loopKind() == LoopStatement.LoopKind.FOR_EACH
+                        && l.forEachVar() instanceof VarExpr fv) {
+                    loopDeclared = new HashSet<>(fieldNames);
+                    loopDeclared.add(fv.name());
                 }
-                // 将已声明变量合并到字段集合,防止 fix 内部重复声明
-                Set<String> effectiveFields = new HashSet<>(fieldNames);
-                effectiveFields.addAll(seen);
-                effectiveFields.addAll(allDeclared);
-                cleaned.add(fix(c, nonVoid, retType, effectiveFields, paramNames));
-            }
-            return new BlockStatement(foldSyntheticTemps(cleaned));
-        }
-        if (s instanceof IfStatement i) {
-            // instanceof 模式变量(如 obj instanceof RecordDemo(String name, int age))
-            // 已在模式中声明,自动声明逻辑必须知晓,否则会生成重复的 "int name = 0"
-            Set<String> patternVars = new HashSet<>();
-            if (i.condition() != null) {
-                collectPatternVars(i.condition(), patternVars);
-            }
-            Set<String> branchDeclared = new HashSet<>(fieldNames);
-            branchDeclared.addAll(patternVars);
-            return new IfStatement(i.condition(),
-                    fix(i.thenBranch(), nonVoid, retType, branchDeclared, paramNames),
-                    i.elseBranch() != null
-                            ? fix(i.elseBranch(), nonVoid, retType, branchDeclared, paramNames) : null);
-        }
-        if (s instanceof LoopStatement l) {
-            // 检查循环条件中的未声明变量(仅 WHILE/DO_WHILE;
-            // FOR_EACH 的迭代变量是 for-each 语法的一部分)
-            List<Statement> preStmts = new ArrayList<>();
-            if (l.loopKind() == LoopStatement.LoopKind.WHILE
-                    || l.loopKind() == LoopStatement.LoopKind.DO_WHILE) {
-                Set<String> condVars = new HashSet<>();
-                if (l.condition() != null) {
-                    collectVarNamesInExpr(l.condition(), condVars);
+                Statement fixedBody = fix(l.body(), nonVoid, retType, loopDeclared, paramNames);
+                LoopStatement newLoop = withLoopBody(l, fixedBody);
+                if (preStmts.isEmpty()) {
+                    return newLoop;
                 }
-                for (String cv : condVars) {
-                    if (!fieldNames.contains(cv) && !paramNames.contains(cv)
-                            && !isBuiltin(cv) && !SourceCleanupSupport.looksLikeClassName(cv)) {
-                        preStmts.add(new VariableDeclaration(JavaType.INT, cv,
-                                new LitExpr(0, JavaType.INT)));
-                    }
+                List<Statement> combined = new ArrayList<>(preStmts);
+                combined.add(newLoop);
+                return new BlockStatement(combined);
+            }
+            case TryStatement t -> {
+                // 资源变量在 try(...) 中声明,其作用域覆盖 try 体/catch/finally,
+                // 必须纳入已声明集合,否则自动声明逻辑会误生成 "int r = 0"
+                Set<String> resourceParams = new HashSet<>(paramNames);
+                for (TryStatement.Resource r : t.resources()) {
+                    resourceParams.add(r.varName());
                 }
+                List<TryStatement.CatchClause> cc = new ArrayList<>();
+                for (var c : t.catchClauses()) {
+                    // 将 catch 子句的异常变量名纳入已声明集合,
+                    // 防止自动声明逻辑在 catch 体内重复声明该变量
+                    Set<String> extParams = new HashSet<>(resourceParams);
+                    extParams.add(c.varName());
+                    cc.add(new TryStatement.CatchClause(c.exceptionType(), c.varName(),
+                            fix(c.body(), nonVoid, retType, fieldNames, extParams)));
+                }
+                return new TryStatement(fix(t.tryBody(), nonVoid, retType, fieldNames, resourceParams), cc,
+                        t.finallyBody() != null
+                                ? fix(t.finallyBody(), nonVoid, retType, fieldNames, resourceParams) : null,
+                        t.resources());
             }
-            // for-each 的迭代变量由循环语法声明,自动声明逻辑必须知晓
-            Set<String> loopDeclared = fieldNames;
-            if (l.loopKind() == LoopStatement.LoopKind.FOR_EACH
-                    && l.forEachVar() instanceof VarExpr fv) {
-                loopDeclared = new HashSet<>(fieldNames);
-                loopDeclared.add(fv.name());
+            default -> {
             }
-            Statement fixedBody = fix(l.body(), nonVoid, retType, loopDeclared, paramNames);
-            LoopStatement newLoop = withLoopBody(l, fixedBody);
-            if (preStmts.isEmpty()) {
-                return newLoop;
-            }
-            List<Statement> combined = new ArrayList<>(preStmts);
-            combined.add(newLoop);
-            return new BlockStatement(combined);
-        }
-        if (s instanceof TryStatement t) {
-            // 资源变量在 try(...) 中声明,其作用域覆盖 try 体/catch/finally,
-            // 必须纳入已声明集合,否则自动声明逻辑会误生成 "int r = 0"
-            Set<String> resourceParams = new HashSet<>(paramNames);
-            for (TryStatement.Resource r : t.resources()) {
-                resourceParams.add(r.varName());
-            }
-            List<TryStatement.CatchClause> cc = new ArrayList<>();
-            for (var c : t.catchClauses()) {
-                // 将 catch 子句的异常变量名纳入已声明集合,
-                // 防止自动声明逻辑在 catch 体内重复声明该变量
-                Set<String> extParams = new HashSet<>(resourceParams);
-                extParams.add(c.varName());
-                cc.add(new TryStatement.CatchClause(c.exceptionType(), c.varName(),
-                        fix(c.body(), nonVoid, retType, fieldNames, extParams)));
-            }
-            return new TryStatement(fix(t.tryBody(), nonVoid, retType, fieldNames, resourceParams), cc,
-                    t.finallyBody() != null
-                            ? fix(t.finallyBody(), nonVoid, retType, fieldNames, resourceParams) : null,
-                    t.resources());
         }
         return s;
     }
@@ -347,6 +356,97 @@ public class SourceCleanup implements RewriteRule {
     }
 
     /**
+     * 提升 if-else 两分支共同声明的变量到 if 之前(条件赋值的菱形合并).
+     *
+     * <p>模式:{@code if (c) { ...; T y = a; } else { ...; T y = b; }} 后接 y 的引用.
+     * BlockReducer 按分支独立作用域翻译,导致 y 在两分支各声明一次(作用域局限于分支),
+     * 合并点后的引用 y 未声明,触发自动声明 {@code int y = 0}(语义错误).
+     * 此处将声明提升为 {@code T y;} 前置,分支内声明转为赋值 {@code y = a;}.</p>
+     */
+    private List<Statement> hoistConditionalDecls(List<Statement> stmts) {
+        List<Statement> out = new ArrayList<>();
+        for (Statement c : stmts) {
+            if (c instanceof IfStatement i && i.elseBranch() != null) {
+                Set<String> thenDecls = new HashSet<>();
+                Set<String> elseDecls = new HashSet<>();
+                collectBranchDecls(i.thenBranch(), thenDecls);
+                collectBranchDecls(i.elseBranch(), elseDecls);
+                Set<String> hoisted = new HashSet<>(thenDecls);
+                hoisted.retainAll(elseDecls);
+                if (hoisted.isEmpty()) {
+                    out.add(c);
+                    continue;
+                }
+                List<Statement> pre = new ArrayList<>();
+                for (String name : hoisted) {
+                    JavaType t = branchDeclType(i.thenBranch(), name);
+                    if (t == null) {
+                        t = branchDeclType(i.elseBranch(), name);
+                    }
+                    pre.add(new VariableDeclaration(t != null ? t : JavaType.INT, name, null));
+                }
+                pre.add(new IfStatement(i.condition(),
+                        hoistBranchDecls(i.thenBranch(), hoisted),
+                        hoistBranchDecls(i.elseBranch(), hoisted)));
+                out.addAll(pre);
+            } else {
+                out.add(c);
+            }
+        }
+        return out;
+    }
+
+    /** 收集分支体中顶层声明的变量名(不递归进入嵌套控制流). */
+    private void collectBranchDecls(Statement s, Set<String> out) {
+        if (s instanceof VariableDeclaration vd) {
+            out.add(vd.name());
+        } else if (s instanceof BlockStatement bs) {
+            for (Statement c : bs.statements()) {
+                if (c instanceof VariableDeclaration vd) {
+                    out.add(vd.name());
+                }
+            }
+        }
+    }
+
+    /** 查找分支体中某变量的声明类型(用于提升后的 {@code Type y;} 前置声明). */
+    private JavaType branchDeclType(Statement s, String name) {
+        if (s instanceof VariableDeclaration vd && vd.name().equals(name)) {
+            return vd.type();
+        }
+        if (s instanceof BlockStatement bs) {
+            for (Statement c : bs.statements()) {
+                if (c instanceof VariableDeclaration vd && vd.name().equals(name)) {
+                    return vd.type();
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 将分支体中已提升变量的声明转为赋值语句(无初始化器则删除该声明). */
+    private Statement hoistBranchDecls(Statement s, Set<String> hoisted) {
+        if (s instanceof VariableDeclaration vd && hoisted.contains(vd.name())) {
+            if (vd.initializer() != null) {
+                return new ExpressionStatement(
+                        new AssignExpr(new VarExpr(vd.name()), vd.initializer()));
+            }
+            return null; // 无初始化器,声明已提升到 if 之前,此处删除
+        }
+        if (s instanceof BlockStatement bs) {
+            List<Statement> out = new ArrayList<>();
+            for (Statement c : bs.statements()) {
+                Statement transformed = hoistBranchDecls(c, hoisted);
+                if (transformed != null) {
+                    out.add(transformed);
+                }
+            }
+            return new BlockStatement(out);
+        }
+        return s;
+    }
+
+    /**
      * 从 instanceof 模式中收集模式变量名.
      * 模式形如 VarExpr("RecordDemo(String name, int age)")——
      * 解析括号内的 "Type name" 令牌,提取变量名.
@@ -414,33 +514,38 @@ public class SourceCleanup implements RewriteRule {
      * @param out 输出集合
      */
     private void collectVarNamesInExpr(Expression e, Set<String> out) {
-        if (e == null) {
-            return;
-        }
-        if (e instanceof VarExpr v) {
-            out.add(v.name());
-        } else if (e instanceof BinExpr b) {
-            collectVarNamesInExpr(b.left(), out);
-            collectVarNamesInExpr(b.right(), out);
-        } else if (e instanceof UnExpr u) {
-            collectVarNamesInExpr(u.operand(), out);
-        } else if (e instanceof InvocationExpr inv) {
-            if (inv.target() != null) {
-                collectVarNamesInExpr(inv.target(), out);
+        switch (e) {
+            case null -> {
+                return;
             }
-            for (Expression a : inv.arguments()) {
-                collectVarNamesInExpr(a, out);
+            case VarExpr v -> out.add(v.name());
+            case BinExpr b -> {
+                collectVarNamesInExpr(b.left(), out);
+                collectVarNamesInExpr(b.right(), out);
             }
-        } else if (e instanceof FieldAccessExpr fa && fa.target() != null) {
-            // 静态字段访问的目标是类型名(如 System.out,
-            // java.util.concurrent.TimeUnit.SECONDS,int.class 的 "int"),
-            // 不是局部变量——仅收集实例字段访问的真实变量目标.
-            if (!(fa.target() instanceof VarExpr tv && SourceCleanupSupport.isTypeName(tv.name()))) {
-                collectVarNamesInExpr(fa.target(), out);
+            case UnExpr u -> collectVarNamesInExpr(u.operand(), out);
+            case InvocationExpr inv -> {
+                if (inv.target() != null) {
+                    collectVarNamesInExpr(inv.target(), out);
+                }
+                for (Expression a : inv.arguments()) {
+                    collectVarNamesInExpr(a, out);
+                }
             }
-        } else if (e instanceof AssignExpr a) {
-            collectVarNamesInExpr(a.target(), out);
-            collectVarNamesInExpr(a.value(), out);
+            case FieldAccessExpr fa when fa.target() != null -> {
+                // 静态字段访问的目标是类型名(如 System.out,
+                // java.util.concurrent.TimeUnit.SECONDS,int.class 的 "int"),
+                // 不是局部变量——仅收集实例字段访问的真实变量目标.
+                if (!(fa.target() instanceof VarExpr tv && SourceCleanupSupport.isTypeName(tv.name()))) {
+                    collectVarNamesInExpr(fa.target(), out);
+                }
+            }
+            case AssignExpr a -> {
+                collectVarNamesInExpr(a.target(), out);
+                collectVarNamesInExpr(a.value(), out);
+            }
+            default -> {
+            }
         }
     }
 

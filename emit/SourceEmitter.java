@@ -6,8 +6,11 @@ import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 源代码发射器,将编译单元(CompilationUnit)的 AST 输出为完整的 Java 源文件文本.
@@ -17,6 +20,38 @@ import java.util.Map;
 public class SourceEmitter {
 
     /**
+     * 裁剪未使用的导入语句:仅当导入的简单类名在类型体文本中以单词形式出现时才保留.
+     * <p>
+     * 反编译过程中,后续重写器可能消除某个类型的所有用法(如 ForEachRewriter 把
+     * {@code Iterator} 循环还原为增强 for-each),使对应的 import 变成死导入,这里据此清除.
+     * 保守策略:无法静态判定时(通配符导入)一律保留,避免误删仍在使用的导入.
+     */
+    private static List<String> pruneUnusedImports(List<String> imports, String bodyText) {
+        if (imports.isEmpty()) {
+            return imports;
+        }
+        List<String> pruned = new ArrayList<>();
+        for (String imp : imports) {
+            String simple = simpleNameOf(imp);
+            if (simple.isEmpty() || "*".equals(simple) || containsWord(bodyText, simple)) {
+                pruned.add(imp);
+            }
+        }
+        return pruned;
+    }
+
+    /** 取全限定名的最后一段(简单类名),如 {@code java.util.Map.Entry} → {@code Entry}. */
+    private static String simpleNameOf(String importName) {
+        int dot = importName.lastIndexOf('.');
+        return dot < 0 ? importName : importName.substring(dot + 1);
+    }
+
+    /** 判断文本中是否包含指定标识符(单词边界匹配,避免子串误判,如 Map 不匹配 HashMap). */
+    private static boolean containsWord(String text, String word) {
+        return Pattern.compile("\\b" + Pattern.quote(word) + "\\b").matcher(text).find();
+    }
+
+    /**
      * 将编译单元 AST 发射为源代码文件.
      *
      * @param unit   编译单元 AST 节点
@@ -24,48 +59,56 @@ public class SourceEmitter {
      * @return 生成的源文件对象,包含类名,源代码文本和行映射
      */
     public SourceFile emit(CompilationUnit unit, BdecConfig config) {
-        IndentWriter w = new IndentWriter(config.indentSize());
         Map<Integer, Integer> lineMapping = new HashMap<>();
-
-        ExpressionEmitter exprs = new ExpressionEmitter(w, unit.packageName(), unit.imports());
-        exprs.setInnerClassNames(unit.innerClassNames());
 
         // module-info.class:输出模块声明(无包声明/导入/类型声明)
         if (unit.module() != null) {
+            IndentWriter w = new IndentWriter(config.indentSize());
             emitModule(unit.module(), w);
             return new SourceFile("module-info", w.toString(), lineMapping);
         }
+
+        // 两遍发射:先渲染类型体,据此裁剪未使用的 import
+        // (如 for-each 重建消除 Iterator 用法后残留的 import java.util.Iterator;)
+        IndentWriter bodyW = new IndentWriter(config.indentSize());
+        ExpressionEmitter exprs = new ExpressionEmitter(bodyW, unit.packageName(), unit.imports());
+        exprs.setInnerClassNames(unit.innerClassNames());
 
         // 判断是否为接口类型
         boolean isInterface = !unit.types().isEmpty() && unit.types().getFirst().isInterface();
         // 创建语句发射器,传入首类型的简单类名和接口标记
         String kind = unit.types().isEmpty() ? "class" : unit.types().getFirst().kindName();
         boolean isAnnotation = "@interface".equals(kind);
-        StatementEmitter stmts = new StatementEmitter(w, exprs, unit.types().isEmpty()
+        StatementEmitter stmts = new StatementEmitter(bodyW, exprs, unit.types().isEmpty()
                 ? "Unknown" : unit.types().getFirst().simpleName(), isInterface,
                 isAnnotation);
 
         // 将语句发射器注入表达式发射器,用于 lambda 块体等需要语句级别输出的场景
         exprs.setStmtEmitter(stmts);
 
-        // 输出包声明
+        // 输出所有类型声明(到临时缓冲区)
+        for (TypeDeclaration type : unit.types()) {
+            emitType(type, bodyW, stmts);
+        }
+        String bodyText = bodyW.toString();
+
+        // 正式输出:包声明 + 裁剪后的导入 + 类型体
+        IndentWriter w = new IndentWriter(config.indentSize());
+
         if (unit.packageName() != null && !unit.packageName().isEmpty()) {
             w.token("package").space().write(unit.packageName()).write(';');
             w.newLine().newLine();
         }
 
-        // 输出导入语句
-        if (!unit.imports().isEmpty()) {
-            for (String imp : unit.imports()) {
+        List<String> imports = pruneUnusedImports(unit.imports(), bodyText);
+        if (!imports.isEmpty()) {
+            for (String imp : imports) {
                 w.token("import").space().write(imp).write(';').newLine();
             }
             w.newLine();
         }
 
-        // 输出所有类型声明
-        for (TypeDeclaration type : unit.types()) {
-            emitType(type, w, stmts);
-        }
+        w.write(bodyText);
 
         // 构建完整类名(包名 + 简单类名)
         String className = unit.types().isEmpty() ? "Unknown"

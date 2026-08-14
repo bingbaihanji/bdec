@@ -6,14 +6,19 @@ import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
 import com.bingbaihanji.bdec.bytecode.opcode.Opcode;
 import com.bingbaihanji.bdec.bytecode.parser.ConstantPoolParser;
+import com.bingbaihanji.bdec.bytecode.parser.SignatureParser;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
+import com.bingbaihanji.bdec.semantic.SemanticAnnotation;
+import com.bingbaihanji.bdec.semantic.SemanticTag;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
+import com.bingbaihanji.bdec.type.TypeResolver;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -97,7 +102,7 @@ public final class IrBuilder {
                           ConstantPoolEntry[] constantPool,
                           List<BootstrapMethodEntry> bootstrapMethods) {
         this.currentBootstrapMethods = bootstrapMethods != null
-                ? bootstrapMethods : java.util.Collections.emptyList();
+                ? bootstrapMethods : Collections.emptyList();
         List<IrInstruction> allInstructions = new ArrayList<>();
         List<Variable> variables = new ArrayList<>();
         Map<BasicBlock, FrameState> blockOutputs = new HashMap<>();
@@ -118,7 +123,7 @@ public final class IrBuilder {
         int slot = 0;
         if (!method.isStatic()) {
             // 槽位0 = 'this'
-            JavaType thisType = com.bingbaihanji.bdec.type.JavaType.classType(
+            JavaType thisType = JavaType.classType(
                     "java/lang/Object");
             Variable thisVar = new Variable(slot, 0, thisType, false, slot);
             thisVar.setName("this");
@@ -146,8 +151,8 @@ public final class IrBuilder {
                     slot++;
                     paramIdx++;
                     // long和double在JVM中占用两个槽位
-                    if (pt.kind() == com.bingbaihanji.bdec.type.TypeKind.LONG
-                            || pt.kind() == com.bingbaihanji.bdec.type.TypeKind.DOUBLE) {
+                    if (pt.kind() == TypeKind.LONG
+                            || pt.kind() == TypeKind.DOUBLE) {
                         slot++;
                     }
                 }
@@ -335,7 +340,7 @@ public final class IrBuilder {
         for (BasicBlock pred : preds) {
             for (var edge : cfg.incomingOf(block)) {
                 if (edge.source().equals(pred)
-                        && edge.kind() == com.bingbaihanji.bdec.cfg.EdgeKind.EXCEPTION) {
+                        && edge.kind() == EdgeKind.EXCEPTION) {
                     hasExceptionEdge = true;
                     break;
                 }
@@ -653,9 +658,17 @@ public final class IrBuilder {
             case FCONST_2 -> new ConstantValue(2.0f, JavaType.FLOAT);
             case DCONST_0 -> new ConstantValue(0.0, JavaType.DOUBLE);
             case DCONST_1 -> new ConstantValue(1.0, JavaType.DOUBLE);
-            case BIPUSH, SIPUSH -> {
+            case BIPUSH -> {
+                // 解码器以 readUnsignedByte 读入,BIPUSH 操作数是单字节
+                // 有符号整数,须符号扩展(如 bipush -2 的 0xFE → -2 而非 254).
                 int val = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
-                yield new ConstantValue(val, JavaType.INT);
+                yield new ConstantValue((byte) val, JavaType.INT);
+            }
+            case SIPUSH -> {
+                // 解码器以 readUnsignedShort 读入,SIPUSH 操作数是 16 位
+                // 有符号短整数,须符号扩展(如 sipush -5 → -5 而非 65531).
+                int val = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
+                yield new ConstantValue((short) val, JavaType.INT);
             }
             default -> null;
         };
@@ -727,7 +740,7 @@ public final class IrBuilder {
                 String lvttSig = currentMethod.lookupVarTypeSignature(idx, offset, var.name());
                 if (lvttSig != null) {
                     try {
-                        JavaType gen = com.bingbaihanji.bdec.bytecode.parser.SignatureParser
+                        JavaType gen = SignatureParser
                                 .parseGenericType(lvttSig);
                         if (gen != null) {
                             var.setGenericType(gen);
@@ -883,9 +896,9 @@ public final class IrBuilder {
         if (op == Opcode.GETSTATIC) {
             String declaringClass = ConstantPoolResolver.resolveFieldDeclaringClass(insn, cp);
             if (declaringClass != null) {
-                fi.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
-                        com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS,
-                        com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS,
+                fi.addAnnotation(SemanticAnnotation.of(
+                        SemanticTag.DECLARING_CLASS,
+                        SemanticAnnotation.KEY_DECLARING_CLASS,
                         declaringClass));
             }
         }
@@ -906,6 +919,15 @@ public final class IrBuilder {
         Value val = stack.pop();
         Value obj = (op == Opcode.PUTFIELD && !stack.isEmpty()) ? stack.pop() : null;
         String fieldName = ConstantPoolResolver.resolveFieldName(insn, cp);
+        // 布尔字段赋值 0/1 常量 → boolean 字面量(与 handleInvoke 的 boolean 参数折叠一致).
+        // JVM 将 boolean 表示为其栈上的 int(ICONST_0/1),不重标类型会渲染成非法的 "this.e = 1".
+        JavaType fieldType = ConstantPoolResolver.resolveFieldType(insn, cp);
+        if (fieldType != null && fieldType.kind() == TypeKind.BOOLEAN) {
+            ConstantValue cv = unwrapConstant(val);
+            if (cv != null && cv.value() instanceof Integer i) {
+                val = new ConstantValue(i != 0, JavaType.BOOLEAN);
+            }
+        }
         instructions.add(IrInstruction.fieldStore(nextId(), obj, val, offset, blockId, fieldName));
     }
 
@@ -924,7 +946,7 @@ public final class IrBuilder {
         JavaType returnType = JavaType.classType("java/lang/Object");
         String methodName = null;
         String declaringClass = null; // 用于构造函数委托目标
-        com.bingbaihanji.bdec.type.JavaType[] paramTypes = null; // 用于boolean折叠
+        JavaType[] paramTypes = null; // 用于boolean折叠
 
         if (cpIdx > 0 && cpIdx < cp.length) {
             try {
@@ -951,9 +973,9 @@ public final class IrBuilder {
                 )) {
                     String desc = ConstantPoolParser.utf8(cp, descriptorIndex);
                     methodName = ConstantPoolParser.utf8(cp, nameIndex);
-                    paramTypes = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(desc);
+                    paramTypes = TypeResolver.parseMethodParameterTypes(desc);
                     argCount = paramTypes.length;
-                    returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(desc);
+                    returnType = TypeResolver.parseMethodReturnType(desc);
                 }
             } catch (Exception ignored) {
                 // 保持默认值
@@ -996,22 +1018,22 @@ public final class IrBuilder {
 
         // 对静态调用标记声明类(用于Arrays.fill() vs fill()的区分)
         if (op == Opcode.INVOKESTATIC && declaringClass != null) {
-            inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
-                    com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS,
-                    com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS,
+            inv.addAnnotation(SemanticAnnotation.of(
+                    SemanticTag.DECLARING_CLASS,
+                    SemanticAnnotation.KEY_DECLARING_CLASS,
                     declaringClass));
         }
 
         // 标记构造函数委托调用,附带目标类信息
         if ("<init>".equals(methodName)) {
             if (declaringClass != null) {
-                inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
-                        com.bingbaihanji.bdec.semantic.SemanticTag.CONSTRUCTOR_DELEGATION,
-                        com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_TARGET_CLASS,
+                inv.addAnnotation(SemanticAnnotation.of(
+                        SemanticTag.CONSTRUCTOR_DELEGATION,
+                        SemanticAnnotation.KEY_TARGET_CLASS,
                         declaringClass));
             } else {
-                inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
-                        com.bingbaihanji.bdec.semantic.SemanticTag.CONSTRUCTOR_DELEGATION));
+                inv.addAnnotation(SemanticAnnotation.of(
+                        SemanticTag.CONSTRUCTOR_DELEGATION));
             }
         }
 
@@ -1049,9 +1071,9 @@ public final class IrBuilder {
                     )) {
                         descriptor = ConstantPoolParser.utf8(cp, descriptorIndex);
                         methodName = ConstantPoolParser.utf8(cp, nameIndex);
-                        var params = com.bingbaihanji.bdec.type.TypeResolver.parseMethodParameterTypes(descriptor);
+                        var params = TypeResolver.parseMethodParameterTypes(descriptor);
                         argCount = params.length;
-                        returnType = com.bingbaihanji.bdec.type.TypeResolver.parseMethodReturnType(descriptor);
+                        returnType = TypeResolver.parseMethodReturnType(descriptor);
                     }
                 }
             } catch (Exception ignored) {
@@ -1093,8 +1115,8 @@ public final class IrBuilder {
             returnType = BootstrapResolver.buildGenericFunctionalType(returnType, implDesc);
         }
 
-        inv.addAnnotation(com.bingbaihanji.bdec.semantic.SemanticAnnotation.of(
-                com.bingbaihanji.bdec.semantic.SemanticTag.INDY, annotProps));
+        inv.addAnnotation(SemanticAnnotation.of(
+                SemanticTag.INDY, annotProps));
         instructions.add(inv);
         if (returnType.kind() != TypeKind.VOID) {
             inv.setResultValue(new InstructionRef(inv, returnType));
@@ -1194,7 +1216,7 @@ public final class IrBuilder {
                         rank++;
                     }
                     if (rank > 0) {
-                        JavaType base = com.bingbaihanji.bdec.type.TypeResolver
+                        JavaType base = TypeResolver
                                 .parseFieldDescriptor(desc.substring(rank));
                         arrayType = JavaType.array(base, rank);
                     }
@@ -1226,11 +1248,21 @@ public final class IrBuilder {
         }
         Value index = stack.pop();
         Value arr = stack.pop();
+        // AALOAD 的元素类型取决于数组操作数的静态类型:引用数组(如 int[][])
+        // 的组件是 int[](而非 Object).当 AALOAD(元素类型被硬编码为
+        // java/lang/Object)且 arr 携带数组类型时,取其 elementOf 作为真实
+        // 组件类型,避免下游把 int[] row 推断成 Object 而破坏嵌套 for-each.
+        JavaType effectiveElement = elementType;
+        if (elementType.kind() == TypeKind.CLASS
+                && "java/lang/Object".equals(elementType.internalName())
+                && arr.type().kind() == TypeKind.ARRAY) {
+            effectiveElement = JavaType.elementOf(arr.type());
+        }
         IrInstruction al = new IrInstruction(nextId(), IrOpcode.ARRAY_LOAD,
-                elementType, List.of(arr, index), offset, blockId, opcode, null);
+                effectiveElement, List.of(arr, index), offset, blockId, opcode, null);
         instructions.add(al);
-        al.setResultValue(new InstructionRef(al, elementType));
-        stack.push(new InstructionRef(al, elementType));
+        al.setResultValue(new InstructionRef(al, effectiveElement));
+        stack.push(new InstructionRef(al, effectiveElement));
     }
 
     /**

@@ -76,6 +76,9 @@ public interface ReducerOps {
     /** 在 follow 块中按当前分支上下文解析 PHI 值. */
     Expression resolvePhiAt(BasicBlock follow, LinearIr ir);
 
+    /** 注册 PHI 折叠结果:后续 STORE 翻译时按此映射替换 PHI 解析. */
+    void registerPhiReplacement(int phiId, Expression expr);
+
     /** 块上是否带循环注解. */
     LoopInfo loopAnnotation(BasicBlock b);
 

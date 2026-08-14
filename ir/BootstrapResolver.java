@@ -8,6 +8,7 @@ import com.bingbaihanji.bdec.type.TypeKind;
 import com.bingbaihanji.bdec.type.TypeResolver;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -229,9 +230,7 @@ final class BootstrapResolver {
         // 基元类型(如 boolean, int)的函数式接口类型参数中不包含返回类型.
         // 例如 Predicate<T> (SAM: T→boolean) = [T], 不包含 boolean.
         List<JavaType> typeArgs = new ArrayList<>();
-        for (JavaType p : samParams) {
-            typeArgs.add(p);
-        }
+        Collections.addAll(typeArgs, samParams);
         if (samReturn.kind() != TypeKind.VOID && samReturn.kind() == TypeKind.CLASS) {
             typeArgs.add(samReturn);
         }

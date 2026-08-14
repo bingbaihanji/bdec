@@ -127,7 +127,13 @@ public class ControlFlowStructurer {
                     // 跳过体内含内部分支(continue/break 模式)的循环:
                     // 折叠会把体内条件分支扁平化丢失,
                     // 由 BlockReducer 直接结构化翻译循环体.
-                    if (hasInternalBranches(loop, graph)) {
+                    if (hasInternalBranches(loop, graph, loopAnns)) {
+                        continue;
+                    }
+                    // 跳过嵌套在其他循环内的循环:折叠内层会使其 LoopInfo
+                    // 持有过时的块引用,BlockReducer 无法从虚拟块重建内层结构.
+                    // 嵌套循环整体保持未折叠,交由结构化翻译递归处理.
+                    if (isNestedInAnotherLoop(loop, loops)) {
                         continue;
                     }
                     BasicBlock oldHeader = loop.header();
@@ -147,7 +153,7 @@ public class ControlFlowStructurer {
 
             // 4b. 序列——合 并相邻的 fallthrough 块
             ControlFlowGraph prevGraph = graph;
-            graph = foldSequences(graph);
+            graph = foldSequences(graph, loopAnns);
             if (graph != prevGraph) {
                 // 序列合并后更新 if/else 注解:若头块被合并到序列中,则更新键
                 Map<BasicBlock, IfInfo> updatedIfAnns = new HashMap<>();
@@ -260,7 +266,7 @@ public class ControlFlowStructurer {
      * <p>尊重异常范围边界:具有不同异常覆盖范围的块(一个有异常边而另一个没有)
      * 不会被合并,从而确保 try 前代码(如 lock.lock())与 try 体保持分离.
      */
-    private ControlFlowGraph foldSequences(ControlFlowGraph graph) {
+    private ControlFlowGraph foldSequences(ControlFlowGraph graph, Map<BasicBlock, LoopInfo> loopAnns) {
         List<BasicBlock> regularBlocks = new ArrayList<>();
         for (BasicBlock b : graph.blocks()) {
             if (b != graph.entryBlock() && b != graph.exitBlock() && !b.instructions().isEmpty()) {
@@ -270,6 +276,11 @@ public class ControlFlowStructurer {
         for (int i = 0; i < regularBlocks.size() - 1; i++) {
             BasicBlock b1 = regularBlocks.get(i);
             BasicBlock b2 = regularBlocks.get(i + 1);
+            // 不合并循环头块(已折叠的嵌套循环虚拟块):合并会用 b1 的 id
+            // 覆盖 b2,导致其循环注解失效,内层循环结构丢失.
+            if (isLoopAnnotated(b1, loopAnns) || isLoopAnnotated(b2, loopAnns)) {
+                continue;
+            }
             List<BasicBlock> succs = graph.successorsOf(b1);
             if (succs.size() == 1 && succs.get(0) == b2) {
                 boolean onlyFallthrough = graph.outgoingOf(b1).stream()
@@ -323,10 +334,17 @@ public class ControlFlowStructurer {
      *  <p>非头块以条件跳转结尾(体内 if),或存在指向非头体内块的 GOTO
      *  (continue 桥接块)——折叠会扁平化这些分支,丢失控制流结构.
      *  while 风格的测试在头块,增量在 latch 的普通循环不受影响.</p> */
-    private boolean hasInternalBranches(LoopInfo loop, ControlFlowGraph graph) {
+    private boolean hasInternalBranches(LoopInfo loop, ControlFlowGraph graph,
+                                        Map<BasicBlock, LoopInfo> loopAnns) {
         for (BasicBlock b : loop.body()) {
             if (b == loop.header()) {
                 continue;
+            }
+            // 体内嵌套了另一个循环(已折叠为虚拟块并保留循环注解,或未折叠):
+            // 折叠会把内层回边扁平化,导致内层循环条件与增量丢失.
+            // 交由 BlockReducer 的结构化翻译递归处理嵌套循环.
+            if (isLoopAnnotated(b, loopAnns)) {
+                return true;
             }
             if (b.endsWithConditionalJump()) {
                 return true;
@@ -368,6 +386,32 @@ public class ControlFlowStructurer {
         return graph.incomingOf(block).stream()
                 .anyMatch(e -> e.kind() == EdgeKind.SWITCH_CASE
                         || e.kind() == EdgeKind.SWITCH_DEFAULT);
+    }
+
+    /** 检查循环是否嵌套在其他循环体内(其头块位于另一个循环的体集合中). */
+    private boolean isNestedInAnotherLoop(LoopInfo loop, List<LoopInfo> allLoops) {
+        for (LoopInfo other : allLoops) {
+            if (other == loop) {
+                continue;
+            }
+            if (other.body().contains(loop.header())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 检查基本块是否为循环头(存在于循环注解映射中,按 id 匹配). */
+    private boolean isLoopAnnotated(BasicBlock block, Map<BasicBlock, LoopInfo> loopAnns) {
+        if (loopAnns.containsKey(block)) {
+            return true;
+        }
+        for (BasicBlock key : loopAnns.keySet()) {
+            if (key.id() == block.id()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 检查基本块是否为 switch 头(包含 switch 指令或存在于注解映射中) */

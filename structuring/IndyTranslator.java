@@ -213,16 +213,12 @@ public final class IndyTranslator {
         // 从语义注解中读取已解析的引导方法信息
         String implName = annotationSource.getIndyAnnotation(insn, "implName");
         String implOwner = annotationSource.getIndyAnnotation(insn, "implOwner");
-        String implDescriptor = annotationSource.getIndyAnnotation(insn, "implDescriptor");
 
-        // 从操作数构建参数列表(捕获变量 + 工厂参数 → lambda 参数)
+        // 从操作数构建参数列表.INDY 的动态参数即被 lambda 捕获的外部变量
+        // (this/局部变量),而非 lambda 自身形参——不得用实现方法描述符填充,
+        // 否则无捕获 lambda 会凭空多出形参.LambdaRewriter 依赖此列表长度
+        // 作为"捕获变量数量",从合成方法参数中剔除前导捕获参数.
         List<LambdaExpr.Param> params = buildParams(operands);
-
-        // 当 INDY 操作数无法提供参数信息时(无捕获变量的 lambda),
-        // 使用实现方法描述符生成带类型的参数占位符
-        if (params.isEmpty() && implDescriptor != null && !implDescriptor.isEmpty()) {
-            params = buildParamsFromDescriptor(implDescriptor);
-        }
 
         // 基于名称的方法引用("::" 或 "new " 前缀)
         Expression methodRef = tryMethodRefByName(mName, funcType);

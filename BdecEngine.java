@@ -85,10 +85,10 @@ public class BdecEngine implements Decompiler {
     }
 
     @Override
-    public String getName() {return BuildInfo.NAME;}
+    public String getName() {return Decompiler.super.getName();}
 
     @Override
-    public String getVersion() {return BuildInfo.VERSION;}
+    public String getVersion() {return Decompiler.super.getVersion();}
 
     /**
      * 执行完整的反编译流程.
@@ -125,23 +125,19 @@ public class BdecEngine implements Decompiler {
             // 用已解析的 class 文件模型和 BootstrapMethod 数据丰富上下文.
             // LambdaRewriter,MethodRefRewriter,EnumRewriter 等重写规则
             // 需要这些字节码级别的数据进行分析.
-            context = new DecompileContext(context.config(), context::loadClassBytes,
-                    classFile.bootstrapMethods(), classFile);
+            context = new DecompileContext(context.config(), context::loadClassBytes, classFile.bootstrapMethods(), classFile);
 
             // module-info.class(ACC_MODULE = 0x8000):无字段与方法,
             // 直接从 Module 属性构建模块声明,跳过方法级反编译管线.
             if ((classFile.accessFlags() & AccessFlags.ACC_MODULE) != 0) {
                 ModuleDeclaration mod = ModuleDeclBuilder.build(classFile);
-                CompilationUnit moduleUnit = new CompilationUnit(
-                        "", List.of(), List.of(), java.util.Map.of(), mod);
+                CompilationUnit moduleUnit = new CompilationUnit("", List.of(), List.of(), java.util.Map.of(), mod);
                 SourceFile source = sourceEmitter.emit(moduleUnit, config);
-                return new BdecResult(true, source.source(), null, warnings,
-                        source.sourceLineToBytecodeOffset());
+                return new BdecResult(true, source.source(), null, warnings, source.sourceLineToBytecodeOffset());
             }
 
             // ===== 阶段 2-4:逐方法反编译 =====
-            List<StructuredMethod> structuredMethods =
-                    methodPipeline.decompileMethods(classFile, context, true, true);
+            List<StructuredMethod> structuredMethods = methodPipeline.decompileMethods(classFile, context, true, true);
 
             // 阶段 5:构建抽象语法树(AST)
             CompilationUnit unit = astBuilder.build(classFile, structuredMethods, context);
@@ -160,12 +156,10 @@ public class BdecEngine implements Decompiler {
             // 阶段 6:生成 Java 源代码
             SourceFile source = sourceEmitter.emit(unit, config);
 
-            return new BdecResult(true, source.source(), null, warnings,
-                    source.sourceLineToBytecodeOffset());
+            return new BdecResult(true, source.source(), null, warnings, source.sourceLineToBytecodeOffset());
 
         } catch (Exception e) {
-            diagnostics.report(DecompilerDiagnostic.error("emit", internalName,
-                    null, -1, "decompilation failed: " + e.getMessage(), e));
+            diagnostics.report(DecompilerDiagnostic.error("emit", internalName, null, -1, "decompilation failed: " + e.getMessage(), e));
             return BdecResult.error(e, warnings);
         }
     }

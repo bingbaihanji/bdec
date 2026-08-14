@@ -5,6 +5,7 @@ import com.bingbaihanji.bdec.type.TypeKind;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * JVM 签名属性解析器(最小化实现).
@@ -136,7 +137,7 @@ public final class SignatureParser {
                 }
             }
             List<JavaType> types = new ArrayList<>();
-            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+            var ref = new AtomicReference<JavaType>();
             while (i < signature.length()) {
                 i = parseTypeToJavaType(signature, i, ref);
                 if (ref.get() != null) {
@@ -185,7 +186,7 @@ public final class SignatureParser {
             }
             i++; // 跳过 '('
             List<JavaType> types = new ArrayList<>();
-            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+            var ref = new AtomicReference<JavaType>();
             // 解析参数类型
             while (i < signature.length() && signature.charAt(i) != ')') {
                 i = parseTypeToJavaType(signature, i, ref);
@@ -217,7 +218,7 @@ public final class SignatureParser {
             return null;
         }
         try {
-            var result = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+            var result = new AtomicReference<JavaType>();
             parseTypeToJavaType(sig, 0, result);
             return result.get();
         } catch (Exception e) {
@@ -236,7 +237,7 @@ public final class SignatureParser {
      * @return 解析后的下一个位置
      */
     private static int parseTypeToJavaType(String sig, int i,
-                                           java.util.concurrent.atomic.AtomicReference<JavaType> out) {
+                                           AtomicReference<JavaType> out) {
         if (i >= sig.length()) {
             return i;
         }
@@ -300,7 +301,7 @@ public final class SignatureParser {
                             argPos++;
                         } else if (ac == '+') {
                             // 上界通配符 ? extends T
-                            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+                            var ref = new AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos + 1, ref);
                             JavaType bound = ref.get();
                             String boundName = bound != null && bound.internalName() != null
@@ -310,7 +311,7 @@ public final class SignatureParser {
                                     bound != null ? List.of(bound) : List.of(), 0));
                         } else if (ac == '-') {
                             // 下界通配符 ? super T
-                            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+                            var ref = new AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos + 1, ref);
                             JavaType bound = ref.get();
                             String boundName = bound != null && bound.internalName() != null
@@ -319,7 +320,7 @@ public final class SignatureParser {
                                     "? super " + boundName, "?",
                                     bound != null ? List.of(bound) : List.of(), 0));
                         } else {
-                            var ref = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+                            var ref = new AtomicReference<JavaType>();
                             argPos = parseTypeToJavaType(sig, argPos, ref);
                             if (ref.get() != null) {
                                 typeArgs.add(ref.get());
@@ -338,7 +339,7 @@ public final class SignatureParser {
             }
             // 数组类型
             case '[': {
-                var elemRef = new java.util.concurrent.atomic.AtomicReference<JavaType>();
+                var elemRef = new AtomicReference<JavaType>();
                 int next = parseTypeToJavaType(sig, i + 1, elemRef);
                 JavaType elem = elemRef.get();
                 if (elem != null) {

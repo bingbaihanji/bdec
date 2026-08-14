@@ -1,7 +1,10 @@
 package com.bingbaihanji.bdec.bytecode.parser;
 
 import com.bingbaihanji.bdec.bytecode.model.AccessFlags;
+import com.bingbaihanji.bdec.bytecode.model.AnnotationEntry;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
+import com.bingbaihanji.bdec.bytecode.model.ModuleInfo;
+import com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.InnerClassEntry;
@@ -162,8 +165,8 @@ public final class ClassFileReader {
      * <p>该属性携带模块声明所需的全部信息:模块名与标志,版本,
      * requires/exports/opens/uses/provides 子句.</p>
      */
-    private com.bingbaihanji.bdec.bytecode.model.ModuleInfo parseModule(DataInputStream in,
-                                                                        ConstantPoolEntry[] pool) throws IOException {
+    private ModuleInfo parseModule(DataInputStream in,
+                                   ConstantPoolEntry[] pool) throws IOException {
         int nameIdx = in.readUnsignedShort();
         String name = ConstantPoolParser.moduleName(pool, nameIdx);
         int flags = in.readUnsignedShort();
@@ -172,20 +175,19 @@ public final class ClassFileReader {
 
         // requires 表(依赖模块)
         int reqCount = in.readUnsignedShort();
-        List<com.bingbaihanji.bdec.bytecode.model.ModuleInfo.RequiresEntry> requires
-                = new ArrayList<>(reqCount);
+        List<ModuleInfo.RequiresEntry> requires = new ArrayList<>(reqCount);
         for (int i = 0; i < reqCount; i++) {
             int modIdx = in.readUnsignedShort();
             int reqFlags = in.readUnsignedShort();
             int verIdx = in.readUnsignedShort();
-            requires.add(new com.bingbaihanji.bdec.bytecode.model.ModuleInfo.RequiresEntry(
+            requires.add(new ModuleInfo.RequiresEntry(
                     ConstantPoolParser.moduleName(pool, modIdx), reqFlags,
                     verIdx != 0 ? ConstantPoolParser.utf8(pool, verIdx) : null));
         }
 
         // exports 表(导出的包及其目标模块)
         int expCount = in.readUnsignedShort();
-        List<com.bingbaihanji.bdec.bytecode.model.ModuleInfo.ExportsEntry> exports
+        List<ModuleInfo.ExportsEntry> exports
                 = new ArrayList<>(expCount);
         for (int i = 0; i < expCount; i++) {
             int pkgIdx = in.readUnsignedShort();
@@ -195,14 +197,14 @@ public final class ClassFileReader {
             for (int j = 0; j < toCount; j++) {
                 to.add(ConstantPoolParser.moduleName(pool, in.readUnsignedShort()));
             }
-            exports.add(new com.bingbaihanji.bdec.bytecode.model.ModuleInfo.ExportsEntry(
+            exports.add(new ModuleInfo.ExportsEntry(
                     ConstantPoolParser.packageName(pool, pkgIdx).replace('/', '.'),
                     expFlags, to));
         }
 
         // opens 表(开放的包及其目标模块)
         int opensCount = in.readUnsignedShort();
-        List<com.bingbaihanji.bdec.bytecode.model.ModuleInfo.OpensEntry> opens
+        List<ModuleInfo.OpensEntry> opens
                 = new ArrayList<>(opensCount);
         for (int i = 0; i < opensCount; i++) {
             int pkgIdx = in.readUnsignedShort();
@@ -212,7 +214,7 @@ public final class ClassFileReader {
             for (int j = 0; j < toCount; j++) {
                 to.add(ConstantPoolParser.moduleName(pool, in.readUnsignedShort()));
             }
-            opens.add(new com.bingbaihanji.bdec.bytecode.model.ModuleInfo.OpensEntry(
+            opens.add(new ModuleInfo.OpensEntry(
                     ConstantPoolParser.packageName(pool, pkgIdx).replace('/', '.'),
                     openFlags, to));
         }
@@ -221,29 +223,24 @@ public final class ClassFileReader {
         int usesCount = in.readUnsignedShort();
         List<String> uses = new ArrayList<>(usesCount);
         for (int i = 0; i < usesCount; i++) {
-            uses.add(ConstantPoolParser.className(pool, in.readUnsignedShort())
-                    .replace('/', '.'));
+            uses.add(ConstantPoolParser.className(pool, in.readUnsignedShort()).replace('/', '.'));
         }
 
         // provides 表(服务实现)
         int provCount = in.readUnsignedShort();
-        List<com.bingbaihanji.bdec.bytecode.model.ModuleInfo.ProvidesEntry> provides
+        List<ModuleInfo.ProvidesEntry> provides
                 = new ArrayList<>(provCount);
         for (int i = 0; i < provCount; i++) {
-            String service = ConstantPoolParser.className(pool, in.readUnsignedShort())
-                    .replace('/', '.');
+            String service = ConstantPoolParser.className(pool, in.readUnsignedShort()).replace('/', '.');
             int withCount = in.readUnsignedShort();
             List<String> with = new ArrayList<>(withCount);
             for (int j = 0; j < withCount; j++) {
-                with.add(ConstantPoolParser.className(pool, in.readUnsignedShort())
-                        .replace('/', '.'));
+                with.add(ConstantPoolParser.className(pool, in.readUnsignedShort()).replace('/', '.'));
             }
-            provides.add(new com.bingbaihanji.bdec.bytecode.model.ModuleInfo.ProvidesEntry(
-                    service, with));
+            provides.add(new ModuleInfo.ProvidesEntry(service, with));
         }
 
-        return new com.bingbaihanji.bdec.bytecode.model.ModuleInfo(
-                name, flags, version, requires, exports, opens, uses, provides);
+        return new ModuleInfo(name, flags, version, requires, exports, opens, uses, provides);
     }
 
     /**
@@ -263,8 +260,7 @@ public final class ClassFileReader {
         // 校验魔数
         int magic = in.readInt();
         if (magic != MAGIC) {
-            throw new IOException("Not a class file: bad magic 0x"
-                    + Integer.toHexString(magic));
+            throw new IOException("Not a class file: bad magic 0x" + Integer.toHexString(magic));
         }
 
         // 解析版本号
@@ -285,8 +281,7 @@ public final class ClassFileReader {
 
         // 读取父类名(索引为 0 表示当前类是 java.lang.Object)
         int superClassIdx = in.readUnsignedShort();
-        String superName = superClassIdx == 0 ? null
-                : ConstantPoolParser.className(pool, superClassIdx);
+        String superName = superClassIdx == 0 ? null : ConstantPoolParser.className(pool, superClassIdx);
 
         // 读取接口列表
         int ifaceCount = in.readUnsignedShort();
@@ -311,11 +306,9 @@ public final class ClassFileReader {
         List<RecordComponentEntry> recordComponents = Collections.emptyList();
         List<String> permittedSubclasses = Collections.emptyList();
         List<InnerClassEntry> innerClasses = Collections.emptyList();
-        List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> classAnnotations
-                = Collections.emptyList();
-        com.bingbaihanji.bdec.bytecode.model.ModuleInfo moduleInfo = null;
-        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry>
-                classTypeAnnotations = Collections.emptyList();
+        List<AnnotationEntry> classAnnotations = Collections.emptyList();
+        ModuleInfo moduleInfo = null;
+        List<TypeAnnotationEntry> classTypeAnnotations = Collections.emptyList();
         for (int i = 0; i < attrCount; i++) {
             int attrNameIdx = in.readUnsignedShort();
             int attrLen = in.readInt();

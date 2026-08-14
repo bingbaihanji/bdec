@@ -2,6 +2,7 @@ package com.bingbaihanji.bdec.ir;
 
 import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
 import com.bingbaihanji.bdec.semantic.SemanticAnnotation;
+import com.bingbaihanji.bdec.semantic.SemanticTag;
 import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
@@ -343,7 +344,7 @@ public class IrInstruction {
      * @param tag 语义标签
      * @return 如果有该标签则返回 {@code true}
      */
-    public boolean hasTag(com.bingbaihanji.bdec.semantic.SemanticTag tag) {
+    public boolean hasTag(SemanticTag tag) {
         if (annotations == null) {
             return false;
         }
@@ -361,7 +362,7 @@ public class IrInstruction {
      * @param tag 语义标签
      * @return 语义注解,若无则返回 {@code null}
      */
-    public SemanticAnnotation getAnnotation(com.bingbaihanji.bdec.semantic.SemanticTag tag) {
+    public SemanticAnnotation getAnnotation(SemanticTag tag) {
         if (annotations == null) {
             return null;
         }

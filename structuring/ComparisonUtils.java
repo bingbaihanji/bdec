@@ -1,9 +1,14 @@
 package com.bingbaihanji.bdec.structuring;
 
+import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.CastExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
@@ -84,6 +89,28 @@ final class ComparisonUtils {
             case FieldAccessExpr fa when b instanceof FieldAccessExpr fb -> {
                 return fa.fieldName().equals(fb.fieldName())
                         && expressionsEquivalent(fa.target(), fb.target());
+            }
+            case BinExpr ba when b instanceof BinExpr bb -> {
+                return ba.operator() == bb.operator()
+                        && expressionsEquivalent(ba.left(), bb.left())
+                        && expressionsEquivalent(ba.right(), bb.right());
+            }
+            case UnExpr ua when b instanceof UnExpr ub -> {
+                return ua.operator() == ub.operator()
+                        && expressionsEquivalent(ua.operand(), ub.operand());
+            }
+            case AssignExpr aa when b instanceof AssignExpr ab -> {
+                return aa.compoundOp() == ab.compoundOp()
+                        && expressionsEquivalent(aa.target(), ab.target())
+                        && expressionsEquivalent(aa.value(), ab.value());
+            }
+            case CastExpr ca when b instanceof CastExpr cb -> {
+                return java.util.Objects.equals(ca.targetType(), cb.targetType())
+                        && expressionsEquivalent(ca.operand(), cb.operand());
+            }
+            case ArrayAccessExpr aa when b instanceof ArrayAccessExpr ab -> {
+                return expressionsEquivalent(aa.array(), ab.array())
+                        && expressionsEquivalent(aa.index(), ab.index());
             }
             default -> {
             }

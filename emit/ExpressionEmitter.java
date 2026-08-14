@@ -173,6 +173,23 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
     }
 
     /**
+     * 数组类型的总维度数(嵌套/累积表示统一,与 {@link #arrayBaseName} 括号计数一致).
+     * <p>anewarray 仅给出最内层维度大小,类型却携带全部括号,
+     * 发射 {@code new T[d][]} 时须按此总数补齐未显式指定的空维度.</p>
+     */
+    private int totalArrayDimensions(JavaType type) {
+        if (type == null || type.kind() != TypeKind.ARRAY) {
+            return 0;
+        }
+        if (type.element() != null && type.element().kind() == TypeKind.ARRAY) {
+            int remaining = Math.max(1,
+                    type.arrayDimensions() - type.element().arrayDimensions());
+            return remaining + totalArrayDimensions(type.element());
+        }
+        return type.arrayDimensions();
+    }
+
+    /**
      * 设置内部类名称映射,用于将字节码内部名称(如 TestClass2$1LocalClass)
      * 解析为 Java 源码中的友好简单名称(如 LocalClass).
      *
@@ -329,7 +346,39 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             return TypeNameRenderer.className(type, currentPackage,
                     innerClassNames, importedFqns);
         }
+        if (type.kind() == TypeKind.ARRAY) {
+            return arrayBaseName(type);
+        }
+        if (type.kind() == TypeKind.WILDCARD) {
+            return wildcardTypeName(type);
+        }
         return type.displayName();
+    }
+
+    /** 渲染数组类型的基础名:元素 import 感知 + 维度括号(与 displayName 括号计数一致). */
+    private String arrayBaseName(JavaType type) {
+        JavaType elem = elementOfArray(type);
+        String elemName = typeName(elem);
+        if (type.element() != null && type.element().kind() == TypeKind.ARRAY) {
+            // 嵌套数组(元素本身是数组):元素名已含内层括号,仅补外层差值
+            int remaining = Math.max(1,
+                    type.arrayDimensions() - type.element().arrayDimensions());
+            return elemName + "[]".repeat(remaining);
+        }
+        return elemName + "[]".repeat(Math.max(0, type.arrayDimensions()));
+    }
+
+    /** 渲染通配符类型名:边界 import 感知(? extends X / ? super Y). */
+    private String wildcardTypeName(JavaType type) {
+        String bound = !type.typeArguments().isEmpty()
+                ? typeName(type.typeArguments().getFirst()) : null;
+        if (type.internalName() != null && type.internalName().startsWith("? super ")) {
+            return "? super " + (bound != null ? bound : "Object");
+        }
+        if (type.internalName() != null && type.internalName().startsWith("? extends ")) {
+            return "? extends " + (bound != null ? bound : "Object");
+        }
+        return "?";
     }
 
     @Override
@@ -759,6 +808,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
                 w.write("[");
                 emit(dim);
                 w.write("]");
+            }
+            // 未显式给出的剩余维度补空括号(如 anewarray [I 产 new int[2][])
+            int remaining = totalArrayDimensions(type) - n.dimensions().size();
+            for (int d = 0; d < remaining; d++) {
+                w.write("[]");
             }
         } else if (!n.arrayInitializer().isEmpty()) {
             // 数组初始化器:new String[]{"a", "b"}
