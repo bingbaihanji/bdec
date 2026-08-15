@@ -118,12 +118,15 @@ public final class InnerClassDecompiler {
             }
 
             try {
-                // 为内部类创建新的反编译上下文
-                DecompileContext innerCtx = new DecompileContext(
-                        context.config(), context::loadClassBytes);
-
                 // 解析并反编译内部类,将其作为嵌套类型嵌入主类
                 ClassFileModel innerCfm = classReader.read(innerName, innerBytes);
+                // 为内部类创建新的反编译上下文,并携带内部类自身的 ClassFileModel:
+                // 否则 EnumRewriter 等依赖 ctx.classFile() 的规则(如扫描枚举自身
+                // <clinit> 提取常量体映射)拿不到内部枚举的字节码模型,嵌套枚举的
+                // 常量匿名体(覆写抽象方法的 E$N 类)会全部丢失.
+                DecompileContext innerCtx = new DecompileContext(
+                        context.config(), context::loadClassBytes,
+                        innerCfm.bootstrapMethods(), innerCfm);
                 CompilationUnit innerUnit = buildInnerClassUnit(innerCfm, innerCtx);
                 if (innerUnit != null && !innerUnit.types().isEmpty()) {
                     // 将内部类 TypeDeclaration 作为嵌套类型嵌入主类
@@ -136,6 +139,12 @@ public final class InnerClassDecompiler {
                             | (innerType.accessFlags()
                             & ~(AccessFlags.ACC_PUBLIC | AccessFlags.ACC_PRIVATE
                             | AccessFlags.ACC_PROTECTED | AccessFlags.ACC_STATIC));
+                    // 枚举的 ACC_ABSTRACT 由 javac 在含抽象方法时隐式置位,但源码
+                    // 中枚举常量体已实现抽象方法,不应输出 abstract(否则 "abstract
+                    // enum" 非法)。EnumRewriter 已剥离,此处合并条目标志不得加回.
+                    if ("enum".equals(innerType.kindName())) {
+                        flags &= ~AccessFlags.ACC_ABSTRACT;
+                    }
                     TypeDeclaration nestedType =
                             new TypeDeclaration(
                                     flags, innerType.simpleName(), innerType.kindName(),
@@ -167,7 +176,11 @@ public final class InnerClassDecompiler {
             List<StructuredMethod> methods =
                     methodPipeline.decompileMethods(cfm, ctx, false, false);
             CompilationUnit innerUnit = astBuilder.build(cfm, methods, ctx);
-            return astRewriter.rewrite(innerUnit, config, ctx);
+            innerUnit = astRewriter.rewrite(innerUnit, config, ctx);
+            // 递归处理该内部类自身的内部类(二级+嵌套,如 Host$Using).
+            // 此前仅处理一级嵌套,二级的内部类(OuterClass 不是顶层类)被
+            // decompileInnerClasses 的归属判断直接跳过,声明整个丢失.
+            return decompileInnerClasses(innerUnit, cfm, ctx);
         } catch (Exception e) {
             return null;
         }

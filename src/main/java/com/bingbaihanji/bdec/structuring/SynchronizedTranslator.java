@@ -100,10 +100,33 @@ public final class SynchronizedTranslator {
 
     /** 从 synchronized try-catch 中提取监视器对象名称 */
     static String extractMonitorObject(TryCatchInfo info, LinearIr ir) {
-        for (BasicBlock b : info.tryBlocks()) {
+        ControlFlowGraph cfg = ir.controlFlowGraph();
+        Set<BasicBlock> candidates = new java.util.LinkedHashSet<>(info.tryBlocks());
+        // monitorenter 通常位于 try 保护区之前(如 offset 4 < startPc 5),
+        // 不在 tryBlocks 内——把"后继在 try 区域"的前导块也纳入候选.
+        for (BasicBlock b : cfg.blocks()) {
+            for (var e : cfg.outgoingOf(b)) {
+                if (info.tryBlocks().contains(e.target())) {
+                    candidates.add(b);
+                }
+            }
+        }
+        for (BasicBlock b : candidates) {
             for (IrInstruction insn : ir.instructionsOf(b)) {
                 if (insn.opcode() == IrOpcode.MONITOR_ENTER && !insn.operands().isEmpty()) {
                     Value obj = insn.operands().getFirst();
+                    // 类字面量监视器:synchronized (SomeClass.class) 的 MONITOR_ENTER
+                    // 操作数是携带类名 String 值的 CONST,渲染为 SomeClass.class
+                    //(此前只追 Variable,类字面量回退 "this",静态方法中非法).
+                    if (obj instanceof InstructionRef ref
+                            && ref.instruction().opcode() == IrOpcode.CONST
+                            && !ref.instruction().operands().isEmpty()
+                            && ref.instruction().operands().getFirst() instanceof com.bingbaihanji.bdec.ir.ConstantValue cv
+                            && cv.value() instanceof String className) {
+                        int slash = className.lastIndexOf('/');
+                        return slash >= 0 ? className.substring(slash + 1) + ".class"
+                                : className + ".class";
+                    }
                     // 沿 InstructionRef 链追踪以找到底层变量
                     while (obj instanceof InstructionRef ref) {
                         IrInstruction def = ref.instruction();

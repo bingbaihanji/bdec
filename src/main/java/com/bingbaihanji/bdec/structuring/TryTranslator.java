@@ -233,6 +233,10 @@ public final class TryTranslator {
             // 属于 try 体,应拉入;而 try {...} finally {...} return X; 的 return X
             // 值在退出块计算(getfield 等),属 try 之后的代码,不应拉入 try 体.
             Set<BasicBlock> pullInExitBlocks = new java.util.LinkedHashSet<>();
+            // 预收集 handler 区的指令操作码序列,用于识别 finally 副本块:
+            // finally 副本在正常退出路径与 handler 中都会执行,操作码序列相同.
+            Set<List<IrOpcode>> handlerOpcodeSeq =
+                    collectHandlerOpcodeSequences(tci.handlerBlock(), ir, ir.controlFlowGraph());
             for (BasicBlock b : exitBlocks) {
                 boolean hasReturn = false;
                 for (IrInstruction insn : ir.instructionsOf(b)) {
@@ -246,6 +250,13 @@ public final class TryTranslator {
                         pullInExitBlocks.add(b);
                     }
                     break; // 返回块及其后不再拉入 try 体
+                }
+                // 仅拉入 finally 副本块(操作码序列与 handler 区一致).
+                // 非 finally 副本的退出块(如 return 值计算块:concat/字段加载)属
+                // try 之后代码——若误拉入会把 return 一起带进 try 体(语义错误,
+                // 如 try-with-resources 的 return 被拉到资源 close 之前求值).
+                if (!isFinallyCopy(b, handlerOpcodeSeq, ir)) {
+                    break;
                 }
                 pullInExitBlocks.add(b); // finally 副本块(无 return),继续
             }
@@ -623,6 +634,78 @@ public final class TryTranslator {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * 收集 handler 可达块的指令操作码序列(finally 副本识别用).
+     *
+     * <p>javac 将 finally 体复制两份:一份在正常退出路径,一份在异常处理器中.
+     * 两者操作码序列相同(仅字节码偏移不同).正常退出路径中与 handler 区某块
+     * 操作码一致的块即 finally 副本;其余退出块(return 值计算等)是 try 之后
+     * 的代码,不应拉入 try 体.</p>
+     */
+    private static Set<List<IrOpcode>> collectHandlerOpcodeSequences(BasicBlock handler,
+                                                                     LinearIr ir,
+                                                                     ControlFlowGraph graph) {
+        Set<List<IrOpcode>> patterns = new HashSet<>();
+        Set<BasicBlock> visited = new HashSet<>();
+        Deque<BasicBlock> queue = new ArrayDeque<>();
+        queue.add(handler);
+        while (!queue.isEmpty()) {
+            BasicBlock b = queue.poll();
+            if (!visited.add(b)) {
+                continue;
+            }
+            List<IrOpcode> ops = ir.instructionsOf(b).stream()
+                    .map(IrInstruction::opcode).toList();
+            if (!ops.isEmpty()) {
+                patterns.add(ops);
+            }
+            for (var e : graph.outgoingOf(b)) {
+                if (e.kind() != EdgeKind.EXCEPTION && e.target() != graph.exitBlock()) {
+                    queue.add(e.target());
+                }
+            }
+        }
+        return patterns;
+    }
+
+    /** 退出块是否为 finally 副本:其指令操作码序列是某 handler 块序列的连续子序列.
+     *
+     * <p>handler 块常把 finally 副本与异常保存/重抛合并为单个块
+     * (如 {@code astore ex; ...finally体...; aload ex; athrow}),因此不能用
+     * 整块序列相等匹配,须检查连续子序列.非 finally 副本的退出块(return 值
+     * 计算等)在 handler 中无对应代码,子序列不匹配.</p> */
+    private static boolean isFinallyCopy(BasicBlock b, Set<List<IrOpcode>> handlerPatterns,
+                                         LinearIr ir) {
+        List<IrOpcode> ops = ir.instructionsOf(b).stream()
+                .map(IrInstruction::opcode).toList();
+        if (ops.isEmpty()) {
+            return false;
+        }
+        for (List<IrOpcode> hp : handlerPatterns) {
+            if (isContiguousSubsequence(ops, hp)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** needle 是否为 haystack 的连续子序列. */
+    private static boolean isContiguousSubsequence(List<IrOpcode> needle, List<IrOpcode> haystack) {
+        if (needle.size() > haystack.size()) {
+            return false;
+        }
+        outer:
+        for (int i = 0; i + needle.size() <= haystack.size(); i++) {
+            for (int j = 0; j < needle.size(); j++) {
+                if (needle.get(j) != haystack.get(i + j)) {
+                    continue outer;
+                }
+            }
+            return true;
+        }
+        return false;
     }
 
     /**

@@ -346,6 +346,19 @@ public final class IndyTranslator {
         if (concatArgs.isEmpty()) {
             return new LitExpr("", JavaType.classType("java/lang/String"));
         }
+        // 单个动态占位且非字符串(如 recipe "" 的 "" + int):
+        // 补齐 "" 前缀,否则纯返回 int 而方法返回 String(类型错误).
+        if (concatArgs.size() == 1) {
+            Expression single = concatArgs.getFirst();
+            boolean isStringVal = single instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit
+                    && lit.value() instanceof String;
+            boolean isToString = single instanceof InvocationExpr inv
+                    && "toString".equals(inv.methodName());
+            if (!isStringVal && !isToString) {
+                concatArgs.add(0, new com.bingbaihanji.bdec.ast.expr.LitExpr(
+                        "", JavaType.classType("java/lang/String")));
+            }
+        }
         // recipe 已确保类型正确,不需要强制添加 "" 前缀
         return buildConcatChain(concatArgs);
     }

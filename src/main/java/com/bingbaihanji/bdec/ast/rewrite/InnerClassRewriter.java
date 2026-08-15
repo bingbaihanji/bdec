@@ -87,6 +87,16 @@ public class InnerClassRewriter implements RewriteRule {
                 return fd.name();
             }
         }
+        // 内部类不引用外层时,合成 this$X 字段被 SourceCleanup 当未使用删掉,
+        // 但构造器仍带 this$X 合成参数——据此识别并清理(参数与实例化处去参
+        // 都依赖此判定).
+        for (AstNode m : td.children()) {
+            if (m instanceof MethodDeclaration md && td.simpleName().equals(md.name())
+                    && md.parameterNames().length > 0
+                    && md.parameterNames()[0].startsWith("this$")) {
+                return md.parameterNames()[0];
+            }
+        }
         return null;
     }
 
@@ -219,8 +229,22 @@ public class InnerClassRewriter implements RewriteRule {
 
         private Integer matchCount(String internal) {
             for (Map.Entry<String, Integer> en : counts.entrySet()) {
-                if (internal.equals(en.getKey()) || internal.endsWith("$" + en.getKey())) {
+                String key = en.getKey();
+                if (internal.equals(key)) {
                     return en.getValue();
+                }
+                // 支持 member(Outer$Inner)与 local(Outer$1LocalClass)命名:
+                // 取最后 $ 段并去掉局部类的数字前缀(如 "1LocalClass" → "LocalClass").
+                int dollar = internal.lastIndexOf('$');
+                if (dollar >= 0) {
+                    String last = internal.substring(dollar + 1);
+                    int i = 0;
+                    while (i < last.length() && Character.isDigit(last.charAt(i))) {
+                        i++;
+                    }
+                    if (last.substring(i).equals(key)) {
+                        return en.getValue();
+                    }
                 }
             }
             return null;

@@ -118,13 +118,19 @@ if (result.success()) {
 ## 测试 / Testing
 
 ```bash
-mvn test                  # 全部往返测试(239)
+mvn test                  # 全部往返测试 + 执行级语义等价(261)
 mvn test -Dtest=CfrDiffTest   # 与 CFR 的差分测试(9 个样例,需 CFR jar)
 mvn verify                # 含 checkstyle 报告
+# 可选:行为样例全套差分(需先 mvn package 重建 bdec.jar)
+python tools/diff-test/diff_test.py --samples src/test/resources/behavior-samples
 ```
 
-- **往返测试**：`DecompileTestHarness` 编译 Java 源码 → BDEC 反编译 → 断言输出包含预期高层结构、不包含底层痕迹 → 重新编译确认合法。
-- **差分测试**：`CfrDiffTest` 与 `tools/diff-test/diff_test.py` 对同一批样例分别用 BDEC 与 CFR 反编译，两份输出都必须可重新编译。CFR jar 通过系统属性 `-Dcfr.jar` 或 Maven 本地仓库自动定位。
+测试分三层（后层严格加强前层，能编译 ≠ 行为正确）：
+
+1. **往返测试**：`DecompileTestHarness` 编译 Java 源码 → BDEC 反编译 → 断言输出包含预期高层结构、不包含底层痕迹 → 重新编译确认合法。
+2. **CFR 差分**：`CfrDiffTest` 与 `tools/diff-test/diff_test.py` 对同一样例分别用 BDEC 与 CFR 反编译，两份输出都必须可重新编译。
+3. **执行级语义等价（check() round-trip）**：`SemanticEquivalenceHarness` 对 `src/test/resources/behavior-samples/` 下 15 个行为样例（`public static String check()` + `main`）执行 **反编译 → 重编译 → 用同一输入运行两份、比对退出码与 stdout**。这是 JADX 风格（CFR/Vineflower 仅做文本回归）——系统性捕获「能编译但行为不同」的静默错误。
+
 - **checkstyle**：`config/checkstyle/checkstyle.xml`，报告不阻断构建（当前仅剩 `BdecCli` 4 处既有警告）。
 
 ---
@@ -143,8 +149,9 @@ mvn verify                # 含 checkstyle 报告
 
 ## 路线图 / Roadmap
 
-- [ ] 执行级语义等价差分（反编译 → 重编译 → **运行比对结果**，而非仅验证可编译）
-- [ ] 扩充差分样例集：泛型、匿名类、同步、复杂 try、varargs、装箱交互等真实形态
+- [x] 执行级语义等价差分（`SemanticEquivalenceHarness` 的 check() round-trip，15 个行为样例）
+- [ ] 扩充行为样例集：泛型、匿名类、同步、复杂 try、varargs、装箱交互等真实形态
+- [ ] 为行为样例补充执行级比对的 Python 通道（`diff_test.py` 运行比对列）
 - [ ] 不可归约控制流降级处理
 - [ ] JAR 模式跨类字节码加载
 - [ ] Lengauer-Tarjan 支配树（当前为迭代不动点算法）
