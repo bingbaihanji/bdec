@@ -46,6 +46,45 @@ public final class RequireNonNullEliminator {
     /** 目标方法名:getClass */
     private static final String GET_CLASS_METHOD = "getClass";
 
+    /** 指令是否无副作用(纯中间值,可安全移除当无人消费). */
+    private static boolean isSideEffectFree(IrOpcode op) {
+        return switch (op) {
+            case LOAD, CONST, CAST, BINARY, COMPARE, UNARY,
+                 ARRAY_LENGTH, INSTANCE_OF -> true;
+            default -> false;
+        };
+    }
+
+    /** 构建被"未被移除指令"消费的指令 ID 集合. */
+    private static Set<Integer> buildConsumedIds(
+            List<IrInstruction> instructions, Set<Integer> excluded) {
+        Set<Integer> consumed = new HashSet<>();
+        for (IrInstruction insn : instructions) {
+            if (excluded.contains(insn.id())) {
+                continue;
+            }
+            for (Value op : insn.operands()) {
+                if (op instanceof InstructionRef ref) {
+                    consumed.add(ref.instruction().id());
+                }
+            }
+        }
+        return consumed;
+    }
+
+    /** 指令偏移是否位于某异常处理器的受保护范围内(try 区域). */
+    private static boolean isInTryRegion(int offset, List<ExceptionHandlerModel> handlers) {
+        if (handlers == null) {
+            return false;
+        }
+        for (ExceptionHandlerModel h : handlers) {
+            if (offset >= h.startPc() && offset < h.endPc()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * 消除 requireNonNull / getClass 空检查调用.
      *
@@ -149,45 +188,6 @@ public final class RequireNonNullEliminator {
         }
 
         return changed;
-    }
-
-    /** 指令是否无副作用(纯中间值,可安全移除当无人消费). */
-    private static boolean isSideEffectFree(IrOpcode op) {
-        return switch (op) {
-            case LOAD, CONST, CAST, BINARY, COMPARE, UNARY,
-                    ARRAY_LENGTH, INSTANCE_OF -> true;
-            default -> false;
-        };
-    }
-
-    /** 构建被"未被移除指令"消费的指令 ID 集合. */
-    private static Set<Integer> buildConsumedIds(
-            List<IrInstruction> instructions, Set<Integer> excluded) {
-        Set<Integer> consumed = new HashSet<>();
-        for (IrInstruction insn : instructions) {
-            if (excluded.contains(insn.id())) {
-                continue;
-            }
-            for (Value op : insn.operands()) {
-                if (op instanceof InstructionRef ref) {
-                    consumed.add(ref.instruction().id());
-                }
-            }
-        }
-        return consumed;
-    }
-
-    /** 指令偏移是否位于某异常处理器的受保护范围内(try 区域). */
-    private static boolean isInTryRegion(int offset, List<ExceptionHandlerModel> handlers) {
-        if (handlers == null) {
-            return false;
-        }
-        for (ExceptionHandlerModel h : handlers) {
-            if (offset >= h.startPc() && offset < h.endPc()) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

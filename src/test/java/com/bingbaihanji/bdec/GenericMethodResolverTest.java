@@ -3,7 +3,6 @@ package com.bingbaihanji.bdec;
 import com.bingbaihanji.bdec.ir.ConstantValue;
 import com.bingbaihanji.bdec.ir.GenericMethodResolver;
 import com.bingbaihanji.bdec.type.JavaType;
-import com.bingbaihanji.bdec.type.TypeKind;
 import org.junit.Test;
 
 import java.util.List;

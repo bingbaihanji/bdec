@@ -1,7 +1,11 @@
-import java.util.*;
-import java.util.stream.*;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 class GenericStreamSample {
+
     static List<String> filterStrings(List<String> items) {
         return items.stream().filter(s -> s.length() > 2)
                 .map(String::toUpperCase).collect(Collectors.toList());

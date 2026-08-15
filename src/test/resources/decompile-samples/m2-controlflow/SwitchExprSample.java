@@ -1,4 +1,5 @@
 class SwitchExprSample {
+
     static String dayName(int day) {
         return switch (day) {
             case 1 -> "mon";

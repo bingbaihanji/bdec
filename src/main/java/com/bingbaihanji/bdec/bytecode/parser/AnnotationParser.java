@@ -24,6 +24,59 @@ import java.util.List;
 final class AnnotationParser {
 
     /**
+     * 将新解析的注解列表追加到既有列表.
+     *
+     * <p>同一目标(类/字段/方法)可同时携带 RuntimeVisible 与
+     * RuntimeInvisible 两个属性,且两者在属性表中的顺序不定——必须
+     * 以追加语义合并而非赋值,否则后出现的属性会覆盖先出现的.</p>
+     *
+     * @param base  既有注解列表(可能为空不可变列表)
+     * @param extra 新解析的注解列表
+     * @return 合并后的新列表
+     */
+    static <T> List<T> mergeLists(List<T> base, List<T> extra) {
+        if (extra == null || extra.isEmpty()) {
+            return base;
+        }
+        List<T> result = new ArrayList<>(base.size() + extra.size());
+        result.addAll(base);
+        result.addAll(extra);
+        return result;
+    }
+
+    /**
+     * 按参数位置合并可见/不可见参数注解列表.
+     *
+     * <p>两属性的 num_parameters 一致(均等于方法描述符参数数),各参数
+     * 的注解列表按下标对齐合并(可见在前,不可见在后).</p>
+     *
+     * @param base  既有参数注解列表(可能为空)
+     * @param extra 新解析的参数注解列表
+     * @return 合并后的参数注解列表
+     */
+    static List<List<AnnotationEntry>> mergeParamAnns(
+            List<List<AnnotationEntry>> base, List<List<AnnotationEntry>> extra) {
+        if (extra == null || extra.isEmpty()) {
+            return base;
+        }
+        int n = Math.max(base.size(), extra.size());
+        List<List<AnnotationEntry>> result = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            List<AnnotationEntry> a = i < base.size() ? base.get(i) : List.of();
+            List<AnnotationEntry> b = i < extra.size() ? extra.get(i) : List.of();
+            if (a.isEmpty() && b.isEmpty()) {
+                result.add(List.of());
+            } else {
+                List<AnnotationEntry> m = new ArrayList<>(a.size() + b.size());
+                m.addAll(a);
+                m.addAll(b);
+                result.add(m);
+            }
+        }
+        return result;
+    }
+
+    /**
      * 解析一个 element_value(JVMS 4.7.16.1).
      *
      * <p>tag 决定值的类型:'B','C','D','F','I','J','S','Z' 基本类型,
@@ -153,59 +206,6 @@ final class AnnotationParser {
         List<AnnotationEntry> result = new ArrayList<>();
         for (int k = 0; k < n; k++) {
             result.add(parseAnnotation(in, pool));
-        }
-        return result;
-    }
-
-    /**
-     * 将新解析的注解列表追加到既有列表.
-     *
-     * <p>同一目标(类/字段/方法)可同时携带 RuntimeVisible 与
-     * RuntimeInvisible 两个属性,且两者在属性表中的顺序不定——必须
-     * 以追加语义合并而非赋值,否则后出现的属性会覆盖先出现的.</p>
-     *
-     * @param base  既有注解列表(可能为空不可变列表)
-     * @param extra 新解析的注解列表
-     * @return 合并后的新列表
-     */
-    static <T> List<T> mergeLists(List<T> base, List<T> extra) {
-        if (extra == null || extra.isEmpty()) {
-            return base;
-        }
-        List<T> result = new ArrayList<>(base.size() + extra.size());
-        result.addAll(base);
-        result.addAll(extra);
-        return result;
-    }
-
-    /**
-     * 按参数位置合并可见/不可见参数注解列表.
-     *
-     * <p>两属性的 num_parameters 一致(均等于方法描述符参数数),各参数
-     * 的注解列表按下标对齐合并(可见在前,不可见在后).</p>
-     *
-     * @param base  既有参数注解列表(可能为空)
-     * @param extra 新解析的参数注解列表
-     * @return 合并后的参数注解列表
-     */
-    static List<List<AnnotationEntry>> mergeParamAnns(
-            List<List<AnnotationEntry>> base, List<List<AnnotationEntry>> extra) {
-        if (extra == null || extra.isEmpty()) {
-            return base;
-        }
-        int n = Math.max(base.size(), extra.size());
-        List<List<AnnotationEntry>> result = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            List<AnnotationEntry> a = i < base.size() ? base.get(i) : List.of();
-            List<AnnotationEntry> b = i < extra.size() ? extra.get(i) : List.of();
-            if (a.isEmpty() && b.isEmpty()) {
-                result.add(List.of());
-            } else {
-                List<AnnotationEntry> m = new ArrayList<>(a.size() + b.size());
-                m.addAll(a);
-                m.addAll(b);
-                result.add(m);
-            }
         }
         return result;
     }

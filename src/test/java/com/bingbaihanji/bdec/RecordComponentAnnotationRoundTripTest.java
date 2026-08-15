@@ -17,28 +17,31 @@ import java.util.Map;
 public class RecordComponentAnnotationRoundTripTest {
 
     private static final String ANNOT_IMPORTS = "import java.lang.annotation.*;\n";
+
     private static final String ANN_A = """
-            @Retention(RetentionPolicy.RUNTIME)
-            @Target({ElementType.RECORD_COMPONENT, ElementType.FIELD, ElementType.METHOD,
-                     ElementType.PARAMETER, ElementType.TYPE_USE})
-            @interface A { String value() default ""; }
-            """;
+                                        @Retention(RetentionPolicy.RUNTIME)
+                                        @Target({ElementType.RECORD_COMPONENT, ElementType.FIELD, ElementType.METHOD,
+                                                 ElementType.PARAMETER, ElementType.TYPE_USE})
+                                        @interface A { String value() default ""; }
+                                        """;
+
     private static final String ANN_B = """
-            @Retention(RetentionPolicy.CLASS)
-            @Target({ElementType.RECORD_COMPONENT, ElementType.TYPE_USE})
-            @interface B { String value() default ""; }
-            """;
+                                        @Retention(RetentionPolicy.CLASS)
+                                        @Target({ElementType.RECORD_COMPONENT, ElementType.TYPE_USE})
+                                        @interface B { String value() default ""; }
+                                        """;
+
     private static final String ANN_T = """
-            @Retention(RetentionPolicy.RUNTIME)
-            @Target(ElementType.TYPE_USE)
-            @interface T {}
-            """;
+                                        @Retention(RetentionPolicy.RUNTIME)
+                                        @Target(ElementType.TYPE_USE)
+                                        @interface T {}
+                                        """;
 
     @Test
     public void testComponentAnnotationsVisibleAndInvisible() throws Exception {
         String src = ANNOT_IMPORTS + ANN_A + ANN_B + """
-                record Rec(@A("c") int x, @A("d") @B("t") String y) {}
-                """;
+                                                     record Rec(@A("c") int x, @A("d") @B("t") String y) {}
+                                                     """;
         String out = DecompileTestHarness.decompileWithInnerLoader(src, "Rec");
         DecompileTestHarness.assertContains(out,
                 "record Rec(@A(\"c\") int x, @A(\"d\") @B(\"t\") String y)");
@@ -52,8 +55,8 @@ public class RecordComponentAnnotationRoundTripTest {
     public void testGenericComponentWithAnnotation() throws Exception {
         // 泛型组件 + 声明注解并存:签名与注解都不丢
         String src = ANNOT_IMPORTS + ANN_A + """
-                record Rec(@A("g") java.util.List<String> x) {}
-                """;
+                                             record Rec(@A("g") java.util.List<String> x) {}
+                                             """;
         String out = DecompileTestHarness.decompileWithInnerLoader(src, "Rec");
         DecompileTestHarness.assertContains(out,
                 "record Rec(@A(\"g\") List<String> x)");
@@ -65,8 +68,8 @@ public class RecordComponentAnnotationRoundTripTest {
     public void testTypeUseOnlyComponentAnnotation() throws Exception {
         // 仅 TYPE_USE 目标的注解不落声明注解,存类型根路径,须从类型注解取
         String src = ANNOT_IMPORTS + ANN_T + """
-                record Rec(@T String x) {}
-                """;
+                                             record Rec(@T String x) {}
+                                             """;
         String out = DecompileTestHarness.decompileWithInnerLoader(src, "Rec");
         DecompileTestHarness.assertContains(out, "record Rec(@T String x)");
         DecompileTestHarness.assertRecompiles(out, "Rec",

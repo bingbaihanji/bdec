@@ -27,7 +27,8 @@ public record RecordComponentEntry(
         List<AnnotationEntry> annotations,
         List<TypeAnnotationEntry> typeAnnotations
 ) {
-    /** 旧式三参兼容构造:signature 空、注解空(与解析前的调用点一致). */
+
+    /** 旧式三参兼容构造:signature 空,注解空(与解析前的调用点一致). */
     public RecordComponentEntry(String name, String descriptor) {
         this(name, descriptor, "", List.of(), List.of());
     }

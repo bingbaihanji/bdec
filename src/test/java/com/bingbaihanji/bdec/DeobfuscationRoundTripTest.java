@@ -10,7 +10,7 @@ import java.util.Map;
  * <p>覆盖三类混淆的还原/语义保持:</p>
  * <ul>
  *   <li><b>NPE 触发混淆</b>({@code try { s.getClass(); } catch (NPE) {...}}):
- *       空检查调用是 catch 分支的控制流触发,不能消除——消除后 NPE 不再抛出、
+ *       空检查调用是 catch 分支的控制流触发,不能消除——消除后 NPE 不再抛出,
  *       catch 永不执行(语义错误).RequireNonNullEliminator 对 try 区域内的
  *       空检查不消除;</li>
  *   <li><b>除零假 try</b>:恒抛异常(常量除零)的 try 体是死分支,catch 是主路径,

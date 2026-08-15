@@ -4,6 +4,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 
 class TryWithResourcesSample {
+
     static void readFile(String path) throws IOException {
         try (BufferedReader br = Files.newBufferedReader(Paths.get(path))) {
             System.out.println(br.readLine());

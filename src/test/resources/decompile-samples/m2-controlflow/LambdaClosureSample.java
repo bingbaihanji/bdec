@@ -1,7 +1,9 @@
 import java.util.List;
-import java.util.function.*;
+import java.util.function.Function;
+import java.util.function.IntSupplier;
 
 class LambdaClosureSample {
+
     static Function<Integer, Integer> adder(int base) {
         int offset = base * 2;
         return x -> x + offset;
@@ -20,9 +22,12 @@ class LambdaClosureSample {
                 .toList();
     }
 
-    interface Greeter { String greet(String name); }
-
     static Greeter makeGreeter(String prefix) {
         return name -> prefix + ", " + name + "!";
+    }
+
+    interface Greeter {
+
+        String greet(String name);
     }
 }

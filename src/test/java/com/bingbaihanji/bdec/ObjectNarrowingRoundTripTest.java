@@ -15,6 +15,40 @@ import java.util.Map;
  */
 public class ObjectNarrowingRoundTripTest {
 
+    /** 用 {@code -g:none} 编译(无 LVT),再反编译. */
+    private static String decompileWithNoDebugInfo(String source, String className) throws Exception {
+        var compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+        java.nio.file.Path tmpDir = java.nio.file.Files.createTempDirectory("bdec-test-nolvt-");
+        try {
+            java.nio.file.Path srcFile = tmpDir.resolve(className + ".java");
+            java.nio.file.Files.writeString(srcFile, source, java.nio.charset.StandardCharsets.UTF_8);
+            var err = new java.io.ByteArrayOutputStream();
+            int rc = compiler.run(null, null, err,
+                    "-g:none", "-d", tmpDir.toString(), srcFile.toString());
+            if (rc != 0) {
+                throw new RuntimeException("Compile failed:\n" + err);
+            }
+            java.nio.file.Path classFile = tmpDir.resolve(className + ".class");
+            BdecConfig config = BdecConfig.builder().build();
+            BdecEngine engine = new BdecEngine(config, d -> {});
+            BdecResult result = engine.decompile(classFile, new DecompileContext(config, null));
+            if (!result.success()) {
+                throw new RuntimeException("Decompilation failed: " + result.cause());
+            }
+            return result.decompiledCode();
+        } finally {
+            try (var files = java.nio.file.Files.list(tmpDir)) {
+                files.forEach(p -> {
+                    try {
+                        java.nio.file.Files.deleteIfExists(p);
+                    } catch (Exception ignored) {
+                    }
+                });
+            }
+            java.nio.file.Files.deleteIfExists(tmpDir);
+        }
+    }
+
     @Test
     public void testObjectDeclNotNarrowed() throws Exception {
         String output = DecompileTestHarness.decompileWithInnerLoader(
@@ -199,39 +233,5 @@ public class ObjectNarrowingRoundTripTest {
                         + "}\n",
                 "C");
         DecompileTestHarness.assertRecompiles(output, "C", Map.of());
-    }
-
-    /** 用 {@code -g:none} 编译(无 LVT),再反编译. */
-    private static String decompileWithNoDebugInfo(String source, String className) throws Exception {
-        var compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
-        java.nio.file.Path tmpDir = java.nio.file.Files.createTempDirectory("bdec-test-nolvt-");
-        try {
-            java.nio.file.Path srcFile = tmpDir.resolve(className + ".java");
-            java.nio.file.Files.writeString(srcFile, source, java.nio.charset.StandardCharsets.UTF_8);
-            var err = new java.io.ByteArrayOutputStream();
-            int rc = compiler.run(null, null, err,
-                    "-g:none", "-d", tmpDir.toString(), srcFile.toString());
-            if (rc != 0) {
-                throw new RuntimeException("Compile failed:\n" + err);
-            }
-            java.nio.file.Path classFile = tmpDir.resolve(className + ".class");
-            BdecConfig config = BdecConfig.builder().build();
-            BdecEngine engine = new BdecEngine(config, d -> {});
-            BdecResult result = engine.decompile(classFile, new DecompileContext(config, null));
-            if (!result.success()) {
-                throw new RuntimeException("Decompilation failed: " + result.cause());
-            }
-            return result.decompiledCode();
-        } finally {
-            try (var files = java.nio.file.Files.list(tmpDir)) {
-                files.forEach(p -> {
-                    try {
-                        java.nio.file.Files.deleteIfExists(p);
-                    } catch (Exception ignored) {
-                    }
-                });
-            }
-            java.nio.file.Files.deleteIfExists(tmpDir);
-        }
     }
 }

@@ -1,6 +1,8 @@
 class SyncBlockSample {
-    private int count = 0;
+
     private final Object lock = new Object();
+
+    private int count = 0;
 
     synchronized int inc() {
         return ++count;

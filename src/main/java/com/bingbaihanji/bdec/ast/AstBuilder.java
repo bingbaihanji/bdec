@@ -67,32 +67,6 @@ public class AstBuilder {
     }
 
     /**
-     * 从方法体的IR指令中收集类型引用,用于生成import语句.
-     * 扫描静态方法调用的DECLARING_CLASS注解,new表达式,new数组和instanceof
-     * 指令中引用的类型.
-     *
-     * @param sm        结构化方法
-     * @param imports   待填充的import集合
-     * @param thisClass 当前类的简单名称(避免自引用)
-     */
-    private void collectBodyImports(StructuredMethod sm, Set<String> imports, String thisClass) {
-        if (sm.ir() == null || sm.ir().instructions() == null) {
-            return; // 抽象方法或本地方法没有IR
-        }
-        // 局部变量声明的类型(如 List<String> x = null;)不暴露于 NEW/INVOKE
-        // 等指令,直接从变量表收集 import,否则输出全限定名(java.util.List<String>)
-        // 且 import 丢失.null 赋值变量的 base type 为 Object,真实类型在
-        // LVTT 的 genericType 中,故两者都收集.java.lang/同包/匿名类由
-        // collectImport 与 build 末尾过滤兜底.
-        for (var v : sm.ir().variables()) {
-            TypeReferenceUtil.collectImport(v.genericType(), imports, thisClass);
-            TypeReferenceUtil.collectImport(v.type(), imports, thisClass);
-        }
-        collectIrTypeImports(sm.ir().instructions(),
-                t -> TypeReferenceUtil.collectImport(t, imports, thisClass));
-    }
-
-    /**
      * 扫描 IR 指令中引用的类型并交给收集器.
      *
      * <p>覆盖局部变量表之外的表达式内类型:静态调用声明类(DECLARING_CLASS,
@@ -163,6 +137,96 @@ public class AstBuilder {
                 }
             }
         }
+    }
+
+    /**
+     * 计算成员类型元素根路径:非数组为 {@code []},N 维数组为
+     * {@code [ARRAY(0)..ARRAY(N-1)]}.
+     *
+     * <p>javac 对同时声明"声明目标(FIELD/METHOD/PARAMETER)+TYPE_USE"的注解,
+     * 在同一成员上双发射:类型副本落在元素根路径——裸 {@code @A int[] x} 的
+     * 声明注解类型副本落 {@code [ARRAY]}(元素),而显式 {@code int @A [] x}
+     * 的数组自身注解落 {@code []}(数组本身).按元素根路径匹配才能只剔除
+     * 声明副本,保留 {@code int @A []} 这类有意双写的数组注解.</p>
+     */
+    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>
+    elementRootPath(com.bingbaihanji.bdec.type.JavaType type) {
+        int dims = type != null && type.kind() == com.bingbaihanji.bdec.type.TypeKind.ARRAY
+                ? type.arrayDimensions() : 0;
+        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path
+                = new ArrayList<>(dims);
+        for (int d = 0; d < dims; d++) {
+            path.add(new com.bingbaihanji.bdec.bytecode.model.TypePathElement(
+                    com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_ARRAY, d));
+        }
+        return path;
+    }
+
+    /**
+     * 剔除与声明注解重复的类型注解条目(javac 双发射去重).
+     *
+     * <p>同一成员上源码一个 {@code @A} 会同时落入声明注解属性与类型注解属性,
+     * 类型副本落在元素根路径(见 {@link #elementRootPath}).保留声明版,剔除
+     * 该路径上同值的类型副本——否则输出同一注解两次(非 repeatable)无法重编译.
+     * 仅作用于指定目标类型(字段/返回/参数)与指定路径,其他目标的类型注解
+     * (如 Code 内局部变量 0x40)不受影响.</p>
+     *
+     * @param entries    类型注解条目列表
+     * @param targetType 目标类型(字段 0x13 / 返回 0x14 / 参数 0x16)
+     * @param targetIdx  带下标目标的索引(参数下标),无下标目标传 -1
+     * @param declAnns   同成员声明注解列表(要保留的版本)
+     * @param elementRoot 该成员类型元素根路径
+     * @return 剔除重复后的类型注解条目列表
+     */
+    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry>
+    stripDeclarationDupes(
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry> entries,
+            int targetType, int targetIdx,
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> declAnns,
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> elementRoot) {
+        if (entries == null || entries.isEmpty()
+                || declAnns == null || declAnns.isEmpty()) {
+            return entries;
+        }
+        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry> result
+                = new ArrayList<>(entries.size());
+        for (var e : entries) {
+            if (e.targetType() == targetType
+                    && (targetIdx < 0 || (e.targetInfo() != null
+                    && e.targetInfo().length > 0 && e.targetInfo()[0] == targetIdx))
+                    && e.typePath().equals(elementRoot)
+                    && declAnns.contains(e.annotation())) {
+                continue; // javac 声明注解的类型副本,剔除
+            }
+            result.add(e);
+        }
+        return result.isEmpty() ? java.util.List.of() : result;
+    }
+
+    /**
+     * 从方法体的IR指令中收集类型引用,用于生成import语句.
+     * 扫描静态方法调用的DECLARING_CLASS注解,new表达式,new数组和instanceof
+     * 指令中引用的类型.
+     *
+     * @param sm        结构化方法
+     * @param imports   待填充的import集合
+     * @param thisClass 当前类的简单名称(避免自引用)
+     */
+    private void collectBodyImports(StructuredMethod sm, Set<String> imports, String thisClass) {
+        if (sm.ir() == null || sm.ir().instructions() == null) {
+            return; // 抽象方法或本地方法没有IR
+        }
+        // 局部变量声明的类型(如 List<String> x = null;)不暴露于 NEW/INVOKE
+        // 等指令,直接从变量表收集 import,否则输出全限定名(java.util.List<String>)
+        // 且 import 丢失.null 赋值变量的 base type 为 Object,真实类型在
+        // LVTT 的 genericType 中,故两者都收集.java.lang/同包/匿名类由
+        // collectImport 与 build 末尾过滤兜底.
+        for (var v : sm.ir().variables()) {
+            TypeReferenceUtil.collectImport(v.genericType(), imports, thisClass);
+            TypeReferenceUtil.collectImport(v.type(), imports, thisClass);
+        }
+        collectIrTypeImports(sm.ir().instructions(),
+                t -> TypeReferenceUtil.collectImport(t, imports, thisClass));
     }
 
     /**
@@ -466,7 +530,7 @@ public class AstBuilder {
             java.util.List<java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
                     List<String>>> paramTypeAnns = new ArrayList<>();
             for (int pi = 0; pi < paramTypes.length; pi++) {
-                // 参数声明注解按尾部对齐(枚举构造器前导合成参数、内部类 this$0),
+                // 参数声明注解按尾部对齐(枚举构造器前导合成参数,内部类 this$0),
                 // 与声明注解渲染一致的 offset 计算
                 List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> pDecl = List.of();
                 if (method.parameterAnnotations() != null) {
@@ -689,7 +753,6 @@ public class AstBuilder {
         return ParameterNameResolver.resolveNames(method, "param");
     }
 
-
     /**
      * 解析方法名.
      * 构造器方法(&lt;init&gt;)使用类名作为方法名,
@@ -710,6 +773,8 @@ public class AstBuilder {
         }
         return methodName;
     }
+
+    // ── 注解渲染 ──
 
     /**
      * 从内部名称中提取包名.
@@ -742,8 +807,6 @@ public class AstBuilder {
         return null;
     }
 
-    // ── 注解渲染 ──
-
     /**
      * 从类型注解条目中筛选指定目标,按类型路径分组并渲染为源码行.
      *
@@ -775,70 +838,6 @@ public class AstBuilder {
             collectAnnotationImports(e.annotation(), imports, simpleName);
         }
         return map.isEmpty() ? java.util.Map.of() : map;
-    }
-
-    /**
-     * 计算成员类型元素根路径:非数组为 {@code []},N 维数组为
-     * {@code [ARRAY(0)..ARRAY(N-1)]}.
-     *
-     * <p>javac 对同时声明"声明目标(FIELD/METHOD/PARAMETER)+TYPE_USE"的注解,
-     * 在同一成员上双发射:类型副本落在元素根路径——裸 {@code @A int[] x} 的
-     * 声明注解类型副本落 {@code [ARRAY]}(元素),而显式 {@code int @A [] x}
-     * 的数组自身注解落 {@code []}(数组本身).按元素根路径匹配才能只剔除
-     * 声明副本,保留 {@code int @A []} 这类有意双写的数组注解.</p>
-     */
-    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>
-            elementRootPath(com.bingbaihanji.bdec.type.JavaType type) {
-        int dims = type != null && type.kind() == com.bingbaihanji.bdec.type.TypeKind.ARRAY
-                ? type.arrayDimensions() : 0;
-        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path
-                = new ArrayList<>(dims);
-        for (int d = 0; d < dims; d++) {
-            path.add(new com.bingbaihanji.bdec.bytecode.model.TypePathElement(
-                    com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_ARRAY, d));
-        }
-        return path;
-    }
-
-    /**
-     * 剔除与声明注解重复的类型注解条目(javac 双发射去重).
-     *
-     * <p>同一成员上源码一个 {@code @A} 会同时落入声明注解属性与类型注解属性,
-     * 类型副本落在元素根路径(见 {@link #elementRootPath}).保留声明版,剔除
-     * 该路径上同值的类型副本——否则输出同一注解两次(非 repeatable)无法重编译.
-     * 仅作用于指定目标类型(字段/返回/参数)与指定路径,其他目标的类型注解
-     * (如 Code 内局部变量 0x40)不受影响.</p>
-     *
-     * @param entries    类型注解条目列表
-     * @param targetType 目标类型(字段 0x13 / 返回 0x14 / 参数 0x16)
-     * @param targetIdx  带下标目标的索引(参数下标),无下标目标传 -1
-     * @param declAnns   同成员声明注解列表(要保留的版本)
-     * @param elementRoot 该成员类型元素根路径
-     * @return 剔除重复后的类型注解条目列表
-     */
-    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry>
-            stripDeclarationDupes(
-            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry> entries,
-            int targetType, int targetIdx,
-            java.util.List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> declAnns,
-            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> elementRoot) {
-        if (entries == null || entries.isEmpty()
-                || declAnns == null || declAnns.isEmpty()) {
-            return entries;
-        }
-        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry> result
-                = new ArrayList<>(entries.size());
-        for (var e : entries) {
-            if (e.targetType() == targetType
-                    && (targetIdx < 0 || (e.targetInfo() != null
-                    && e.targetInfo().length > 0 && e.targetInfo()[0] == targetIdx))
-                    && e.typePath().equals(elementRoot)
-                    && declAnns.contains(e.annotation())) {
-                continue; // javac 声明注解的类型副本,剔除
-            }
-            result.add(e);
-        }
-        return result.isEmpty() ? java.util.List.of() : result;
     }
 
     /** 渲染注解为源码行,如 "@Retention(RetentionPolicy.RUNTIME)" */

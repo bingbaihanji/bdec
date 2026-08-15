@@ -1,7 +1,9 @@
 package com.bingbaihanji.bdec.structuring;
 
-import com.bingbaihanji.bdec.ast.AnnotationRenderer;
-import com.bingbaihanji.bdec.ast.expr.*;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
@@ -9,14 +11,12 @@ import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
-import com.bingbaihanji.bdec.bytecode.model.TypePathElement;
 import com.bingbaihanji.bdec.bytecode.parser.SignatureParser;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.DominatorTree;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
 import com.bingbaihanji.bdec.cfg.PostDominatorTree;
-import com.bingbaihanji.bdec.ir.ConstantValue;
 import com.bingbaihanji.bdec.ir.InstructionRef;
 import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.IrOpcode;
@@ -123,6 +123,33 @@ public final class BlockReducer implements ReducerOps {
 
     // ── ReducerOps 回调实现(供 ExprTranslator 等翻译器访问归约状态) ──
 
+    /** 当前方法是否返回 boolean 类型(缓存值) */
+    private boolean currentMethodReturnsBoolean = false;
+
+    /** 当前正在处理的 LinearIr(在 reduce() 开始时设置,用于字段/局部变量名冲突检测) */
+    private LinearIr currentIr = null;
+
+    /** 跨组全局变量使用计数,防止 per-group 内联仅因组内 load 计数为 1
+     *  而内联变量,但该变量在其他组中仍有引用. */
+    private Map<Variable, Integer> globalVarUseCount = Map.of();
+
+    public BlockReducer() {this(true);}
+
+    public BlockReducer(boolean isInstanceMethod) {
+        this.isInstanceMethod = isInstanceMethod;
+        this.indyTranslator = new IndyTranslator(
+                this::getIndyAnnotation, this::valueToExpr);
+        this.exprTranslator = new ExprTranslator(this);
+    }
+
+    /** 记录归约语句与所属组. */
+    private static void addStatement(List<Statement> statements,
+                                     List<Integer> stmtGroupIdx,
+                                     Statement s, int gi) {
+        statements.add(s);
+        stmtGroupIdx.add(gi);
+    }
+
     @Override
     public java.util.Map<Integer, List<IrInstruction>> currentNewToInit() {
         return currentNewToInit;
@@ -158,26 +185,6 @@ public final class BlockReducer implements ReducerOps {
         return isInstanceMethod;
     }
 
-    /** 当前方法是否返回 boolean 类型(缓存值) */
-    private boolean currentMethodReturnsBoolean = false;
-
-    /** 当前正在处理的 LinearIr(在 reduce() 开始时设置,用于字段/局部变量名冲突检测) */
-    private LinearIr currentIr = null;
-
-    /** 跨组全局变量使用计数,防止 per-group 内联仅因组内 load 计数为 1
-     *  而内联变量,但该变量在其他组中仍有引用. */
-    private Map<Variable, Integer> globalVarUseCount = Map.of();
-
-    public BlockReducer() {this(true);}
-
-    public BlockReducer(boolean isInstanceMethod) {
-        this.isInstanceMethod = isInstanceMethod;
-        this.indyTranslator = new IndyTranslator(
-                this::getIndyAnnotation, this::valueToExpr);
-        this.exprTranslator = new ExprTranslator(this);
-    }
-
-
     /**
      * 当前方法的泛型返回类型:优先取 Signature 属性解析的返回类型
      * (带泛型实参),否则回退描述符返回类型.
@@ -199,16 +206,6 @@ public final class BlockReducer implements ReducerOps {
         }
         return m.returnType();
     }
-
-
-    /** 记录归约语句与所属组. */
-    private static void addStatement(List<Statement> statements,
-                                     List<Integer> stmtGroupIdx,
-                                     Statement s, int gi) {
-        statements.add(s);
-        stmtGroupIdx.add(gi);
-    }
-
 
     /**
      * 将控制流图归约为 AST 语句块.
@@ -1129,7 +1126,6 @@ public final class BlockReducer implements ReducerOps {
         }
         return new BlockStatement(stmts);
     }
-
 
 
     /** 从 INDY 注解属性中获取字符串值 */

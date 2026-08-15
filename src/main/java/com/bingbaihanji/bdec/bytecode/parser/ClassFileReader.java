@@ -111,11 +111,11 @@ public final class ClassFileReader {
                         signature = ConstantPoolParser.utf8(pool, sigIdx);
                     }
                     case "RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations" ->
-                        annotations = AnnotationParser.mergeLists(annotations,
-                                annotationParser.parseAnnotations(in, pool));
+                            annotations = AnnotationParser.mergeLists(annotations,
+                                    annotationParser.parseAnnotations(in, pool));
                     case "RuntimeVisibleTypeAnnotations", "RuntimeInvisibleTypeAnnotations" ->
-                        typeAnnotations = AnnotationParser.mergeLists(typeAnnotations,
-                                annotationParser.parseTypeAnnotations(in, pool));
+                            typeAnnotations = AnnotationParser.mergeLists(typeAnnotations,
+                                    annotationParser.parseTypeAnnotations(in, pool));
                     default -> in.skipBytes(attrLen);
                 }
             }
