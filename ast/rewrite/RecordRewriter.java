@@ -130,10 +130,35 @@ public class RecordRewriter implements RewriteRule {
             // 查找对应字段的类型
             for (AstNode m : td.children()) {
                 if (m instanceof FieldDeclaration fd && name.equals(fd.name())) {
+                    StringBuilder sb = new StringBuilder();
+                    // 组件注解(可见/不可见):javac 把 record 组件的注解复制到 backing
+                    // 字段的声明注解属性,故从字段渲染内联到组件类型之前
+                    // (如 record R(@A int x));TYPE_USE 注解且目标含 RECORD_COMPONENT
+                    // 时也落入字段声明注解,一并输出.
+                    if (fd.annotations() != null) {
+                        for (String a : fd.annotations()) {
+                            sb.append(a).append(' ');
+                        }
+                    }
+                    // 仅 TYPE_USE 目标(无 RECORD_COMPONENT)的组件类型注解不落声明
+                    // 注解,存于类型根路径([])——非数组组件类型上内联到类型之前
+                    // (如 record R(@T String x));数组组件路径 [] 表示数组自身注解,
+                    // 位置不同,不在此处理(边角).
+                    if (fd.type() != null
+                            && fd.type().kind() != com.bingbaihanji.bdec.type.TypeKind.ARRAY
+                            && fd.typeAnnotations() != null) {
+                        List<String> rootAnns = fd.typeAnnotations().get(List.of());
+                        if (rootAnns != null) {
+                            for (String a : rootAnns) {
+                                sb.append(a).append(' ');
+                            }
+                        }
+                    }
                     String typeText = com.bingbaihanji.bdec.util.TypeText.render(
                             fd.type(), unit.packageName(), unit.innerClassNames(),
                             collectedImports);
-                    recordComponents.add(typeText + " " + name);
+                    sb.append(typeText).append(' ').append(name);
+                    recordComponents.add(sb.toString());
                     break;
                 }
             }

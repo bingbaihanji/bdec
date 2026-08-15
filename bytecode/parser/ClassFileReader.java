@@ -93,14 +93,34 @@ public final class ClassFileReader {
             int descIdx = in.readUnsignedShort();
             String name = ConstantPoolParser.utf8(pool, nameIdx);
             String descriptor = ConstantPoolParser.utf8(pool, descIdx);
-            // 跳过组件属性(如泛型签名等)
+            // 组件属性(JVMS 4.7.30):Signature + 注解(可见/不可见).
+            // javac 把组件声明注解写入此处,目标不含 FIELD 的注解
+            // (如 @Target(RECORD_COMPONENT))不会复制到 backing 字段声明,
+            // 须以本条目为准.
+            String signature = "";
+            List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> annotations = List.of();
+            List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry> typeAnnotations = List.of();
             int compAttrCount = in.readUnsignedShort();
             for (int j = 0; j < compAttrCount; j++) {
-                in.readUnsignedShort(); // 属性名索引
+                int attrNameIdx = in.readUnsignedShort();
                 int attrLen = in.readInt();
-                in.skipBytes(attrLen);
+                String attrName = ConstantPoolParser.utf8(pool, attrNameIdx);
+                switch (attrName) {
+                    case "Signature" -> {
+                        int sigIdx = in.readUnsignedShort();
+                        signature = ConstantPoolParser.utf8(pool, sigIdx);
+                    }
+                    case "RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations" ->
+                        annotations = AnnotationParser.mergeLists(annotations,
+                                annotationParser.parseAnnotations(in, pool));
+                    case "RuntimeVisibleTypeAnnotations", "RuntimeInvisibleTypeAnnotations" ->
+                        typeAnnotations = AnnotationParser.mergeLists(typeAnnotations,
+                                annotationParser.parseTypeAnnotations(in, pool));
+                    default -> in.skipBytes(attrLen);
+                }
             }
-            components.add(new RecordComponentEntry(name, descriptor));
+            components.add(new RecordComponentEntry(name, descriptor,
+                    signature, annotations, typeAnnotations));
         }
         return components;
     }
@@ -335,11 +355,14 @@ public final class ClassFileReader {
                 case "InnerClasses" -> {
                     innerClasses = parseInnerClasses(in, pool);
                 }
-                case "RuntimeVisibleAnnotations" -> {
-                    classAnnotations = annotationParser.parseAnnotations(in, pool);
+                case "RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations" -> {
+                    // CLASS retention 注解落 RuntimeInvisibleAnnotations,一并解析
+                    classAnnotations = AnnotationParser.mergeLists(
+                            classAnnotations, annotationParser.parseAnnotations(in, pool));
                 }
-                case "RuntimeVisibleTypeAnnotations" -> {
-                    classTypeAnnotations = annotationParser.parseTypeAnnotations(in, pool);
+                case "RuntimeVisibleTypeAnnotations", "RuntimeInvisibleTypeAnnotations" -> {
+                    classTypeAnnotations = AnnotationParser.mergeLists(
+                            classTypeAnnotations, annotationParser.parseTypeAnnotations(in, pool));
                 }
                 case "Module" -> {
                     moduleInfo = parseModule(in, pool);

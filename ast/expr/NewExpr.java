@@ -37,6 +37,14 @@ public final class NewExpr extends Expression {
             List<String>> typeAnnotations;
 
     /**
+     * 菱形推断标志:{@code true} 时发射 {@code new ArrayList<>(...)}.
+     * 类型实参可被构造器实参或赋值目标类型推断时置位——字节码的 NEW 指令天然擦除,
+     * 无法从字节码恢复源码的类型实参,但能证明"菱形推断可行"时输出 {@code <>},
+     * 让 javac 在重编译时恢复泛型.
+     */
+    private final boolean diamond;
+
+    /**
      * 构造对象/数组创建表达式.
      *
      * @param instantiatedType 被实例化的类型
@@ -71,12 +79,24 @@ public final class NewExpr extends Expression {
                    List<Expression> arrayInitializer,
                    Map<List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
                            List<String>> typeAnnotations) {
+        this(instantiatedType, dimensions, constructorArgs, anonymousBody,
+                arrayInitializer, typeAnnotations, false);
+    }
+
+    /** 全字段构造:含菱形推断标志. */
+    public NewExpr(JavaType instantiatedType, List<Expression> dimensions,
+                   List<Expression> constructorArgs, List<AstNode> anonymousBody,
+                   List<Expression> arrayInitializer,
+                   Map<List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+                           List<String>> typeAnnotations,
+                   boolean diamond) {
         this.instantiatedType = instantiatedType;
         this.dimensions = List.copyOf(dimensions);
         this.constructorArgs = List.copyOf(constructorArgs);
         this.anonymousBody = List.copyOf(anonymousBody);
         this.arrayInitializer = List.copyOf(arrayInitializer);
         this.typeAnnotations = typeAnnotations == null ? Map.of() : typeAnnotations;
+        this.diamond = diamond;
     }
 
     /**
@@ -113,6 +133,18 @@ public final class NewExpr extends Expression {
     /** @return JSR-308 类型注解(类型路径 → 渲染后注解行列表) */
     public Map<List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
             List<String>> typeAnnotations() {return typeAnnotations;}
+
+    /** @return 是否以菱形 {@code <>} 发射(类型实参可推断) */
+    public boolean diamond() {return diamond;}
+
+    /** @return 置位菱形推断后的新节点(不改原节点). */
+    public NewExpr withDiamond() {
+        if (diamond) {
+            return this;
+        }
+        return new NewExpr(instantiatedType, dimensions, constructorArgs,
+                anonymousBody, arrayInitializer, typeAnnotations, true);
+    }
 
     @Override
     public AstKind kind() {return AstKind.NEW;}

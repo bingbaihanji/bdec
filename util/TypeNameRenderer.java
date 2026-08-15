@@ -1,6 +1,7 @@
 package com.bingbaihanji.bdec.util;
 
 import com.bingbaihanji.bdec.type.JavaType;
+import com.bingbaihanji.bdec.type.TypeKind;
 
 import java.util.Map;
 import java.util.Set;
@@ -88,8 +89,16 @@ public final class TypeNameRenderer {
             case CLASS -> renderClass(type, pkg, inner, collected, importedFqns);
             case ARRAY -> {
                 JavaType elem = JavaType.elementOf(type);
-                yield renderInternal(elem, pkg, inner, collected, importedFqns)
-                        + "[]".repeat(Math.max(0, type.arrayDimensions()));
+                String base = renderInternal(elem, pkg, inner, collected, importedFqns);
+                if (elem.kind() == TypeKind.ARRAY) {
+                    // TypeResolver 维度累积形态(如 [[String → ARRAY(ARRAY(String,1),2)):
+                    // 元素递归已含内层括号,仅补外层差值,否则括号翻倍
+                    //(displayName/arrayBaseName 同式).
+                    int remaining = Math.max(1,
+                            type.arrayDimensions() - elem.arrayDimensions());
+                    yield base + "[]".repeat(remaining);
+                }
+                yield base + "[]".repeat(Math.max(0, type.arrayDimensions()));
             }
             case WILDCARD -> {
                 String bound = !type.typeArguments().isEmpty()

@@ -119,8 +119,15 @@ public final class TypeReferenceUtil {
             }
             case ARRAY -> {
                 JavaType elem = JavaType.elementOf(t);
-                sb.append(renderClassRefAtPath(elem, path, annsByPath, imports, thisClass))
-                        .append("[]".repeat(t.arrayDimensions()));
+                String base = renderClassRefAtPath(elem, path, annsByPath, imports, thisClass);
+                if (elem != null && elem.kind() == TypeKind.ARRAY) {
+                    // TypeResolver 维度累积形态:元素递归已含内层括号,仅补外层差值
+                    int remaining = Math.max(1,
+                            t.arrayDimensions() - elem.arrayDimensions());
+                    sb.append(base).append("[]".repeat(remaining));
+                } else {
+                    sb.append(base).append("[]".repeat(t.arrayDimensions()));
+                }
             }
             default -> sb.append(t.displayName());
         }

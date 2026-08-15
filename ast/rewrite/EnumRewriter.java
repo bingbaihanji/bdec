@@ -78,6 +78,28 @@ public class EnumRewriter implements RewriteRule {
     private static final int OP_PUTSTATIC = 179;
 
     /**
+     * 常量体方法方法体专用的标准重写链.
+     *
+     * <p>常规方法路径由 {@code BdecEngine} 对整棵 {@code CompilationUnit} 应用
+     * {@code AstRewriter} 重写链(LambdaRewriter / ForEachRewriter / TernaryRewriter
+     * 等);枚举常量体方法经 {@link #decompileInnerClassMethods} 反编译后直接渲染,
+     * 绕过了该链,导致 lambda 占位符不合并(合成 {@code lambda$xxx$N} 方法单独输出)
+     * 且 for-each 不重建.此处按与 BdecEngine 相同顺序复制方法级重写器
+     * (不含 EnumRewriter——合成类型为普通 class 非枚举,执行它无意义),
+     * 对常量体方法单独应用.各重写器均为无状态,可共享单例.</p>
+     */
+    private static final AstRewriter ENUM_BODY_REWRITER = new AstRewriter(List.of(
+            new LambdaRewriter(), new MethodRefRewriter(),
+            new StringConcatRewriter(), new TextBlockRewriter(),
+            new ForEachRewriter(), new ArrayInlineRewriter(),
+            new TryResourceRewriter(), new SwitchExprRewriter(),
+            new RecordPatternRewriter(), new PatternMatchRewriter(),
+            new SwitchPatternMatchRewriter(), new TernaryRewriter(),
+            new BoxingRewriter(), new StringSwitchRewriter(),
+            new EnumSwitchRewriter(), new ForLoopRewrite(),
+            new SourceCleanup()));
+
+    /**
      * 将一条压栈指令转换为其 Java 源文本表示.
      * 支持 ICONST,BIPUSH,SIPUSH,LDC,LDC_W 和 LDC2_W.
      */
@@ -192,6 +214,11 @@ public class EnumRewriter implements RewriteRule {
             if (isRedundantBridge(method, inner.methods())) {
                 continue;
             }
+            // lambda 合成方法(lambda$xxx$N)由 LambdaRewriter 内联到调用点,
+            // 不应单独输出.仍需为其构建 IR 并收集 import:方法体内类型
+            // (如 lambda 体中的 ArrayList)仅存在于合成方法的指令中.
+            boolean lambdaMethod = method.name() != null
+                    && method.name().startsWith("lambda$");
 
             try {
                 ControlFlowGraph cfg = cfgBuilder.build(method);
@@ -256,6 +283,26 @@ public class EnumRewriter implements RewriteRule {
                                 collectedImports);
                     }
                 }
+                // 指令级类型(静态调用声明类如 Collections/NEW/数组创建/instanceof/
+                // 迭代器模式/INDY SAM 与实现所有者)——仅出现在常量体表达式中的类型
+                // 不暴露于变量表,须扫描指令收集(与 AstBuilder.collectBodyImports
+                // 同一约定),否则输出短名却无 import,重编译失败.
+                com.bingbaihanji.bdec.ast.AstBuilder.collectIrTypeImports(
+                        sm.ir() != null ? sm.ir().instructions() : null,
+                        t -> com.bingbaihanji.bdec.util.TypeText.render(t,
+                                unit.packageName(), unit.innerClassNames(),
+                                collectedImports));
+
+                // lambda 合成方法:方法体由 LambdaRewriter 内联到调用点,
+                // 不单独输出(import 已在上方收集).
+                if (lambdaMethod) {
+                    continue;
+                }
+                // 常量体方法此前绕过标准 AST 重写链直接渲染,导致 lambda
+                // 占位符不合并、for-each 不重建、三元/装箱等不恢复.此处对
+                // 方法体应用同一批重写器(以内部类为 context.classFile,
+                // 使 LambdaRewriter 能在该类中找到 lambda$ 合成方法).
+                md = rewriteEnumBodyMethod(md, ctx, inner, unit);
 
                 // 将单个方法输出为源字符串(既有 imports + 本轮新收集的 import
                 // 一起生效,使签名与局部变量类型均以短名渲染)
@@ -348,6 +395,52 @@ public class EnumRewriter implements RewriteRule {
                         "Enum", false);
         stmts.emit(md);
         return w.toString().trim();
+    }
+
+    /**
+     * 对常量体方法的方法体应用标准 AST 重写链,使 lambda 占位符合并、
+     * for-each 重建、三元/装箱等恢复与常规方法一致.
+     *
+     * <p>将单个方法包装进合成编译单元,以内部类自身为
+     * {@code context.classFile()}(LambdaRewriter 需在该类中找到
+     * {@code lambda$xxx$N} 合成方法以还原方法体),执行
+     * {@link #ENUM_BODY_REWRITER} 后取回重写后的方法.合成类型为普通
+     * class(无 ACC_ENUM),重写链不会递归进入枚举处理;重写失败时退回
+     * 原方法,保证不破坏既有输出.</p>
+     *
+     * @param md    待重写的方法(方法体为结构化后的 AST)
+     * @param ctx   反编译上下文(提供配置与字节码加载回调)
+     * @param inner 常量体内部类模型(含 lambda$ 合成方法)
+     * @param unit  当前编译单元(提供包名/import/内部类名映射)
+     * @return 重写后的方法
+     */
+    private static MethodDeclaration rewriteEnumBodyMethod(MethodDeclaration md,
+                                                           DecompileContext ctx,
+                                                           ClassFileModel inner,
+                                                           CompilationUnit unit) {
+        TypeDeclaration synthetic = new TypeDeclaration(
+                AccessFlags.ACC_PUBLIC, "Synthetic", "class", "java/lang/Object",
+                List.of(), List.of(), List.of(md));
+        CompilationUnit syntheticUnit = new CompilationUnit(
+                unit.packageName(), unit.imports(), List.of(synthetic),
+                unit.innerClassNames());
+        DecompileContext innerCtx = new DecompileContext(
+                ctx.config(), ctx::loadClassBytes, inner.bootstrapMethods(), inner);
+        try {
+            CompilationUnit rewritten =
+                    ENUM_BODY_REWRITER.rewrite(syntheticUnit, ctx.config(), innerCtx);
+            if (rewritten.types().isEmpty()) {
+                return md;
+            }
+            for (AstNode m : rewritten.types().getFirst().children()) {
+                if (m instanceof MethodDeclaration rewrittenMd) {
+                    return rewrittenMd;
+                }
+            }
+        } catch (Exception e) {
+            // 重写失败时退回原方法体
+        }
+        return md;
     }
 
     /**

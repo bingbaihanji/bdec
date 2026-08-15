@@ -89,10 +89,14 @@ class StructureParser {
                             default -> "<unknown constant>";
                         };
                     }
-                    case "RuntimeVisibleAnnotations" -> anns = annotationParser.parseAnnotations(in, pool);
-                    case "RuntimeVisibleTypeAnnotations" ->
-                        // JSR-308 类型注解(字段类型上的注解)
-                            typeAnns = annotationParser.parseTypeAnnotations(in, pool);
+                    case "RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations" ->
+                        // CLASS retention 注解落 RuntimeInvisibleAnnotations,一并解析
+                            anns = AnnotationParser.mergeLists(anns,
+                                    annotationParser.parseAnnotations(in, pool));
+                    case "RuntimeVisibleTypeAnnotations", "RuntimeInvisibleTypeAnnotations" ->
+                        // JSR-308 类型注解(字段类型上的注解,含 CLASS retention)
+                            typeAnns = AnnotationParser.mergeLists(typeAnns,
+                                    annotationParser.parseTypeAnnotations(in, pool));
                     case null, default -> in.skipBytes(attrLen);
                 }
             }
@@ -152,20 +156,23 @@ class StructureParser {
                         int sigIdx = in.readUnsignedShort();
                         signature = ConstantPoolParser.utf8(pool, sigIdx);
                     }
-                    case "RuntimeVisibleAnnotations" ->
-                        // 方法级注解
-                            anns = annotationParser.parseAnnotations(in, pool);
-                    case "RuntimeVisibleTypeAnnotations" ->
-                        // JSR-308 类型注解(返回类型/参数类型/throws 上的注解)
-                            typeAnns = annotationParser.parseTypeAnnotations(in, pool);
-                    case "RuntimeVisibleParameterAnnotations" -> {
-                        // 参数级注解(JVMS 4.7.18):num_parameters 个参数注解列表
+                    case "RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations" ->
+                        // 方法级注解(含 CLASS retention)
+                            anns = AnnotationParser.mergeLists(anns,
+                                    annotationParser.parseAnnotations(in, pool));
+                    case "RuntimeVisibleTypeAnnotations", "RuntimeInvisibleTypeAnnotations" ->
+                        // JSR-308 类型注解(返回类型/参数类型/throws 上的注解,含 CLASS retention)
+                            typeAnns = AnnotationParser.mergeLists(typeAnns,
+                                    annotationParser.parseTypeAnnotations(in, pool));
+                    case "RuntimeVisibleParameterAnnotations", "RuntimeInvisibleParameterAnnotations" -> {
+                        // 参数级注解(JVMS 4.7.18):num_parameters 个参数注解列表.
+                        // 可见/不可见两属性按参数位置合并,属性顺序无关.
                         int numParams = in.readUnsignedByte();
                         List<List<AnnotationEntry>> pAnns = new ArrayList<>();
                         for (int p = 0; p < numParams; p++) {
                             pAnns.add(annotationParser.parseAnnotations(in, pool));
                         }
-                        paramAnns = pAnns;
+                        paramAnns = AnnotationParser.mergeParamAnns(paramAnns, pAnns);
                     }
                     case "AnnotationDefault" ->
                         // 注解方法元素的默认值(element_value)
