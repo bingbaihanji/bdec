@@ -36,6 +36,9 @@ public final class LitExpr extends Expression {
     /** @return 字面量值 */
     public Object value() {return value;}
 
+    /** @return 字面量的 Java 类型 */
+    public JavaType type() {return type;}
+
     @Override
     public AstKind kind() {return AstKind.LITERAL;}
 

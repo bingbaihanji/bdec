@@ -141,9 +141,16 @@ public final class InnerClassDecompiler {
                             | AccessFlags.ACC_PROTECTED | AccessFlags.ACC_STATIC));
                     // 枚举的 ACC_ABSTRACT 由 javac 在含抽象方法时隐式置位,但源码
                     // 中枚举常量体已实现抽象方法,不应输出 abstract(否则 "abstract
-                    // enum" 非法)。EnumRewriter 已剥离,此处合并条目标志不得加回.
+                    // enum" 非法).EnumRewriter 已剥离,此处合并条目标志不得加回.
                     if ("enum".equals(innerType.kindName())) {
                         flags &= ~AccessFlags.ACC_ABSTRACT;
+                    }
+                    // 局部类(InnerClasses 条目无 outerClass,非匿名)提升为成员时
+                    // 必须 static:局部类位于方法作用域,不能作为非静态成员(否则
+                    // 静态方法里 new Local() 报"静态上下文引用非静态 this").源码
+                    // 中局部类隐式 static(不持有外围实例引用,仅捕获方法局部).
+                    if (outerName == null && !isAnonymous) {
+                        flags |= AccessFlags.ACC_STATIC;
                     }
                     TypeDeclaration nestedType =
                             new TypeDeclaration(

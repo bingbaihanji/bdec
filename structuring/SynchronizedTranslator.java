@@ -121,7 +121,8 @@ public final class SynchronizedTranslator {
                     if (obj instanceof InstructionRef ref
                             && ref.instruction().opcode() == IrOpcode.CONST
                             && !ref.instruction().operands().isEmpty()
-                            && ref.instruction().operands().getFirst() instanceof com.bingbaihanji.bdec.ir.ConstantValue cv
+                            && ref.instruction().operands()
+                            .getFirst() instanceof com.bingbaihanji.bdec.ir.ConstantValue cv
                             && cv.value() instanceof String className) {
                         int slash = className.lastIndexOf('/');
                         return slash >= 0 ? className.substring(slash + 1) + ".class"

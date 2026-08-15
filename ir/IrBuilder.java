@@ -1013,6 +1013,19 @@ public final class IrBuilder {
                             && n.intValue() >= 0 && n.intValue() <= 0xFFFF) {
                         args.set(p, new ConstantValue((char) n.intValue(), JavaType.CHAR));
                     }
+                } else if (paramTypes[p].kind() == TypeKind.BYTE
+                        || paramTypes[p].kind() == TypeKind.SHORT) {
+                    // byte/short 参数折叠:常量整型实参(如 calc((byte)10) 的
+                    // bipush 10)重标为 byte/short——否则渲染为 int 10,传给
+                    // byte/short 参数时重编译报"有损转换".
+                    Value arg = args.get(p);
+                    ConstantValue cv = unwrapConstant(arg);
+                    if (cv != null && cv.value() instanceof Number n
+                            && n.intValue() >= Byte.MIN_VALUE && n.intValue() <= 0xFFFF) {
+                        args.set(p, new ConstantValue(n.intValue(),
+                                paramTypes[p].kind() == TypeKind.BYTE
+                                        ? JavaType.BYTE : JavaType.SHORT));
+                    }
                 }
             }
         }

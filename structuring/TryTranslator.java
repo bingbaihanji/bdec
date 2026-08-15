@@ -114,14 +114,21 @@ public final class TryTranslator {
             // 注意:仅处理器块被覆盖而 tryBlocks 独立的情形
             //(如 catch 体本身受外层 finally 保护)不是内部机制,不能跳过.
             boolean handlerIsInternal = false;
-            for (var other : mergedTcis) {
-                if (other == tci) {
-                    continue;
-                }
-                if (other.tryBlocks().contains(tci.handlerBlock())
-                        && other.tryBlocks().containsAll(tci.tryBlocks())) {
-                    handlerIsInternal = true;
-                    break;
+            // 内部机制判定仅适用于 catch-all/null(如 try-with-resources 的 close 链).
+            // 特定 catchType 的<真实 catch>不能跳过——其 handler 在 finally 保护区,
+            // tryBlocks 为子集时,若跳过会导致 catch 子句丢失(如
+            // try{...}catch(ISE){...}finally{...} 的 ISE catch 被误当内部机制丢弃).
+            if (tci.catchType() == null
+                    || "java/lang/Throwable".equals(tci.catchType())) {
+                for (var other : mergedTcis) {
+                    if (other == tci) {
+                        continue;
+                    }
+                    if (other.tryBlocks().contains(tci.handlerBlock())
+                            && other.tryBlocks().containsAll(tci.tryBlocks())) {
+                        handlerIsInternal = true;
+                        break;
+                    }
                 }
             }
             if (handlerIsInternal) {

@@ -645,9 +645,9 @@ public class EnumRewriter implements RewriteRule {
      *
      * <p>嵌套枚举(如 {@code Outer$Color})的常量初始化在它自己的 {@code <clinit>}
      * 里(如 {@code new Outer$Color$1; putstatic Outer$Color.RED}),不在顶层类的
-     * clinit 中。若直接用 {@code ctx.classFile()}(顶层类)扫描,常量体映射
-     * {@code bodyClasses} 为空,嵌套枚举的常量匿名体(覆写抽象方法)会全部丢失。
-     * 顶层枚举时 {@code ctx.classFile()} 即枚举自身,直接使用。</p>
+     * clinit 中.若直接用 {@code ctx.classFile()}(顶层类)扫描,常量体映射
+     * {@code bodyClasses} 为空,嵌套枚举的常量匿名体(覆写抽象方法)会全部丢失.
+     * 顶层枚举时 {@code ctx.classFile()} 即枚举自身,直接使用.</p>
      */
     private ClassFileModel resolveEnumClassFile(TypeDeclaration td, DecompileContext ctx) {
         ClassFileModel cfm = ctx.classFile();
@@ -655,7 +655,7 @@ public class EnumRewriter implements RewriteRule {
             return null;
         }
         String internal = cfm.internalName();
-        // 按最后 $ 段判断 classFile 是否即当前枚举:顶层枚举(pkg/EnumDemo)、嵌套枚举经
+        // 按最后 $ 段判断 classFile 是否即当前枚举:顶层枚举(pkg/EnumDemo),嵌套枚举经
         // InnerClassDecompiler 独立反编译(Outer$Color)时 classFile 均为枚举自身.
         int dollar = internal.lastIndexOf('$');
         String lastSeg;

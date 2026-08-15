@@ -918,9 +918,9 @@ public final class IfTranslator {
      * ({@code a ? (b ? return true : return false) : return false},&& 的 C2 假目标
      * 与 C1 假目标共享),或将 {@code return a || b} 编译为共享真目标
      * ({@code a ? return true : (b ? return true : return false)},|| 的 C2 真目标
-     * 与 C1 真目标共享)。直接翻译成嵌套 if 会丢失假路径的 {@code return false},
-     * 导致布尔方法缺 return 无法编译。本方法识别共享目标菱形并折叠为
-     * {@code return a OP b}。</p>
+     * 与 C1 真目标共享).直接翻译成嵌套 if 会丢失假路径的 {@code return false},
+     * 导致布尔方法缺 return 无法编译.本方法识别共享目标菱形并折叠为
+     * {@code return a OP b}.</p>
      */
     private static Statement foldBooleanShortCircuit(ReducerOps ops, IfInfo ifInfo, LinearIr ir,
                                                      ControlFlowGraph graph, List<BlockGroup> groups,
@@ -1038,7 +1038,7 @@ public final class IfTranslator {
         BasicBlock merge = commonSuccessorOf(valueBlocks, graph);
         // STORE 形态:registerPhiReplacement 使 follow 的 STORE r←PHI 还原为
         // r = (a OP b),声明语句由 follow 组生成——故不消费合并块,
-        // 否则 r 声明被吞、后续引用 r 未声明.
+        // 否则 r 声明被吞,后续引用 r 未声明.
         if (merge != null) {
             for (IrInstruction fi : ir.instructionsOf(merge)) {
                 if (fi.opcode() == IrOpcode.STORE && fi.operands().size() >= 2
@@ -1123,7 +1123,7 @@ public final class IfTranslator {
         return false;
     }
 
-    /** 块是否产生布尔常量 value:以 CONST 0/1 结尾(值压栈,合并块消费)、
+    /** 块是否产生布尔常量 value:以 CONST 0/1 结尾(值压栈,合并块消费),
      *  以 RETURN 布尔常量结尾,或以 STORE v = 布尔常量 结尾(赋值形态). */
     private static boolean blockEndsWithBooleanValue(BasicBlock b, boolean value, LinearIr ir) {
         List<IrInstruction> insns = ir.instructionsOf(b);

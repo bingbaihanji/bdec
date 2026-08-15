@@ -133,7 +133,7 @@ public final class SwitchTranslator {
         }
         // 跳过 follow 块中的 STORE/RETURN←PHI:case 体已把 PHI 值解析进各 case,
         // follow 的 STORE/RETURN 不应再单独发射——否则按首操作数解析产生错误值
-        //(如 return 恒为 10、y 恒被首分支值覆盖).仅跳过该指令,保留 follow 块中
+        //(如 return 恒为 10,y 恒被首分支值覆盖).仅跳过该指令,保留 follow 块中
         // 其余语句(如 return y),避免整组消费误吞. typeSwitch(模式 switch)不适用:
         // 其结果处理由 SwitchPatternMatchRewriter 基于 follow 结构重建.
         if (follow != null && !isTypeSwitch && (switchResultVar != null || returnSwitch)) {
@@ -183,7 +183,7 @@ public final class SwitchTranslator {
                 ops.setCurrentBranchBlocks(caseBlockIds);
                 List<Statement> body = new ArrayList<>();
                 // typeSwitch(模式 switch)不在此注入结果值——其 case 体含守卫条件,
-                // 由 translateTypeSwitchCase 结构化、SwitchPatternMatchRewriter 重建.
+                // 由 translateTypeSwitchCase 结构化,SwitchPatternMatchRewriter 重建.
                 if (!isTypeSwitch && switchResultVar != null) {
                     // switch 表达式:通过分支上下文解析 follow 中的 PHI,
                     // 生成 result = 值; break;
