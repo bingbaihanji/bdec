@@ -79,6 +79,13 @@ public interface ReducerOps {
     /** 注册 PHI 折叠结果:后续 STORE 翻译时按此映射替换 PHI 解析. */
     void registerPhiReplacement(int phiId, Expression expr);
 
+    /** 注册待跳过的指令 ID(switch 表达式 case 体已把值解析进各 case,follow 的
+     *  STORE/RETURN←PHI 不再单独发射). */
+    void registerSkippedInstruction(int insnId);
+
+    /** 该指令 ID 是否已被注册为跳过. */
+    boolean isSkippedInstruction(int insnId);
+
     /** 块上是否带循环注解. */
     LoopInfo loopAnnotation(BasicBlock b);
 

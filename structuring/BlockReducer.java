@@ -99,6 +99,10 @@ public final class BlockReducer implements ReducerOps {
      *  按此映射替换 PHI 解析,避免丢 false 分支值). */
     private Map<Integer, Expression> phiReplacements = Map.of();
 
+    /** 待跳过的指令 ID 集合(switch 表达式 follow 的 STORE/RETURN←PHI,
+     *  由 SwitchTranslator 注册——case 体已把 PHI 值解析进各 case). */
+    private Set<Integer> currentSkipInsns = Set.of();
+
     /** 待向前折叠的后置自增语句(自增在引用语句之前的情况) */
     private Statement pendingPostInc = null;
 
@@ -287,8 +291,7 @@ public final class BlockReducer implements ReducerOps {
             if (ifInfo != null) {
                 s = IfTranslator.translateIf(this, ifInfo, group, ir, groups, consumed, graph, postDom);
                 if (s != null) {
-                    statements.add(s);
-                    stmtGroupIdx.add(gi);
+                    addStatement(statements, stmtGroupIdx, s, gi);
                 }
                 continue;
             }
@@ -354,8 +357,7 @@ public final class BlockReducer implements ReducerOps {
             }
 
             if (s != null) {
-                statements.add(s);
-                stmtGroupIdx.add(gi);
+                addStatement(statements, stmtGroupIdx, s, gi);
             }
         }
         // 后处理:将孤立的 ExpressionStatement 转换为 ReturnStatement.
@@ -363,7 +365,14 @@ public final class BlockReducer implements ReducerOps {
         // 跳过 void 表达式(例如孤立的 lock.unlock() 调用).
         if (!statements.isEmpty() && ir.method().returnType() != null
                 && ir.method().returnType().kind() != TypeKind.VOID) {
-            for (int i = statements.size() - 1; i >= 0; i--) {
+            // 方法已有显式 return 时,裸表达式语句是被丢弃的调用
+            //(如 sb.append(...) 链式结果被 pop),不是应转 return 的孤立值——
+            // 否则 try 体/尾部的 StringBuilder 调用会被误转成 return,
+            // 返回类型错且 try-catch 内容丢失(GenericCast/EnumSwitch).
+            boolean hasExplicitReturn = statements.stream()
+                    .anyMatch(s -> s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement);
+            if (!hasExplicitReturn) {
+                for (int i = statements.size() - 1; i >= 0; i--) {
                 Statement s = statements.get(i);
                 if (s instanceof ExpressionStatement es
                         && es.expression() != null
@@ -393,6 +402,7 @@ public final class BlockReducer implements ReducerOps {
                 }
                 break;
             }
+            }
         }
 
         // 后处理:根据注解将语句组包装为 try-catch 结构.
@@ -402,10 +412,12 @@ public final class BlockReducer implements ReducerOps {
                 .filter(Objects::nonNull)
                 .toList();
 
-        // 避免双重包装:如果仅有一条语句且已是 BlockStatement,
-        // 则直接使用它作为根而不是再次嵌套.
+        // 有 try 区域时不可展开单 BlockStatement:stmtGroupIdx 只映射了外层块,
+        // 展开后内部语句与组索引错位,多语句 try 体只包第一句(MultiCatch 缺陷).
+        // 无 try 区域时避免双重包装.
         BlockStatement root;
-        if (statements.size() == 1 && statements.getFirst() instanceof BlockStatement bs) {
+        if (tryCatchAnns.isEmpty() && statements.size() == 1
+                && statements.getFirst() instanceof BlockStatement bs) {
             root = bs;
         } else {
             root = new BlockStatement(statements);
@@ -417,6 +429,14 @@ public final class BlockReducer implements ReducerOps {
         // 这些是 SynchronizedStatement 之前设置监视器对象的代码)
         root = AstCleanup.stripSyncPreambles(root);
         return root;
+    }
+
+    /** 记录归约语句与所属组. */
+    private static void addStatement(List<Statement> statements,
+                                     List<Integer> stmtGroupIdx,
+                                     Statement s, int gi) {
+        statements.add(s);
+        stmtGroupIdx.add(gi);
     }
 
     /** 检查循环体内是否包含 switch 块(typeSwitch 重启循环). */
@@ -897,6 +917,11 @@ public final class BlockReducer implements ReducerOps {
                 continue;
             }
 
+            // 跳过 switch 表达式 follow 的 STORE/RETURN←PHI(值已由 case 体解析)
+            if (isSkippedInstruction(insn.id())) {
+                continue;
+            }
+
             // 仅输出有副作用的指令作为语句
             if (StatementUtils.isStatementRoot(insn)) {
                 Statement s = translateStmt(insn);
@@ -1115,11 +1140,18 @@ public final class BlockReducer implements ReducerOps {
                                 ? insn.operands().get(1) : null;
                         Expression rhs = source != null
                                 ? valueToExpr(source) : null;
+                        // 声明类型:JVM 将 boolean 存为 int 0/1,变量类型可能是 INT;
+                        // 若初始化式为布尔表达式(如 boolean r = a && b 的短路合并),
+                        // 声明须重标为 boolean,否则 "int r = a && b" 无法编译.
+                        JavaType declType = v.genericType() != null
+                                ? v.genericType() : v.type();
+                        if (declType.kind() == TypeKind.INT && isBooleanExpression(rhs)) {
+                            declType = JavaType.BOOLEAN;
+                        }
                         // 局部变量上的 JSR-308 类型注解(0x40):渲染后按
                         // 类型路径分组附加到声明(如 "@A String x")
                         yield new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
-                                v.genericType() != null ? v.genericType() : v.type(),
-                                declName, rhs, renderVarTypeAnnotations(v));
+                                declType, declName, rhs, renderVarTypeAnnotations(v));
                     }
                 }
                 Expression e = translateExpr(insn);
@@ -1339,8 +1371,13 @@ public final class BlockReducer implements ReducerOps {
                                 com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS);
                         if (dc != null) {
                             int lastSlash = dc.lastIndexOf('/');
-                            obj = new VarExpr(lastSlash >= 0
-                                    ? dc.substring(lastSlash + 1) : dc);
+                            String simple = lastSlash >= 0
+                                    ? dc.substring(lastSlash + 1) : dc;
+                            // 内部类/内部枚举(如 EnumSwitchCheck$Color 的静态字段 RED):
+                            // 源码中用其简单名引用(Color.RED),不能保留 $ 二进名.
+                            int lastDollar = simple.lastIndexOf('$');
+                            obj = new VarExpr(lastDollar >= 0
+                                    ? simple.substring(lastDollar + 1) : simple);
                         }
                     }
                 }
@@ -1356,8 +1393,11 @@ public final class BlockReducer implements ReducerOps {
 
             // 字段存储 → 字段赋值
             case FIELD_STORE -> {
-                Value obj = !insn.operands().isEmpty() ? insn.operands().getFirst() : null;
-                Value val = insn.operands().size() > 1 ? insn.operands().get(1) : null;
+                // 操作数布局:静态字段(PUTSTATIC)仅 [value],实例字段(PUTFIELD)为 [obj, value].
+                // 值始终是最后一个操作数;对象仅实例字段存在.按布局取,避免静态字段被
+                // 误当成 obj、值被解析为 null 而回退 varUnresolved.
+                Value val = !insn.operands().isEmpty() ? insn.operands().getLast() : null;
+                Value obj = insn.operands().size() > 1 ? insn.operands().getFirst() : null;
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
                 // 始终使用 this.fieldName 进行实例字段存储,
                 // 使输出能够清晰区分字段赋值和局部变量赋值.
@@ -1429,8 +1469,12 @@ public final class BlockReducer implements ReducerOps {
                     //   boolean == 0 → !boolean,  boolean != 0 → boolean
                     // 此处理用于将 IFEQ/IFNE 字节码转为 if(flag) / if(!flag).
                     // 同时处理返回布尔的函数调用(desiredAssertionStatus 等).
-                    boolean leftIsBool = StatementUtils.isBooleanValue(leftOp);
-                    boolean rightIsBool = StatementUtils.isBooleanValue(rightOp);
+                    // 短路合并(boolean r = a && b)的 r 在字节码中存为 int 0/1,
+                    // 但其定义 STORE←PHI 已被折叠为布尔表达式——同样按布尔处理.
+                    boolean leftIsBool = StatementUtils.isBooleanValue(leftOp)
+                            || isBooleanPhiReplacedVariable(leftOp);
+                    boolean rightIsBool = StatementUtils.isBooleanValue(rightOp)
+                            || isBooleanPhiReplacedVariable(rightOp);
                     boolean rightIsZero = rightOp instanceof ConstantValue cv
                             && cv.value() instanceof Integer i && i == 0;
                     boolean leftIsZero = leftOp instanceof ConstantValue cv
@@ -1768,6 +1812,51 @@ public final class BlockReducer implements ReducerOps {
         return ExpressionTranslator.valueToExpr(v, currentVarStoreSource, this::translateExpr);
     }
 
+    /** 变量 v 是否由布尔 phiReplacement 定义(短路合并 boolean r = a && b 的 r,
+     *  字节码存为 int 0/1,但其定义 STORE←PHI 已被 IfTranslator 折叠为布尔表达式). */
+    private boolean isBooleanPhiReplacedVariable(Value v) {
+        if (!(v instanceof Variable var) || currentIr == null) {
+            return false;
+        }
+        for (IrInstruction insn : currentIr.instructions()) {
+            if (insn.opcode() == IrOpcode.STORE && insn.operands().size() >= 2
+                    && insn.operands().get(0) instanceof Variable sv
+                    && sv.slot() == var.slot() && sv.version() == var.version()
+                    && insn.operands().get(1) instanceof InstructionRef ref
+                    && ref.instruction().opcode() == IrOpcode.PHI
+                    && phiReplacements.containsKey(ref.instruction().id())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 表达式是否产生 boolean 值(用于 int 变量声明重标). */
+    private static boolean isBooleanExpression(Expression e) {
+        if (e == null) {
+            return false;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.BinExpr bin) {
+            BinaryOperator op = bin.operator();
+            return op == BinaryOperator.AND || op == BinaryOperator.OR
+                    || op == BinaryOperator.EQ || op == BinaryOperator.NE
+                    || op == BinaryOperator.LT || op == BinaryOperator.GT
+                    || op == BinaryOperator.LE || op == BinaryOperator.GE;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.UnExpr ue) {
+            return ue.operator() == com.bingbaihanji.bdec.ast.expr.UnaryOperator.NOT;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit) {
+            return lit.value() instanceof Boolean;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
+            return inv.returnType() != null
+                    && inv.returnType().kind() == TypeKind.BOOLEAN;
+        }
+        // 注意:不含 VarExpr——引用 int 变量的复制会误标为 boolean.
+        return false;
+    }
+
     /** 检测复合赋值模式:{@code x = x OP y} → {@code x OP= y}.
      *  若模式匹配则返回运算符,否则返回 null(普通赋值). */
     private BinaryOperator detectCompoundOp(Expression lhs, Expression rhs) {
@@ -1868,6 +1957,21 @@ public final class BlockReducer implements ReducerOps {
             phiReplacements = new HashMap<>();
         }
         phiReplacements.put(phiId, expr);
+    }
+
+    /** 注册待跳过的指令 ID(switch 表达式 follow 的 STORE/RETURN←PHI). */
+    @Override
+    public void registerSkippedInstruction(int insnId) {
+        if (currentSkipInsns.isEmpty()) {
+            currentSkipInsns = new HashSet<>();
+        }
+        currentSkipInsns.add(insnId);
+    }
+
+    /** 该指令 ID 是否已被注册为跳过. */
+    @Override
+    public boolean isSkippedInstruction(int insnId) {
+        return currentSkipInsns.contains(insnId);
     }
 
     /**

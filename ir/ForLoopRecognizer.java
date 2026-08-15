@@ -10,6 +10,7 @@ import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,18 +43,35 @@ public final class ForLoopRecognizer {
         for (int i = 0; i < statements.size(); i++) {
             Statement s = statements.get(i);
 
-            // 模式匹配:变量声明后紧跟while循环
+            // 模式匹配:变量声明后紧跟while循环.
+            // 仅当循环体含 continue 时转换——while 形式的增量在体底部会被
+            // continue 跳过(死循环),for 形式 continue 会执行增量;无 continue
+            // 的循环 while 形式语义正确,保持 while(既有输出/测试).
             if (i + 1 < statements.size()
                     && isInitStatement(s)
                     && statements.get(i + 1) instanceof LoopStatement loop
-                    && loop.loopKind() == LoopStatement.LoopKind.WHILE) {
+                    && loop.loopKind() == LoopStatement.LoopKind.WHILE
+                    && containsContinue(loop.body())) {
 
                 Expression init = extractInit(s);
                 Statement body = loop.body();
                 Expression incr = extractIncrement(body);
+
+                // 增量必须作用于循环变量(与 init 同变量):
+                // 否则如 while(j<n){ s += j++; } 的 s += j++ 会被误当 for 增量
+                // 并被 removeIncrement 误删(isIncrementExpr 只判增量形态不判目标).
+                if (init != null && incr != null
+                        && !sameTargetVariable(init, incr)) {
+                    incr = null;
+                }
                 Statement cleanBody = removeIncrement(body, incr);
 
                 if (init != null && cleanBody != null) {
+                    // 声明初始化(int i = 0)保留在 for 之前(它是声明语句,
+                    // for 的 init 只能表达 i = 0 赋值),否则 i 未声明.
+                    if (s instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration) {
+                        result.add(s);
+                    }
                     // 创建for循环: for(init; cond; incr) { cleanBody }
                     LoopStatement forLoop = new LoopStatement(
                             LoopStatement.LoopKind.FOR,
@@ -92,7 +110,47 @@ public final class ForLoopRecognizer {
                 && es.expression() instanceof AssignExpr assign) {
             return assign.target() instanceof VarExpr;
         }
+        // int i = 0; 形式的声明初始化(反编译器常用声明而非赋值语句)
+        return s instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
+    }
+
+    /** 语句树中是否包含 continue. */
+    private boolean containsContinue(Statement s) {
+        if (s == null) {
+            return false;
+        }
+        if (s.kind() == com.bingbaihanji.bdec.ast.AstKind.CONTINUE) {
+            return true;
+        }
+        if (s instanceof BlockStatement bs) {
+            return bs.statements().stream().anyMatch(this::containsContinue);
+        }
+        if (s instanceof IfStatement ifs) {
+            return containsContinue(ifs.thenBranch())
+                    || (ifs.elseBranch() != null && containsContinue(ifs.elseBranch()));
+        }
+        if (s instanceof LoopStatement loop) {
+            return containsContinue(loop.body());
+        }
         return false;
+    }
+
+    /** 初始化与增量是否作用于同一循环变量. */
+    private boolean sameTargetVariable(Expression init, Expression incr) {
+        String initVar = targetVariable(init);
+        String incrVar = targetVariable(incr);
+        return initVar != null && initVar.equals(incrVar);
+    }
+
+    /** 表达式作用的目标变量名(j = 0 / j++ / j += 1 → "j"),无法识别返回 null. */
+    private String targetVariable(Expression e) {
+        if (e instanceof AssignExpr assign && assign.target() instanceof VarExpr v) {
+            return v.name();
+        }
+        if (e instanceof UnExpr un && un.operand() instanceof VarExpr v) {
+            return v.name();
+        }
+        return null;
     }
 
     /**
@@ -101,6 +159,13 @@ public final class ForLoopRecognizer {
     private Expression extractInit(Statement s) {
         if (s instanceof ExpressionStatement es) {
             return es.expression();
+        }
+        if (s instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
+            // int i = 0 → for 的 init 用 i = 0(声明语句保留在 for 之前,
+            // 冗余但语义正确;continue 时 for 会执行增量).
+            return new AssignExpr(new com.bingbaihanji.bdec.ast.expr.VarExpr(vd.name()),
+                    vd.initializer() != null ? vd.initializer()
+                            : new com.bingbaihanji.bdec.ast.expr.LitExpr(0, JavaType.INT));
         }
         return null;
     }

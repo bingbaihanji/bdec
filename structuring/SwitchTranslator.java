@@ -107,6 +107,9 @@ public final class SwitchTranslator {
         // return 会改变控制流语义(源码中 switch 表达式不返回方法).
         BasicBlock follow = detectSwitchFollow(info, graph);
         Variable switchResultVar = null;
+        // return 形态:follow 包含 RETURN ← PHI(方法直接返回 switch 结果).
+        // 与 STORE ← PHI 同理,case 体应按分支上下文解析 PHI 值填充 return.
+        boolean returnSwitch = false;
         if (follow != null) {
             for (IrInstruction fi : ir.instructionsOf(follow)) {
                 if (fi.opcode() == IrOpcode.STORE && fi.operands().size() >= 2
@@ -115,6 +118,36 @@ public final class SwitchTranslator {
                         && ref.instruction().opcode() == IrOpcode.PHI) {
                     switchResultVar = v;
                     break;
+                }
+            }
+            if (switchResultVar == null) {
+                for (IrInstruction fi : ir.instructionsOf(follow)) {
+                    if (fi.opcode() == IrOpcode.RETURN && !fi.operands().isEmpty()
+                            && fi.operands().getFirst() instanceof InstructionRef ref
+                            && ref.instruction().opcode() == IrOpcode.PHI) {
+                        returnSwitch = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // 跳过 follow 块中的 STORE/RETURN←PHI:case 体已把 PHI 值解析进各 case,
+        // follow 的 STORE/RETURN 不应再单独发射——否则按首操作数解析产生错误值
+        //(如 return 恒为 10、y 恒被首分支值覆盖).仅跳过该指令,保留 follow 块中
+        // 其余语句(如 return y),避免整组消费误吞. typeSwitch(模式 switch)不适用:
+        // 其结果处理由 SwitchPatternMatchRewriter 基于 follow 结构重建.
+        if (follow != null && !isTypeSwitch && (switchResultVar != null || returnSwitch)) {
+            for (IrInstruction fi : ir.instructionsOf(follow)) {
+                boolean isResultConsume = (fi.opcode() == IrOpcode.STORE
+                        && fi.operands().size() >= 2
+                        && fi.operands().get(0) instanceof Variable v
+                        && fi.operands().get(1) instanceof InstructionRef ref
+                        && ref.instruction().opcode() == IrOpcode.PHI)
+                        || (fi.opcode() == IrOpcode.RETURN && !fi.operands().isEmpty()
+                        && fi.operands().getFirst() instanceof InstructionRef ref2
+                        && ref2.instruction().opcode() == IrOpcode.PHI);
+                if (isResultConsume) {
+                    ops.registerSkippedInstruction(fi.id());
                 }
             }
         }
@@ -149,7 +182,9 @@ public final class SwitchTranslator {
                 }
                 ops.setCurrentBranchBlocks(caseBlockIds);
                 List<Statement> body = new ArrayList<>();
-                if (switchResultVar != null) {
+                // typeSwitch(模式 switch)不在此注入结果值——其 case 体含守卫条件,
+                // 由 translateTypeSwitchCase 结构化、SwitchPatternMatchRewriter 重建.
+                if (!isTypeSwitch && switchResultVar != null) {
                     // switch 表达式:通过分支上下文解析 follow 中的 PHI,
                     // 生成 result = 值; break;
                     Expression val = ops.resolvePhiAt(follow, ir);
@@ -157,6 +192,12 @@ public final class SwitchTranslator {
                         body.add(new ExpressionStatement(new AssignExpr(
                                 new VarExpr(switchResultVar.name()), val)));
                         body.add(new com.bingbaihanji.bdec.ast.stmt.BreakStatement());
+                    }
+                } else if (!isTypeSwitch && returnSwitch) {
+                    // return 形态:生成 return 值;(方法直接返回 switch 结果)
+                    Expression val = ops.resolvePhiAt(follow, ir);
+                    if (val != null) {
+                        body.add(new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(val));
                     }
                 }
                 if (body.isEmpty() && isTypeSwitch) {
@@ -220,6 +261,12 @@ public final class SwitchTranslator {
                                     new VarExpr(switchResultVar.name()), val)));
                             defBody.add(new com.bingbaihanji.bdec.ast.stmt.BreakStatement());
                         }
+                    }
+                } else if (returnSwitch) {
+                    // return 形态 default:直接返回 switch 结果
+                    Expression val = ops.resolvePhiAt(follow, ir);
+                    if (val != null) {
+                        defBody.add(new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(val));
                     }
                 }
                 if (defBody.isEmpty()) {

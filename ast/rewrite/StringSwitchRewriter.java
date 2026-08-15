@@ -8,6 +8,8 @@ import com.bingbaihanji.bdec.ast.expr.AssignExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
@@ -272,9 +274,10 @@ public class StringSwitchRewriter implements RewriteRule {
         }
         Expression stringVar = inv.target();
 
-        // 从各 case 分支收集映射关系
-        LinkedHashMap<Integer, String> hashToString = new LinkedHashMap<>();
-        LinkedHashMap<Integer, Integer> hashToTemp = new LinkedHashMap<>();
+        // 从各 case 分支收集映射关系.同一 hashCode 可能对应多个字符串
+        //(hash 碰撞,如 "Aa"/"BB" 同为 2112),javac 在一个 hash case 内用
+        // if-else-if 链分发到不同 temp 值——须收集全部,而非每 case 取一个.
+        LinkedHashMap<Integer, String> tempToString = new LinkedHashMap<>();
         String tempVarName = null;
         SwitchStatement.CaseGroup defaultCase = null;
 
@@ -290,50 +293,119 @@ public class StringSwitchRewriter implements RewriteRule {
                 continue; // 非整型标签,跳过
             }
 
-            // 从 case 体中提取 equals() 调用中的字符串字面量
-            StringMatch sm = extractStringFromCase(cg, stringVar);
-            if (sm == null) {
-                continue; // 无法从该 case 中提取字符串映射,跳过
+            // 从 case 体中递归提取 equals() 调用中的全部字符串映射
+            List<StringMatch> matches = extractStringMatches(cg, stringVar);
+            for (StringMatch sm : matches) {
+                if (tempVarName == null) {
+                    tempVarName = sm.tempVar;
+                } else if (!tempVarName.equals(sm.tempVar)) {
+                    // 临时变量名不一致,不是合法的字符串 switch
+                    return null;
+                }
+                // 同一 temp 值映射到不同字符串 → 非法;重复字符串幂等忽略
+                String prev = tempToString.putIfAbsent(sm.tempValue, sm.stringValue);
+                if (prev != null && !prev.equals(sm.stringValue)) {
+                    return null;
+                }
             }
-
-            if (tempVarName == null) {
-                tempVarName = sm.tempVar;
-            } else if (!tempVarName.equals(sm.tempVar)) {
-                // 临时变量名不一致,不是合法的字符串 switch
-                return null;
-            }
-
-            hashToString.put(hashCode, sm.stringValue);
-            hashToTemp.put(hashCode, sm.tempValue);
         }
 
         // 至少需要一个字符串映射才有意义
-        if (hashToString.isEmpty() || tempVarName == null) {
+        if (tempToString.isEmpty() || tempVarName == null) {
             return null;
         }
 
-        return new HashCodeMatch(stringVar, hashToString, hashToTemp, tempVarName, defaultCase);
+        return new HashCodeMatch(stringVar, tempToString, tempVarName, defaultCase);
     }
 
     /**
-     * 从 hashCode switch 的 case 体中提取字符串字面量.
-     * <p>匹配模式:{@code if (str.equals("字面量")) tempVar = intVal;}</p>
+     * 从 hashCode switch 的 case 体中递归提取全部字符串字面量映射.
+     * <p>匹配两种形态:</p>
+     * <ul>
+     *   <li>直接:{@code if (str.equals("字面量")) tempVar = intVal;}</li>
+     *   <li>取反(短分支优先规范化):{@code if (!str.equals("字面量")) {...} else { tempVar = intVal; }}</li>
+     * </ul>
+     * <p>hash 碰撞时 javac 在同一个 hash case 内生成 if-else-if 链
+     * ({@code if (str.equals("A")) t=1; else if (str.equals("B")) t=2;}),
+     * 递归遍历以收集全部映射,而非每 case 仅取首个 IfStatement.</p>
      *
      * @param cg        case 分组
      * @param stringVar 字符串变量表达式
-     * @return 匹配成功则返回 StringMatch 对象,否则返回 {@code null}
+     * @return 提取到的全部 StringMatch(可能为空列表)
      */
-    private StringMatch extractStringFromCase(SwitchStatement.CaseGroup cg, Expression stringVar) {
+    private List<StringMatch> extractStringMatches(SwitchStatement.CaseGroup cg, Expression stringVar) {
+        List<StringMatch> out = new ArrayList<>();
         for (Statement s : cg.body()) {
-            if (!(s instanceof IfStatement ifStmt)) {
-                continue;
+            collectStringMatches(s, stringVar, out);
+        }
+        return out;
+    }
+
+    /** 递归遍历语句,收集所有 {@code str.equals(字面量)→temp} 映射. */
+    private void collectStringMatches(Statement stmt, Expression stringVar, List<StringMatch> out) {
+        if (stmt instanceof BlockStatement bs) {
+            for (Statement s : bs.statements()) {
+                collectStringMatches(s, stringVar, out);
             }
-            StringMatch sm = matchEqualsAssign(ifStmt, stringVar);
-            if (sm != null) {
-                return sm;
+            return;
+        }
+        if (!(stmt instanceof IfStatement ifStmt)) {
+            return;
+        }
+        // 直接 equals 形态:then 分支是赋值
+        StringMatch direct = matchEqualsAssign(ifStmt, stringVar);
+        if (direct != null) {
+            out.add(direct);
+            collectStringMatches(ifStmt.elseBranch(), stringVar, out);
+            return;
+        }
+        // 取反 equals 形态(短分支优先):else 分支是赋值
+        StringMatch negated = matchNegatedEqualsAssign(ifStmt, stringVar);
+        if (negated != null) {
+            out.add(negated);
+            collectStringMatches(ifStmt.thenBranch(), stringVar, out);
+            return;
+        }
+        // 其他条件:两侧递归(防御性,避免遗漏嵌套 else-if)
+        collectStringMatches(ifStmt.thenBranch(), stringVar, out);
+        collectStringMatches(ifStmt.elseBranch(), stringVar, out);
+    }
+
+    /** 匹配取反形态:{@code if (!str.equals("字面量")) {...} else { tempVar = intVal; }}. */
+    private StringMatch matchNegatedEqualsAssign(IfStatement ifStmt, Expression expectedTarget) {
+        if (!(ifStmt.condition() instanceof UnExpr ue)) {
+            return null;
+        }
+        if (ue.operator() != UnaryOperator.NOT) {
+            return null;
+        }
+        if (!(ue.operand() instanceof InvocationExpr condInv)) {
+            return null;
+        }
+        if (!"equals".equals(condInv.methodName()) || condInv.arguments().size() != 1) {
+            return null;
+        }
+        if (!(condInv.arguments().get(0) instanceof LitExpr strLit)) {
+            return null;
+        }
+        if (!(strLit.value() instanceof String strValue)) {
+            return null;
+        }
+        // 验证目标变量匹配(字符串变量)
+        if (expectedTarget instanceof VarExpr ev) {
+            if (!(condInv.target() instanceof VarExpr tv)) {
+                return null;
+            }
+            if (!ev.name().equals(tv.name())) {
+                return null;
             }
         }
-        return null;
+        // else 分支:将整型字面量赋给临时变量
+        AssignmentResult ar = extractAssignment(ifStmt.elseBranch());
+        if (ar == null) {
+            return null;
+        }
+        return new StringMatch(strValue, ar.varName, ar.intValue);
     }
 
     /**
@@ -481,16 +553,8 @@ public class StringSwitchRewriter implements RewriteRule {
      */
     private SwitchStatement buildStringSwitch(HashCodeMatch hashMatch, TempSwitchMatch tempMatch,
                                               Expression discriminantOverride) {
-        // 构建临时整数值到字符串字面量的映射
-        Map<Integer, String> tempToString = new LinkedHashMap<>();
-        for (Map.Entry<Integer, Integer> entry : hashMatch.hashToTemp.entrySet()) {
-            int hashVal = entry.getKey();
-            int tempVal = entry.getValue();
-            String strVal = hashMatch.hashToString.get(hashVal);
-            if (strVal != null) {
-                tempToString.put(tempVal, strVal);
-            }
-        }
+        // 临时整数值 → 字符串字面量的映射(收集时已按 temp 去重,碰撞 case 全保留)
+        Map<Integer, String> tempToString = hashMatch.tempToString;
 
         if (tempToString.isEmpty()) {
             return null;
@@ -535,11 +599,8 @@ public class StringSwitchRewriter implements RewriteRule {
         /** 字符串变量表达式 */
         final Expression stringVar;
 
-        /** hashCode 到字符串字面量的映射 */
-        final LinkedHashMap<Integer, String> hashToString;
-
-        /** hashCode 到临时整数值的映射 */
-        final LinkedHashMap<Integer, Integer> hashToTemp;
+        /** 临时整数值到字符串字面量的映射(碰撞 case 全部保留) */
+        final LinkedHashMap<Integer, String> tempToString;
 
         /** 临时变量名称 */
         final String tempVarName;
@@ -548,13 +609,11 @@ public class StringSwitchRewriter implements RewriteRule {
         final SwitchStatement.CaseGroup defaultCase;
 
         HashCodeMatch(Expression stringVar,
-                      LinkedHashMap<Integer, String> hashToString,
-                      LinkedHashMap<Integer, Integer> hashToTemp,
+                      LinkedHashMap<Integer, String> tempToString,
                       String tempVarName,
                       SwitchStatement.CaseGroup defaultCase) {
             this.stringVar = stringVar;
-            this.hashToString = hashToString;
-            this.hashToTemp = hashToTemp;
+            this.tempToString = tempToString;
             this.tempVarName = tempVarName;
             this.defaultCase = defaultCase;
         }

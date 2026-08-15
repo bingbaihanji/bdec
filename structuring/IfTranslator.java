@@ -1,5 +1,7 @@
 package com.bingbaihanji.bdec.structuring;
 
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
 import com.bingbaihanji.bdec.ast.expr.CondExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
@@ -67,6 +69,15 @@ public final class IfTranslator {
         // 当包含 if-header 的组中也包含在条件之前执行的代码时
         //(例如在最终三元条件之前的位操作),这些代码必须出现在 IfStatement 之前.
         List<Statement> preIfStmts = ops.translateHeaderNonCondition(group, ir);
+
+        // 布尔短路折叠:return a && b / return a || b(javac 编译为共享假/真目标的
+        // 嵌套条件,直接翻译成嵌套 if 会丢失假路径的 return,布尔方法缺 return
+        // 无法编译).识别后折叠为 return a OP b.
+        Statement shortCircuit = foldBooleanShortCircuit(ops, ifInfo, ir, graph,
+                groups, consumed, cond, preIfStmts);
+        if (shortCircuit != null) {
+            return shortCircuit;
+        }
 
         // 翻译 then 体:找出包含 then 块的组
         Statement thenBody = translateBranchBody(ops, ifInfo.thenBlocks(), groups, ir, consumed, graph, postDom);
@@ -161,12 +172,22 @@ public final class IfTranslator {
                     }
                 }
                 // 规范化:!x ? a : b → x ? b : a(与 TernaryRewriter 一致)
+                Statement ret;
                 if (cond instanceof UnExpr ue && ue.operator() == UnaryOperator.NOT) {
-                    return new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
+                    ret = new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
                             new CondExpr(ue.operand(), falseVal, trueVal));
+                } else {
+                    ret = new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
+                            new CondExpr(cond, trueVal, falseVal));
                 }
-                return new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
-                        new CondExpr(cond, trueVal, falseVal));
+                // 前置头组的非条件语句(如 Integer a = 1000; b = 1000; 位于
+                // 条件之前)——此前直接返回会丢失这些声明(引用未声明变量).
+                if (!preIfStmts.isEmpty()) {
+                    List<Statement> combined = new ArrayList<>(preIfStmts);
+                    combined.add(ret);
+                    return new BlockStatement(combined);
+                }
+                return ret;
             }
         }
 
@@ -193,7 +214,9 @@ public final class IfTranslator {
                             ? new CondExpr(ue.operand(), falseVal, trueVal)
                             : new CondExpr(cond, trueVal, falseVal);
                     ops.registerPhiReplacement(phi.id(), ternary);
-                    return null; // 抑制空 if,声明由 follow 组生成
+                    // 抑制空 if,声明由 follow 组生成;但头组的非条件语句
+                    //(条件之前的局部声明)必须保留,否则引用未声明变量.
+                    return preIfStmts.isEmpty() ? null : new BlockStatement(preIfStmts);
                 }
             }
         }
@@ -886,6 +909,264 @@ public final class IfTranslator {
             return null;
         }
         return new CondExpr(cond, trueVal, falseVal);
+    }
+
+    /**
+     * 布尔短路折叠:识别 {@code return a && b} / {@code return a || b}.
+     *
+     * <p>javac 将 {@code return a && b} 编译为共享假目标的嵌套条件
+     * ({@code a ? (b ? return true : return false) : return false},&& 的 C2 假目标
+     * 与 C1 假目标共享),或将 {@code return a || b} 编译为共享真目标
+     * ({@code a ? return true : (b ? return true : return false)},|| 的 C2 真目标
+     * 与 C1 真目标共享)。直接翻译成嵌套 if 会丢失假路径的 {@code return false},
+     * 导致布尔方法缺 return 无法编译。本方法识别共享目标菱形并折叠为
+     * {@code return a OP b}。</p>
+     */
+    private static Statement foldBooleanShortCircuit(ReducerOps ops, IfInfo ifInfo, LinearIr ir,
+                                                     ControlFlowGraph graph, List<BlockGroup> groups,
+                                                     Set<BlockGroup> consumed, Expression cond,
+                                                     List<Statement> preIfStmts) {
+        BasicBlock header = ifInfo.header();
+        BasicBlock c1True = null, c1False = null;
+        for (var e : graph.outgoingOf(header)) {
+            if (e.kind() == EdgeKind.TRUE_BRANCH) {
+                c1True = e.target();
+            } else if (e.kind() == EdgeKind.FALSE_BRANCH) {
+                c1False = e.target();
+            }
+        }
+        if (c1True == null || c1False == null) {
+            return null;
+        }
+
+        // 识别共享目标菱形.从 CFG 实测:javac 将 && 与 || 都编译为
+        // "嵌套条件在 C1 的假路径上":
+        //   && (return a && b):C1.true → F, C1.false → C2;C2.true → F(共享), C2.false → T2
+        //   || (return a || b):C1.true → T, C1.false → C2;C2.true → F2, C2.false → T(共享)
+        // 共享目标值即短路值(&& 共享假值,|| 共享真值).
+        BasicBlock c2 = null;
+        if (isConditionBlock(c1False, ir)) {
+            c2 = c1False;
+        } else if (isConditionBlock(c1True, ir)) {
+            c2 = c1True;
+        }
+        if (c2 == null) {
+            return null;
+        }
+        BasicBlock c2True = null, c2False = null;
+        for (var e : graph.outgoingOf(c2)) {
+            if (e.kind() == EdgeKind.TRUE_BRANCH) {
+                c2True = e.target();
+            } else if (e.kind() == EdgeKind.FALSE_BRANCH) {
+                c2False = e.target();
+            }
+        }
+        if (c2True == null || c2False == null) {
+            return null;
+        }
+
+        Expression nestedCond = AstCleanup.simplifyCondition(
+                ops.extractConditionFromHeader(c2, ir));
+        if (nestedCond == null) {
+            return null;
+        }
+
+        Set<BasicBlock> consume = new HashSet<>();
+        consume.add(c2);
+        consume.add(c1True);
+        consume.add(c1False);
+        Set<BasicBlock> valueBlocks = new HashSet<>();
+        Expression combined;
+        if (c2 == c1False) {
+            // 嵌套条件在 C1 假路径:共享目标 = c1True
+            if (c1True == c2True) {
+                // && :共享 = C2 真目标(假值),真值在 C2 假路径(C2.false).
+                if (!blockEndsWithBooleanValue(c2False, true, ir)
+                        || !blockEndsWithBooleanValue(c1True, false, ir)) {
+                    return null;
+                }
+                consume.add(c2False);
+                valueBlocks.add(c2False);
+                valueBlocks.add(c1True);
+                // 真值路径 = C1 假(!c1)且 C2 假(!c2)→ return !c1 && !c2
+                combined = new BinExpr(BinaryOperator.AND,
+                        AstCleanup.negateCond(cond), AstCleanup.negateCond(nestedCond));
+            } else if (c1True == c2False) {
+                // || :共享 = C2 假目标(真值),假值在 C2 真路径(C2.true).
+                if (!blockEndsWithBooleanValue(c2True, false, ir)
+                        || !blockEndsWithBooleanValue(c1True, true, ir)) {
+                    return null;
+                }
+                consume.add(c2True);
+                valueBlocks.add(c2True);
+                valueBlocks.add(c1True);
+                // 真值路径 = C1 真(c1)或 C2 假(!c2)→ return c1 || !c2
+                combined = new BinExpr(BinaryOperator.OR,
+                        cond, AstCleanup.negateCond(nestedCond));
+            } else {
+                return null;
+            }
+        } else {
+            // 嵌套条件在 C1 真路径(少见布局):共享目标 = c1False
+            if (c1False == c2True) {
+                // && 变体:真值在 C2 假路径 → return c1 && !c2
+                if (!blockEndsWithBooleanValue(c2False, true, ir)) {
+                    return null;
+                }
+                consume.add(c2False);
+                valueBlocks.add(c2False);
+                valueBlocks.add(c1False);
+                combined = new BinExpr(BinaryOperator.AND,
+                        cond, AstCleanup.negateCond(nestedCond));
+            } else if (c1False == c2False) {
+                // || 变体:假值在 C2 真路径 → return c1 || c2
+                if (!blockEndsWithBooleanValue(c2True, false, ir)) {
+                    return null;
+                }
+                consume.add(c2True);
+                valueBlocks.add(c2True);
+                valueBlocks.add(c1False);
+                combined = new BinExpr(BinaryOperator.OR, cond, nestedCond);
+            } else {
+                return null;
+            }
+        }
+
+        // 值块在合并块(follow)汇合为 RETURN←PHI(方法直接返回布尔)
+        // 或 STORE←PHI(布尔结果存入变量,后续使用,如 boolean r = a && b).
+        // 仅从值块求公共后继(consume 含双后继的 C2 会干扰).
+        BasicBlock merge = commonSuccessorOf(valueBlocks, graph);
+        // STORE 形态:registerPhiReplacement 使 follow 的 STORE r←PHI 还原为
+        // r = (a OP b),声明语句由 follow 组生成——故不消费合并块,
+        // 否则 r 声明被吞、后续引用 r 未声明.
+        if (merge != null) {
+            for (IrInstruction fi : ir.instructionsOf(merge)) {
+                if (fi.opcode() == IrOpcode.STORE && fi.operands().size() >= 2
+                        && fi.operands().get(0) instanceof Variable sv
+                        && fi.operands().get(1) instanceof InstructionRef ref
+                        && ref.instruction().opcode() == IrOpcode.PHI) {
+                    ops.registerPhiReplacement(ref.instruction().id(), combined);
+                    // 消费菱形(不含合并块),返回头组前置语句
+                    for (BlockGroup g : groups) {
+                        if (consumed.contains(g)) {
+                            continue;
+                        }
+                        for (BasicBlock b : g.blocks()) {
+                            if (consume.contains(b)) {
+                                consumed.add(g);
+                                break;
+                            }
+                        }
+                    }
+                    return preIfStmts.isEmpty() ? null : new BlockStatement(preIfStmts);
+                }
+            }
+        }
+        // RETURN 形态:直接返回 return (a OP b).仅限 boolean 返回值方法——
+        // 否则(如 boolean r = a && b 后接 (r?1:0)*10)会把布尔直接 return,
+        // 与 int 返回类型不匹配.
+        boolean isBoolRet = ir.method().returnType() != null
+                && ir.method().returnType().kind() == TypeKind.BOOLEAN;
+        if (!isBoolRet || merge == null) {
+            return null;
+        }
+        consume.add(merge);
+        for (BlockGroup g : groups) {
+            if (consumed.contains(g)) {
+                continue;
+            }
+            for (BasicBlock b : g.blocks()) {
+                if (consume.contains(b)) {
+                    consumed.add(g);
+                    break;
+                }
+            }
+        }
+        Statement ret = new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(combined);
+        if (!preIfStmts.isEmpty()) {
+            List<Statement> all = new ArrayList<>(preIfStmts);
+            all.add(ret);
+            return new BlockStatement(all);
+        }
+        return ret;
+    }
+
+    /** 计算集合中所有块的公共后继(短路值合并块). */
+    private static BasicBlock commonSuccessorOf(Set<BasicBlock> blocks, ControlFlowGraph graph) {
+        BasicBlock common = null;
+        for (BasicBlock b : blocks) {
+            for (var e : graph.outgoingOf(b)) {
+                if (e.kind() == EdgeKind.EXCEPTION || e.target() == graph.exitBlock()) {
+                    continue;
+                }
+                BasicBlock t = e.target();
+                if (t == b) {
+                    continue;
+                }
+                if (common == null) {
+                    common = t;
+                } else if (common != t) {
+                    return null;
+                }
+            }
+        }
+        return common;
+    }
+
+    /** 块是否含 CONDITION 指令(即嵌套条件头). */
+    private static boolean isConditionBlock(BasicBlock b, LinearIr ir) {
+        for (IrInstruction i : ir.instructionsOf(b)) {
+            if (i.opcode() == IrOpcode.CONDITION) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 块是否产生布尔常量 value:以 CONST 0/1 结尾(值压栈,合并块消费)、
+     *  以 RETURN 布尔常量结尾,或以 STORE v = 布尔常量 结尾(赋值形态). */
+    private static boolean blockEndsWithBooleanValue(BasicBlock b, boolean value, LinearIr ir) {
+        List<IrInstruction> insns = ir.instructionsOf(b);
+        for (int i = insns.size() - 1; i >= 0; i--) {
+            IrInstruction insn = insns.get(i);
+            if (insn.opcode() == IrOpcode.RETURN && !insn.operands().isEmpty()) {
+                Number n = booleanConst(insn.operands().getFirst());
+                if (n != null) {
+                    return (n.intValue() != 0) == value;
+                }
+            }
+            if (insn.opcode() == IrOpcode.CONST && !insn.operands().isEmpty()) {
+                Number n = booleanConst(insn.operands().getFirst());
+                if (n != null) {
+                    return (n.intValue() != 0) == value;
+                }
+            }
+            if (insn.opcode() == IrOpcode.STORE && insn.operands().size() >= 2) {
+                Number n = booleanConst(insn.operands().get(1));
+                if (n != null) {
+                    return (n.intValue() != 0) == value;
+                }
+            }
+            if (StatementUtils.isStatementRoot(insn)) {
+                break; // 遇到其他语句,该块不是纯布尔值块
+            }
+        }
+        return false;
+    }
+
+    /** 从 Value 中提取整型常量(支持 ConstantValue 与 CONST 指令引用). */
+    private static Number booleanConst(Value v) {
+        if (v instanceof com.bingbaihanji.bdec.ir.ConstantValue cv
+                && cv.value() instanceof Number num) {
+            return num;
+        }
+        if (v instanceof InstructionRef ref && ref.instruction().opcode() == IrOpcode.CONST
+                && !ref.instruction().operands().isEmpty()
+                && ref.instruction().operands().getFirst() instanceof com.bingbaihanji.bdec.ir.ConstantValue cv
+                && cv.value() instanceof Number num) {
+            return num;
+        }
+        return null;
     }
 
     /**

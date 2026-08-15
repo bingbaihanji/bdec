@@ -8,7 +8,6 @@ import com.bingbaihanji.bdec.type.TypeKind;
 import com.bingbaihanji.bdec.type.TypeResolver;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -226,13 +225,24 @@ final class BootstrapResolver {
     static JavaType buildGenericFunctionalType(JavaType rawType, String samDescriptor) {
         JavaType[] samParams = TypeResolver.parseMethodParameterTypes(samDescriptor);
         JavaType samReturn = TypeResolver.parseMethodReturnType(samDescriptor);
-        // typeArgs = SAM参数类型 + SAM返回类型(仅引用类型).
-        // 基元类型(如 boolean, int)的函数式接口类型参数中不包含返回类型.
-        // 例如 Predicate<T> (SAM: T→boolean) = [T], 不包含 boolean.
+        // typeArgs = SAM参数类型 + SAM返回类型,仅纳入引用类型(CLASS/TYPE_VARIABLE).
+        // Java 泛型实参必为引用类型(基元须装箱为 Integer 等),基元类型
+        //(boolean/int)不可作为类型实参——非泛型函数式接口(如 Fn { int apply(int); })
+        // 的参数/返回全为基元时应保持原类型,避免误生成 Fn<int,int> 非法源码.
+        // 例:Predicate<T> (SAM: T→boolean) 的 impl 描述符带引用参数 → [T],
+        //     不含 boolean 返回.
         List<JavaType> typeArgs = new ArrayList<>();
-        Collections.addAll(typeArgs, samParams);
-        if (samReturn.kind() != TypeKind.VOID && samReturn.kind() == TypeKind.CLASS) {
+        for (JavaType p : samParams) {
+            if (p.kind() == TypeKind.CLASS || p.kind() == TypeKind.TYPE_VARIABLE) {
+                typeArgs.add(p);
+            }
+        }
+        if (samReturn.kind() == TypeKind.CLASS
+                || samReturn.kind() == TypeKind.TYPE_VARIABLE) {
             typeArgs.add(samReturn);
+        }
+        if (typeArgs.isEmpty()) {
+            return rawType; // 非泛型函数式接口:不加类型实参
         }
         return new JavaType(TypeKind.CLASS, rawType.internalName(),
                 rawType.descriptor(), typeArgs, rawType.arrayDimensions());

@@ -1003,6 +1003,16 @@ public final class IrBuilder {
                     if (cv != null && cv.value() instanceof Integer i) {
                         args.set(p, new ConstantValue(i != 0, JavaType.BOOLEAN));
                     }
+                } else if (paramTypes[p].kind() == TypeKind.CHAR) {
+                    // char 参数折叠:常量实参(如 append(';') 的 bipush 59,
+                    // CONST 值为 Byte)重标为 char 字面量.否则渲染为 int 59,
+                    // 在字符串上下文中输出 "59" 两字符而非 ";"(行为差异).
+                    Value arg = args.get(p);
+                    ConstantValue cv = unwrapConstant(arg);
+                    if (cv != null && cv.value() instanceof Number n
+                            && n.intValue() >= 0 && n.intValue() <= 0xFFFF) {
+                        args.set(p, new ConstantValue((char) n.intValue(), JavaType.CHAR));
+                    }
                 }
             }
         }

@@ -170,7 +170,7 @@ public class ControlFlowStructurer {
             }
         }
 
-        // 5. 不可归约图回退处理
+        // 5. 不可归约图回退处理(当前为透传,检测见 IrreducibleHandler.isReducible)
         if (graph.blockCount() > 3) {
             graph = irreducibleHandler.handle(graph);
         }

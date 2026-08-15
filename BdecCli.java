@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarInputStream;
 
@@ -191,51 +192,62 @@ public final class BdecCli {
 
         int success = 0, failed = 0;
 
+        // 第一阶段:读取 JAR 中全部 .class 字节(内部名 → 字节),跳过 module-info/package-info.
+        // 参考 CFR(ClassFileSourceImpl 预扫描 class→jar 映射)、Procyon(JarTypeLoader 按名
+        // 回查)与 Vineflower(StructContext name→unit 映射):先建立映射,再按内部名惰性读.
+        Map<String, byte[]> classBytes = new java.util.HashMap<>();
         try (JarInputStream jis = new JarInputStream(
                 new BufferedInputStream(Files.newInputStream(jarFile)))
         ) {
-
             JarEntry entry;
             while ((entry = jis.getNextJarEntry()) != null) {
                 String name = entry.getName();
                 if (!name.endsWith(".class")) {
                     continue;
                 }
-                // 跳过 module-info 和 package-info
                 if (name.endsWith("module-info.class") || name.endsWith("package-info.class")) {
                     continue;
                 }
-
-                // 去掉 .class 后缀得到内部名称
                 String internalName = name.substring(0, name.length() - 6);
-
-                try {
-                    byte[] bytes = jis.readAllBytes();
-                    DecompileContext ctx = DecompileContext.empty(config);
-                    BdecResult result = engine.decompile(internalName, bytes, ctx);
-
-                    if (result.success()) {
-                        writeJavaFile(outputDir, internalName, result.decompiledCode());
-                        success++;
-                        System.out.println("  OK  " + internalName);
-                    } else {
-                        failed++;
-                        System.err.println("  FAIL " + internalName + ": " +
-                                (result.cause() != null ? result.cause().getMessage() : "unknown"));
-                    }
-                } catch (Exception e) {
-                    failed++;
-                    System.err.println("  FAIL " + internalName + ": " + e.getMessage());
-                }
-
-                // 每处理 100 个类输出一次进度
-                if ((success + failed) % 100 == 0) {
-                    System.out.println("  ... " + success + " OK, " + failed + " failed");
-                }
+                classBytes.put(internalName, jis.readAllBytes());
             }
         } catch (IOException e) {
             System.err.println("Error reading JAR: " + e.getMessage());
             System.exit(1);
+        }
+
+        // 第二阶段:逐顶层类反编译.内部/匿名类(名含 $)由外层反编译时经 loader
+        // 内联进外层输出(InnerClassDecompiler/AnonymousClassRewriter/EnumRewriter),
+        // 不再单独输出带 $ 的文件(那是非法类名).loader 从映射按内部名惰性读.
+        for (Map.Entry<String, byte[]> entry : classBytes.entrySet()) {
+            String internalName = entry.getKey();
+            if (internalName.indexOf('$') >= 0) {
+                continue; // 跳过内部/匿名类,由外层内联
+            }
+            try {
+                java.util.function.Function<String, byte[]> loader =
+                        name -> classBytes.get(name);
+                DecompileContext ctx = new DecompileContext(config, loader);
+                BdecResult result = engine.decompile(internalName, entry.getValue(), ctx);
+
+                if (result.success()) {
+                    writeJavaFile(outputDir, internalName, result.decompiledCode());
+                    success++;
+                    System.out.println("  OK  " + internalName);
+                } else {
+                    failed++;
+                    System.err.println("  FAIL " + internalName + ": " +
+                            (result.cause() != null ? result.cause().getMessage() : "unknown"));
+                }
+            } catch (Exception e) {
+                failed++;
+                System.err.println("  FAIL " + internalName + ": " + e.getMessage());
+            }
+
+            // 每处理 100 个类输出一次进度
+            if ((success + failed) % 100 == 0) {
+                System.out.println("  ... " + success + " OK, " + failed + " failed");
+            }
         }
 
         System.out.println("\nDone: " + success + " classes decompiled, " + failed + " failed");

@@ -64,7 +64,6 @@ public final class SynchronizedRecognizer {
                 monitorEnters.add(insn);
             }
         }
-
         if (monitorEnters.isEmpty()) {
             return false;
         }
@@ -267,6 +266,17 @@ public final class SynchronizedRecognizer {
     private String describeMonitor(Value v) {
         if (v instanceof Variable var) {
             return var.slot() == 0 ? "this" : "var" + var.slot();
+        }
+        // 类字面量监视器:synchronized (SomeClass.class) 的 MONITOR_ENTER
+        // 操作数是携带类名 String 值的 CONST,渲染为 SomeClass.class.
+        if (v instanceof com.bingbaihanji.bdec.ir.InstructionRef ref
+                && ref.instruction().opcode() == IrOpcode.CONST
+                && !ref.instruction().operands().isEmpty()
+                && ref.instruction().operands().getFirst() instanceof com.bingbaihanji.bdec.ir.ConstantValue cv
+                && cv.value() instanceof String className) {
+            int slash = className.lastIndexOf('/');
+            String simple = slash >= 0 ? className.substring(slash + 1) : className;
+            return simple + ".class";
         }
         return v.toString();
     }
