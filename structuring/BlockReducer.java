@@ -189,6 +189,7 @@ public final class BlockReducer implements ReducerOps {
      * 当前方法的泛型返回类型:优先取 Signature 属性解析的返回类型
      * (带泛型实参),否则回退描述符返回类型.
      */
+    @Override
     public JavaType genericMethodReturnType() {
         if (currentIr == null || currentIr.method() == null) {
             return null;
@@ -555,6 +556,7 @@ public final class BlockReducer implements ReducerOps {
      * 的 JSR-308 类型注解,按类型路径分组为渲染行映射.
      * target_info 为 [offset],与字节码偏移对齐.
      */
+    @Override
     public java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
             List<String>> renderOffsetTypeAnnotations(int targetType, int offset) {
         if (currentIr == null || currentIr.method() == null) {
@@ -575,6 +577,7 @@ public final class BlockReducer implements ReducerOps {
      * (如 {@code new @A int[n]} 的 NEW 注解 offset=iload 的偏移,newarray 在其后).
      * 对象创建则指向 new 指令本身,不受影响.</p>
      */
+    @Override
     public int arrayExprStartOffset(IrInstruction insn) {
         int min = insn.sourceOffset();
         for (Value op : insn.operands()) {
@@ -593,6 +596,7 @@ public final class BlockReducer implements ReducerOps {
      *  在分支/循环体内重复声明为 "Type name = value;"(如 while 体内的
      *  {@code int i = 0;} 与外层声明冲突).兄弟分支的独立声明不受影响:
      *  分支作用域在翻译后弹出,彼此不可见.</p> */
+    @Override
     public boolean tryDeclareVar(String name) {
         for (Set<String> scope : declaredVarNameStack) {
             if (scope != null && scope.contains(name)) {
@@ -639,6 +643,7 @@ public final class BlockReducer implements ReducerOps {
      * 翻译 if-header 组中非条件的,有副作用的语句.
      * 这些指令在条件检查之前执行,应在输出中出现在 IfStatement 之前.
      */
+    @Override
     public List<Statement> translateHeaderNonCondition(BlockGroup group, LinearIr ir) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
         if (allInsns.isEmpty()) {
@@ -745,6 +750,7 @@ public final class BlockReducer implements ReducerOps {
     }
 
     /** 从组的 CONDITION IR 指令中提取条件表达式 */
+    @Override
     public Expression extractCondition(BlockGroup group, LinearIr ir) {
         List<IrInstruction> all = group.allIrInstructions(ir);
         for (IrInstruction insn : all) {
@@ -756,6 +762,7 @@ public final class BlockReducer implements ReducerOps {
     }
 
     /** 从 IfInfo 头部块直接提取条件(处理 CFG 块与 IR 块编号不匹配). */
+    @Override
     public Expression extractConditionFromHeader(BasicBlock header, LinearIr ir) {
         for (IrInstruction insn : ir.instructionsOf(header)) {
             if (insn.opcode() == IrOpcode.CONDITION) {
@@ -797,6 +804,7 @@ public final class BlockReducer implements ReducerOps {
      * <p>仅输出有副作用的指令(语句).中间值指令(LOAD,BINARY 等)被跳过——
      * 它们通过递归的 {@link #valueToExpr} 解析参与表达式树的构建.
      */
+    @Override
     public Statement translateGroup(BlockGroup group, LinearIr ir) {
         List<IrInstruction> allInsns = group.allIrInstructions(ir);
         if (allInsns.isEmpty()) {
@@ -1144,6 +1152,7 @@ public final class BlockReducer implements ReducerOps {
 
     /** 将 Value(Variable / ConstantValue / InstructionRef)转为 Expression.
      *  对于 InstructionRef,递归翻译引用的指令以构建正确的表达式树. */
+    @Override
     public Expression valueToExpr(Value v) {
         // 多次引用的 NEW_ARRAY 使用临时变量(而非内联 new)
         if (v instanceof InstructionRef ref
@@ -1155,6 +1164,7 @@ public final class BlockReducer implements ReducerOps {
 
     /** 变量 v 是否由布尔 phiReplacement 定义(短路合并 boolean r = a && b 的 r,
      *  字节码存为 int 0/1,但其定义 STORE←PHI 已被 IfTranslator 折叠为布尔表达式). */
+    @Override
     public boolean isBooleanPhiReplacedVariable(Value v) {
         if (!(v instanceof Variable var) || currentIr == null) {
             return false;
@@ -1176,16 +1186,19 @@ public final class BlockReducer implements ReducerOps {
     /** 将 Variable 转为相应的 VarExpr.
      *  使用变量名(优先从 LocalVariableTable 获取,回退到 "var" + originalIndex).
      *  代表 slot-0 临时值的版本化变量与 {@code this} 进行区分. */
+    @Override
     public VarExpr varToExpr(Variable var) {
         return ExpressionTranslator.varToExpr(var, isInstanceMethod);
     }
 
     /** 将 CONST IR 转为 LitExpr */
+    @Override
     public Expression constToExpr(IrInstruction insn) {
         return ExpressionTranslator.constToExpr(insn);
     }
 
     /** 检查是否有局部变量与给定字段名相同,这将在剥离 "this." 前缀时造成歧义 */
+    @Override
     public boolean localVarShadowsField(String fieldName) {
         if (currentIr == null || fieldName == null) {
             return false;
@@ -1207,6 +1220,7 @@ public final class BlockReducer implements ReducerOps {
      *  匹配——参数等直接以 {@link Variable} 形式入栈的操作数不携带块 id,
      *  靠 blockId 匹配会漏掉它们(嵌套三元 {@code a ? (b ? c : d) : e} 的叶值
      *  即此情形,曾一律取首操作数 {@code c} 而丢 {@code d}/{@code e}).</p> */
+    @Override
     public Expression resolvePhiAt(BasicBlock follow, LinearIr ir) {
         if (follow == null) {
             return null;
@@ -1344,6 +1358,7 @@ public final class BlockReducer implements ReducerOps {
 
 
     /** 将单个基本块组翻译为语句列表 */
+    @Override
     public List<Statement> translateBlockGroup(BlockGroup group, LinearIr ir) {
         Statement s = translateGroup(group, ir);
         if (s instanceof BlockStatement bs) {
