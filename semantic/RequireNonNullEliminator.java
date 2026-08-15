@@ -1,5 +1,6 @@
 package com.bingbaihanji.bdec.semantic;
 
+import com.bingbaihanji.bdec.bytecode.model.ExceptionHandlerModel;
 import com.bingbaihanji.bdec.ir.InstructionRef;
 import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.IrOpcode;
@@ -94,6 +95,13 @@ public final class RequireNonNullEliminator {
                 continue;
             }
 
+            // 位于 try 区域内的空检查不消除:其 NPE 可能是控制流触发.
+            // 混淆器用 try { obj.getClass(); } catch (NPE) { 真实路径 } 转移
+            // 控制流——消除后 NPE 不再触发,catch 分支永不执行,语义错误.
+            if (isInTryRegion(insn.sourceOffset(), ir.method().exceptionHandlers())) {
+                continue;
+            }
+
             // 确保 INVOKE 至少有一个操作数(接收者对象 + 参数)
             if (insn.operands().isEmpty()) {
                 continue;
@@ -107,8 +115,27 @@ public final class RequireNonNullEliminator {
             changed = true;
         }
 
-        // 第二遍:移除已标记的指令
+        // 第二遍:移除已标记的指令 + 连带移除因此孤立的中间指令.
+        // 空检查被移除后,其接收者 LOAD 等中间指令可能失去全部消费者,
+        // 残留为裸语句(如 "s;")导致无法重编译——迭代移除无消费的中间指令.
         if (changed) {
+            boolean more;
+            do {
+                more = false;
+                Set<Integer> aliveConsumed = buildConsumedIds(
+                        instructions, toRemove);
+                for (IrInstruction insn : instructions) {
+                    if (toRemove.contains(insn.id())
+                            || !isSideEffectFree(insn.opcode())) {
+                        continue;
+                    }
+                    if (!aliveConsumed.contains(insn.id())) {
+                        toRemove.add(insn.id());
+                        more = true;
+                    }
+                }
+            } while (more);
+
             List<IrInstruction> filtered = new ArrayList<>();
             for (IrInstruction insn : instructions) {
                 if (!toRemove.contains(insn.id())) {
@@ -122,6 +149,45 @@ public final class RequireNonNullEliminator {
         }
 
         return changed;
+    }
+
+    /** 指令是否无副作用(纯中间值,可安全移除当无人消费). */
+    private static boolean isSideEffectFree(IrOpcode op) {
+        return switch (op) {
+            case LOAD, CONST, CAST, BINARY, COMPARE, UNARY,
+                    ARRAY_LENGTH, INSTANCE_OF -> true;
+            default -> false;
+        };
+    }
+
+    /** 构建被"未被移除指令"消费的指令 ID 集合. */
+    private static Set<Integer> buildConsumedIds(
+            List<IrInstruction> instructions, Set<Integer> excluded) {
+        Set<Integer> consumed = new HashSet<>();
+        for (IrInstruction insn : instructions) {
+            if (excluded.contains(insn.id())) {
+                continue;
+            }
+            for (Value op : insn.operands()) {
+                if (op instanceof InstructionRef ref) {
+                    consumed.add(ref.instruction().id());
+                }
+            }
+        }
+        return consumed;
+    }
+
+    /** 指令偏移是否位于某异常处理器的受保护范围内(try 区域). */
+    private static boolean isInTryRegion(int offset, List<ExceptionHandlerModel> handlers) {
+        if (handlers == null) {
+            return false;
+        }
+        for (ExceptionHandlerModel h : handlers) {
+            if (offset >= h.startPc() && offset < h.endPc()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

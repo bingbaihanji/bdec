@@ -553,7 +553,7 @@ public class AstBuilder {
         if (hasSuper) {
             superName = (superAndInterfaces != null && superAndInterfaces.length >= 1)
                     ? TypeReferenceUtil.renderClassRef(superAndInterfaces[0], superTypeArgAnns, imports, simpleName)
-                    : simpleName(classFile.superInternalName());
+                    : TypeReferenceUtil.nestedSimpleName(classFile.superInternalName());
             TypeReferenceUtil.collectImport(JavaType.classType(classFile.superInternalName()), imports, simpleName);
         }
 
@@ -579,9 +579,15 @@ public class AstBuilder {
             // 父类若为隐式 java/lang/Object,javac 仍会在签名中占位 Ljava/lang/Object;,
             // 因此偏移量取决于是否为接口,而非显式父类是否存在.
             int sigPos = (isInterfaceType ? 0 : 1) + sigInterfaceIdx;
-            String simple = (superAndInterfaces != null && sigPos < superAndInterfaces.length)
-                    ? TypeReferenceUtil.renderClassRef(superAndInterfaces[sigPos], ifTypeArgAnns, imports, simpleName)
-                    : simpleName(ifName);
+            String simple;
+            if (superAndInterfaces != null && sigPos < superAndInterfaces.length) {
+                simple = TypeReferenceUtil.renderClassRef(
+                        superAndInterfaces[sigPos], ifTypeArgAnns, imports, simpleName);
+            } else {
+                // 无签名回退:嵌套类型取嵌套简单名
+                //(如 RecordSealedSample$Shape → Shape,二进制名非法标识符)
+                simple = TypeReferenceUtil.nestedSimpleName(ifName);
+            }
             sigInterfaceIdx++;
             interfaceNames.add(simple);
             interfaceAnns.add(ifAnn != null ? ifAnn : "");

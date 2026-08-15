@@ -26,8 +26,10 @@ import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -396,8 +398,85 @@ public class SourceCleanup implements RewriteRule {
                         hoistBranchDecls(i.thenBranch(), hoisted),
                         hoistBranchDecls(i.elseBranch(), hoisted)));
                 out.addAll(pre);
+            } else if (c instanceof com.bingbaihanji.bdec.ast.stmt.SwitchStatement sw) {
+                // switch 返回变量:多 case 声明同一变量时提升到 switch 前
+                //(如 String r; switch(x){case 1: r="one"; ... default: r="other"} return r;),
+                // 否则各 case 重复声明 + 后续引用自动补 int r=0 无法重编译.
+                out.addAll(hoistSwitchDecls(sw));
             } else {
                 out.add(c);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * switch 声明提升:在 2+ case 体中声明的变量,提升为 switch 前的单一
+     * 声明,case 体内的声明转为赋值.仅处理 case 体顶层声明(不递归嵌套控制流).
+     */
+    private List<Statement> hoistSwitchDecls(
+            com.bingbaihanji.bdec.ast.stmt.SwitchStatement sw) {
+        Map<String, Integer> declCount = new HashMap<>();
+        Map<String, JavaType> declType = new HashMap<>();
+        for (com.bingbaihanji.bdec.ast.stmt.SwitchStatement.CaseGroup cg : sw.cases()) {
+            Set<String> bodyDecls = new HashSet<>();
+            collectSwitchCaseDecls(cg.body(), bodyDecls);
+            for (String name : bodyDecls) {
+                declCount.merge(name, 1, Integer::sum);
+                declType.putIfAbsent(name, switchCaseDeclType(cg.body(), name));
+            }
+        }
+        Set<String> hoisted = new HashSet<>();
+        for (var e : declCount.entrySet()) {
+            if (e.getValue() >= 2) {
+                hoisted.add(e.getKey());
+            }
+        }
+        if (hoisted.isEmpty()) {
+            return List.of(sw);
+        }
+        List<com.bingbaihanji.bdec.ast.stmt.SwitchStatement.CaseGroup> newCases
+                = new ArrayList<>();
+        for (com.bingbaihanji.bdec.ast.stmt.SwitchStatement.CaseGroup cg : sw.cases()) {
+            newCases.add(new com.bingbaihanji.bdec.ast.stmt.SwitchStatement.CaseGroup(
+                    cg.labels(), hoistSwitchCaseDecls(cg.body(), hoisted), cg.isDefault()));
+        }
+        List<Statement> pre = new ArrayList<>();
+        for (String name : hoisted) {
+            JavaType t = declType.get(name);
+            pre.add(new VariableDeclaration(t != null ? t : JavaType.INT, name, null));
+        }
+        pre.add(new com.bingbaihanji.bdec.ast.stmt.SwitchStatement(
+                sw.discriminant(), newCases, sw.isExpression()));
+        return pre;
+    }
+
+    /** 收集 case 体顶层声明的变量名. */
+    private void collectSwitchCaseDecls(List<Statement> body, Set<String> out) {
+        for (Statement s : body) {
+            if (s instanceof VariableDeclaration vd) {
+                out.add(vd.name());
+            }
+        }
+    }
+
+    /** case 体中指定变量的声明类型. */
+    private JavaType switchCaseDeclType(List<Statement> body, String name) {
+        for (Statement s : body) {
+            if (s instanceof VariableDeclaration vd && vd.name().equals(name)) {
+                return vd.type();
+            }
+        }
+        return null;
+    }
+
+    /** case 体中提升变量的声明转为赋值(复用 if 分支的转换). */
+    private List<Statement> hoistSwitchCaseDecls(List<Statement> body, Set<String> hoisted) {
+        List<Statement> out = new ArrayList<>();
+        for (Statement s : body) {
+            Statement t = hoistBranchDecls(s, hoisted);
+            if (t != null) {
+                out.add(t);
             }
         }
         return out;

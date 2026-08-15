@@ -1,13 +1,18 @@
 package com.bingbaihanji.bdec.structuring;
 
 import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.bytecode.model.TypePathElement;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.LinearIr;
 import com.bingbaihanji.bdec.ir.Value;
+import com.bingbaihanji.bdec.ir.Variable;
+import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -91,4 +96,49 @@ public interface ReducerOps {
 
     /** 块上是否带 switch 注解. */
     SwitchInfo switchAnnotation(BasicBlock b);
+
+    // ── 表达式翻译上下文(供 ExprTranslator 回调) ───────────────
+
+    /** NEW 指令 → 其 <init> 调用列表(NEW+INVOKE 合并). */
+    Map<Integer, List<IrInstruction>> currentNewToInit();
+
+    /** 多引用数组临时变量映射. */
+    Map<Integer, String> currentMultiRefArrayVar();
+
+    /** 当前方法的线性 IR. */
+    LinearIr currentIr();
+
+    /** PHI 折叠结果映射(后续 STORE 翻译替换 PHI 解析). */
+    Map<Integer, Expression> phiReplacements();
+
+    /** invokedynamic lambda/方法引用翻译器. */
+    IndyTranslator indyTranslator();
+
+    /** 当前方法返回类型是否为 boolean. */
+    boolean currentMethodReturnsBoolean();
+
+    /** 当前方法的泛型返回类型(签名优先). */
+    JavaType genericMethodReturnType();
+
+    /** Variable → VarExpr(含 slot-0 版本化变量的 this 区分). */
+    VarExpr varToExpr(Variable var);
+
+    /** CONST IR → LitExpr. */
+    Expression constToExpr(IrInstruction insn);
+
+    /** 按类型路径渲染指令偏移处的 JSR-308 类型注解. */
+    Map<List<TypePathElement>, List<String>> renderOffsetTypeAnnotations(
+            int targetType, int offset);
+
+    /** 是否有局部变量与给定字段名相同(剥离 this. 前缀时的歧义). */
+    boolean localVarShadowsField(String fieldName);
+
+    /** 值是否为已折叠 PHI 替换的布尔变量. */
+    boolean isBooleanPhiReplacedVariable(Value v);
+
+    /** 当前方法是否为实例方法(用于 this 字段加载的简写判定). */
+    boolean isInstanceMethod();
+
+    /** NEW_ARRAY 表达式起始偏移(javac 数组创建注解偏移指向表达式起始). */
+    int arrayExprStartOffset(IrInstruction insn);
 }

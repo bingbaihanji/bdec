@@ -126,7 +126,22 @@ public class TryResourceRewriter implements RewriteRule {
                 continue;
             }
             if (ts.finallyBody() == null) {
-                continue;
+                // 方法调用资源形态:javac 对工厂返回的资源发射 if (r != null) r.close()
+                //(new 资源无此守卫),结构化后 close 落 try 体尾部 + 空 catch(Throwable)
+                // 而非 finally——TryTranslator 的 finally 副本识别因序列不匹配未命中.
+                // 识别该形态并还原 try-with-resources.
+                if (!isNullGuardedCloseShape(ts, res.varName())) {
+                    continue;
+                }
+                Statement newTryBody = removeCloseFromBody(ts.tryBody(), res.varName());
+                List<TryStatement.Resource> resources = new ArrayList<>(ts.resources());
+                resources.add(0, res);
+                stmts.remove(i + 1);
+                stmts.remove(i);
+                TryStatement newTry = foldInnerResources(
+                        new TryStatement(newTryBody, List.of(), null, resources));
+                stmts.add(i, newTry);
+                return new BlockStatement(stmts);
             }
 
             // 检查 finally 体中是否包含对该变量的 close() 调用
@@ -282,6 +297,64 @@ public class TryResourceRewriter implements RewriteRule {
             }
         }
         return false;
+    }
+
+    /**
+     * 方法调用资源形态:try 体尾部 {@code if (r != null) r.close();} + 单一空
+     * catch(Throwable).javac 对工厂返回的资源发射 null 守卫 close(new 资源无),
+     * 结构化后 close 落 try 体而非 finally.
+     */
+    private boolean isNullGuardedCloseShape(TryStatement ts, String varName) {
+        if (ts.catchClauses() == null || ts.catchClauses().size() != 1) {
+            return false;
+        }
+        var cc = ts.catchClauses().get(0);
+        String ct = cc.exceptionType();
+        if (ct == null || !ct.endsWith("Throwable")) {
+            return false;
+        }
+        if (cc.body() != null
+                && !(cc.body() instanceof BlockStatement eb && eb.statements().isEmpty())) {
+            return false;
+        }
+        if (!(ts.tryBody() instanceof BlockStatement bs)
+                || bs.statements().isEmpty()) {
+            return false;
+        }
+        Statement last = bs.statements().get(bs.statements().size() - 1);
+        return isNullGuardedClose(last, varName);
+    }
+
+    /** 语句是否为 {@code if (r != null) r.close();} 形态. */
+    private boolean isNullGuardedClose(Statement s, String varName) {
+        if (!(s instanceof IfStatement i)) {
+            return false;
+        }
+        // then 分支是 r.close();(条件可为 r != null / !(r == null) 等)
+        return isCloseCall(i.thenBranch(), varName);
+    }
+
+    /** 语句(或其单语句块)是否为 {@code r.close();} 调用. */
+    private boolean isCloseCall(Statement s, String varName) {
+        Statement inner = s;
+        if (inner instanceof BlockStatement bs && bs.statements().size() == 1) {
+            inner = bs.statements().get(0);
+        }
+        return inner instanceof ExpressionStatement es
+                && es.expression() instanceof InvocationExpr inv
+                && "close".equals(inv.methodName())
+                && inv.target() instanceof VarExpr vx
+                && varName.equals(vx.name());
+    }
+
+    /** 从 try 体中移除尾部的 null 守卫 close 语句. */
+    private Statement removeCloseFromBody(Statement tryBody, String varName) {
+        if (!(tryBody instanceof BlockStatement bs) || bs.statements().isEmpty()) {
+            return tryBody;
+        }
+        List<Statement> stmts = new ArrayList<>(bs.statements());
+        stmts.remove(stmts.size() - 1); // 移除尾部 close
+        return new BlockStatement(stmts);
     }
 
     /**
