@@ -57,8 +57,13 @@ import java.util.Set;
  *       switch 表达式结果识别,typeSwitch 守卫),经 {@link ReducerOps} 回调;</li>
  *   <li>{@link LoopTranslator} — 循环模式翻译(循环体结构化 continue/break,
  *       do-while/while 包装与条件引用声明提升),经 {@link ReducerOps} 回调;</li>
+ *   <li>{@link ExprTranslator} — 单条指令 → AST 表达式/语句翻译
+ *       (translateStmt/translateExpr,含 INVOKE/CONDITION/NEW/PHI 等),
+ *       经 {@link ReducerOps} 回调;</li>
+ *   <li>{@link ExprCleanup} — 表达式布尔性/结构等价/菱形推断/局部变量注解
+ *       的纯静态助手;</li>
  *   <li>本类实现 {@link ReducerOps},仅保留依赖归约状态的编排逻辑:
- *       块分组翻译,if/try 结构化,IR→表达式树的语境化解析.</li>
+ *       块分组翻译,if/try 结构化,状态维护与回调.</li>
  * </ul>
  */
 public final class BlockReducer implements ReducerOps {
@@ -73,6 +78,9 @@ public final class BlockReducer implements ReducerOps {
 
     /** INDY 指令翻译器,将 invokedynamic 模式转换为 LambdaExpr */
     private final IndyTranslator indyTranslator;
+
+    /** 指令 → AST 表达式/语句翻译器(translateStmt/translateExpr 已拆分至此) */
+    private final ExprTranslator exprTranslator;
 
     /** NEW+INIT 合并的临时状态(CondenseConstruction 模式) */
     private Map<Integer, List<IrInstruction>> currentNewToInit = Map.of();
@@ -113,6 +121,43 @@ public final class BlockReducer implements ReducerOps {
      *  在翻译分支体时记录哪些块属于当前分支,以便 PHI 节点选择正确的操作数. */
     private Set<Integer> currentBranchBlocks = null;
 
+    // ── ReducerOps 回调实现(供 ExprTranslator 等翻译器访问归约状态) ──
+
+    @Override
+    public java.util.Map<Integer, List<IrInstruction>> currentNewToInit() {
+        return currentNewToInit;
+    }
+
+    @Override
+    public java.util.Map<Integer, String> currentMultiRefArrayVar() {
+        return currentMultiRefArrayVar;
+    }
+
+    @Override
+    public LinearIr currentIr() {
+        return currentIr;
+    }
+
+    @Override
+    public java.util.Map<Integer, Expression> phiReplacements() {
+        return phiReplacements;
+    }
+
+    @Override
+    public IndyTranslator indyTranslator() {
+        return indyTranslator;
+    }
+
+    @Override
+    public boolean currentMethodReturnsBoolean() {
+        return currentMethodReturnsBoolean;
+    }
+
+    @Override
+    public boolean isInstanceMethod() {
+        return isInstanceMethod;
+    }
+
     /** 当前方法是否返回 boolean 类型(缓存值) */
     private boolean currentMethodReturnsBoolean = false;
 
@@ -129,26 +174,15 @@ public final class BlockReducer implements ReducerOps {
         this.isInstanceMethod = isInstanceMethod;
         this.indyTranslator = new IndyTranslator(
                 this::getIndyAnnotation, this::valueToExpr);
+        this.exprTranslator = new ExprTranslator(this);
     }
 
-    /**
-     * 渲染 Variable 携带的 JSR-308 类型注解(0x40 局部变量),
-     * 按类型路径分组为渲染行映射.
-     * 注解类型名取简单名(与声明点同包/已导入假设一致).
-     */
-    private static java.util.Map<java.util.List<TypePathElement>,
-            List<String>> renderVarTypeAnnotations(Variable v) {
-        if (v.typeAnnotations() == null || v.typeAnnotations().isEmpty()) {
-            return java.util.Map.of();
-        }
-        return AnnotationRenderer.groupByTypePath(v.typeAnnotations());
-    }
 
     /**
      * 当前方法的泛型返回类型:优先取 Signature 属性解析的返回类型
      * (带泛型实参),否则回退描述符返回类型.
      */
-    private JavaType genericMethodReturnType() {
+    public JavaType genericMethodReturnType() {
         if (currentIr == null || currentIr.method() == null) {
             return null;
         }
@@ -166,24 +200,6 @@ public final class BlockReducer implements ReducerOps {
         return m.returnType();
     }
 
-    /**
-     * 目标类型绑定的菱形推断:声明类型带泛型实参且初始化式为泛型类的
-     * {@code new} 时置菱形标志——{@code List<String> x = new ArrayList<>()}
-     * 让 javac 从赋值目标重推断类型实参.仅当新对象类本身是泛型类时才置位.
-     */
-    private static Expression markTargetDiamond(Expression rhs, JavaType declType) {
-        if (!(rhs instanceof NewExpr ne)
-                || declType == null || declType.typeArguments().isEmpty()
-                || ne.instantiatedType() == null
-                || ne.instantiatedType().internalName() == null) {
-            return rhs;
-        }
-        if (!com.bingbaihanji.bdec.ir.GenericMethodResolver.isGenericClass(
-                ne.instantiatedType().internalName())) {
-            return rhs;
-        }
-        return ne.withDiamond();
-    }
 
     /** 记录归约语句与所属组. */
     private static void addStatement(List<Statement> statements,
@@ -193,31 +209,6 @@ public final class BlockReducer implements ReducerOps {
         stmtGroupIdx.add(gi);
     }
 
-    /** 表达式是否产生 boolean 值(用于 int 变量声明重标). */
-    private static boolean isBooleanExpression(Expression e) {
-        if (e == null) {
-            return false;
-        }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.BinExpr bin) {
-            BinaryOperator op = bin.operator();
-            return op == BinaryOperator.AND || op == BinaryOperator.OR
-                    || op == BinaryOperator.EQ || op == BinaryOperator.NE
-                    || op == BinaryOperator.LT || op == BinaryOperator.GT
-                    || op == BinaryOperator.LE || op == BinaryOperator.GE;
-        }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.UnExpr ue) {
-            return ue.operator() == com.bingbaihanji.bdec.ast.expr.UnaryOperator.NOT;
-        }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit) {
-            return lit.value() instanceof Boolean;
-        }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
-            return inv.returnType() != null
-                    && inv.returnType().kind() == TypeKind.BOOLEAN;
-        }
-        // 注意:不含 VarExpr——引用 int 变量的复制会误标为 boolean.
-        return false;
-    }
 
     /**
      * 将控制流图归约为 AST 语句块.
@@ -567,7 +558,7 @@ public final class BlockReducer implements ReducerOps {
      * 的 JSR-308 类型注解,按类型路径分组为渲染行映射.
      * target_info 为 [offset],与字节码偏移对齐.
      */
-    private java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
+    public java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
             List<String>> renderOffsetTypeAnnotations(int targetType, int offset) {
         if (currentIr == null || currentIr.method() == null) {
             return java.util.Map.of();
@@ -587,7 +578,7 @@ public final class BlockReducer implements ReducerOps {
      * (如 {@code new @A int[n]} 的 NEW 注解 offset=iload 的偏移,newarray 在其后).
      * 对象创建则指向 new 指令本身,不受影响.</p>
      */
-    private int arrayExprStartOffset(IrInstruction insn) {
+    public int arrayExprStartOffset(IrInstruction insn) {
         int min = insn.sourceOffset();
         for (Value op : insn.operands()) {
             if (op instanceof InstructionRef ref) {
@@ -738,12 +729,12 @@ public final class BlockReducer implements ReducerOps {
                     continue;
                 }
                 if (StatementUtils.isStatementRoot(insn)) {
-                    Statement s = translateStmt(insn);
+                    Statement s = exprTranslator.translateStmt(insn);
                     if (s != null) {
                         stmts.add(s);
                     }
                 } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
-                    Expression e = translateExpr(insn);
+                    Expression e = exprTranslator.translateExpr(insn);
                     if (e != null && !StatementUtils.isIgnorableExpr(e)) {
                         stmts.add(new ExpressionStatement(e));
                     }
@@ -761,7 +752,7 @@ public final class BlockReducer implements ReducerOps {
         List<IrInstruction> all = group.allIrInstructions(ir);
         for (IrInstruction insn : all) {
             if (insn.opcode() == IrOpcode.CONDITION) {
-                return translateExpr(insn);
+                return exprTranslator.translateExpr(insn);
             }
         }
         return null;
@@ -771,7 +762,7 @@ public final class BlockReducer implements ReducerOps {
     public Expression extractConditionFromHeader(BasicBlock header, LinearIr ir) {
         for (IrInstruction insn : ir.instructionsOf(header)) {
             if (insn.opcode() == IrOpcode.CONDITION) {
-                return translateExpr(insn);
+                return exprTranslator.translateExpr(insn);
             }
         }
         return null;
@@ -800,7 +791,7 @@ public final class BlockReducer implements ReducerOps {
                 }
             }
         }
-        return best != null ? translateExpr(best) : null;
+        return best != null ? exprTranslator.translateExpr(best) : null;
     }
 
     /**
@@ -946,7 +937,7 @@ public final class BlockReducer implements ReducerOps {
                 if (insn.id() == e.getKey()) {
                     stmts.add(new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
                             insn.resultType(), e.getValue(),
-                            (Expression) translateExpr(insn)));
+                            (Expression) exprTranslator.translateExpr(insn)));
                     break;
                 }
             }
@@ -1006,7 +997,7 @@ public final class BlockReducer implements ReducerOps {
 
             // 仅输出有副作用的指令作为语句
             if (StatementUtils.isStatementRoot(insn)) {
-                Statement s = translateStmt(insn);
+                Statement s = exprTranslator.translateStmt(insn);
 
                 if (s != null) {
                     // 后置自增折叠: println(v); v++; → println(v++),
@@ -1062,7 +1053,7 @@ public final class BlockReducer implements ReducerOps {
                 }
             } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
                 // 独立表达式(结果未被任何指令消费)——仍输出
-                Expression e = translateExpr(insn);
+                Expression e = exprTranslator.translateExpr(insn);
                 if (e != null && !StatementUtils.isIgnorableExpr(e)) {
                     stmts.add(new ExpressionStatement(e));
                 }
@@ -1072,7 +1063,7 @@ public final class BlockReducer implements ReducerOps {
                 // 裸 new 表达式语句(构造器有副作用,结果被 pop):
                 // new FileInputStream("x") —— 结果仅被合并的 <init> 消费,
                 // 不能因"结果被消费"而丢弃整条语句.
-                Expression e = translateExpr(insn);
+                Expression e = exprTranslator.translateExpr(insn);
                 if (e != null && !StatementUtils.isIgnorableExpr(e)) {
                     stmts.add(new ExpressionStatement(e));
                 }
@@ -1139,222 +1130,7 @@ public final class BlockReducer implements ReducerOps {
         return new BlockStatement(stmts);
     }
 
-    /**
-     * 将单条 IR 指令翻译为 AST 语句.
-     *
-     * <ul>
-     *   <li>MONITOR_ENTER/EXIT 由 SynchronizedRecognizer → SynchronizedStatement 处理</li>
-     *   <li>RETURN:对 <clinit> 抑制 "return;"(JVM 伪影)</li>
-     *   <li>THROW:必要时引入临时变量声明</li>
-     *   <li>STORE:首个定义版本 emit "Type name = value;",后续转为赋值</li>
-     * </ul>
-     */
-    private Statement translateStmt(IrInstruction insn) {
-        return switch (insn.opcode()) {
-            // MONITOR_ENTER/EXIT 由 SynchronizedRecognizer → SynchronizedStatement 处理.
-            // 如果在此处出现未处理的实例,跳过它们而非生成非法语法.
-            case MONITOR_ENTER, MONITOR_EXIT -> null;
-            case RETURN -> {
-                if (insn.operands().isEmpty()) {
-                    // 静态初始化器(<clinit>)不应输出 "return;" ——
-                    // 它只是 JVM 伪影,不是合法的 Java 源码.
-                    if (currentIr != null && "<clinit>".equals(currentIr.method().name())) {
-                        yield null;
-                    }
-                    yield new ReturnStatement(null);
-                } else {
-                    Expression retVal = valueToExpr(insn.operands().getFirst());
-                    // 目标类型绑定的菱形推断(return 场景):方法返回类型带泛型实参
-                    // 时置菱形标志(如 return new HashMap<>();)
-                    retVal = markTargetDiamond(retVal, genericMethodReturnType());
-                    // 应用语义注解中的布尔折叠
-                    retVal = AstCleanup.applyBooleanAnnotation(insn, retVal);
-                    // 对 boolean 返回方法,将整数字面量转为布尔值
-                    //(PHI 解析后的值可能跳过了注解)
-                    if (currentMethodReturnsBoolean
-                            && retVal instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit
-                            && lit.value() instanceof Integer i) {
-                        retVal = new com.bingbaihanji.bdec.ast.expr.LitExpr(
-                                i != 0, JavaType.BOOLEAN);
-                    }
-                    yield new ReturnStatement(retVal);
-                }
-            }
-            case THROW -> {
-                Expression thrown = translateExpr(insn);
-                if (thrown instanceof VarExpr v && v.name().startsWith("var")
-                        && tryDeclareVar("$exc$" + v.name())) {
-                    yield new com.bingbaihanji.bdec.ast.stmt.BlockStatement(List.of(
-                            new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
-                                    JavaType.classType("java/lang/Throwable"),
-                                    v.name(), null),
-                            new ThrowStatement(thrown)));
-                }
-                yield new ThrowStatement(thrown);
-            }
-            case STORE -> {
-                // 合成异常占位符(slot < 0):handler 入口由 JVM 隐式压栈的
-                // 异常对象. catch 子句的变量已由 catch 声明绑定,
-                // 此 STORE 不产生语句.
-                if (insn.operands().size() >= 2
-                        && insn.operands().get(1) instanceof Variable sv && sv.slot() < 0) {
-                    yield null;
-                }
-                // 对每个逻辑变量的首次存储产生 "Type name = value;".
-                // 同时使用 slot+version:任意 slot 上的 version 1 总是首个局部变量定义
-                //(version 0 = 参数).同时使用按作用域的追踪,
-                // 使相同 slot 上不同分支体的临时变量各自获得独立的声明.
-                Value target = insn.operands().getFirst();
-                // 排除参数(已在方法签名中声明)与 this 接收者.
-                // 注意不能用 slot() != 0 排除 this:静态方法里首个局部变量
-                // 同样落在 slot 0,会被误跳过声明,导致 SourceCleanup 用
-                // "int var = 0" 兜底(类型推断失效的根因).
-                if (target instanceof Variable v && !v.isParameter()
-                        && !"this".equals(v.name())) {
-                    String declName = v.name();
-                    // version 1 = 此 slot 的首个局部变量 → 始终声明.
-                    // version 2+ = 重新赋值 → 仅在新作用域中声明.
-                    // 始终调用 tryDeclareVar 以在作用域中追踪该变量名.
-                    boolean isFirstDef = v.version() == 1
-                            || tryDeclareVar(declName);
-                    if (v.version() == 1) {
-                        tryDeclareVar(declName); // 在作用域中追踪
-                    }
-                    if (isFirstDef) {
-                        Value source = insn.operands().size() > 1
-                                ? insn.operands().get(1) : null;
-                        Expression rhs = source != null
-                                ? valueToExpr(source) : null;
-                        // 声明类型:JVM 将 boolean 存为 int 0/1,变量类型可能是 INT;
-                        // 若初始化式为布尔表达式(如 boolean r = a && b 的短路合并),
-                        // 声明须重标为 boolean,否则 "int r = a && b" 无法编译.
-                        JavaType declType = v.genericType() != null
-                                ? v.genericType() : v.type();
-                        if (declType.kind() == TypeKind.INT && isBooleanExpression(rhs)) {
-                            declType = JavaType.BOOLEAN;
-                        }
-                        // 局部变量上的 JSR-308 类型注解(0x40):渲染后按
-                        // 类型路径分组附加到声明(如 "@A String x")
-                        yield new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
-                                declType, declName, markTargetDiamond(rhs, declType),
-                                renderVarTypeAnnotations(v));
-                    }
-                }
-                Expression e = translateExpr(insn);
-                yield e != null ? new ExpressionStatement(e) : null;
-            }
-            default -> {
-                Expression e = translateExpr(insn);
-                yield e != null ? new ExpressionStatement(e) : null;
-            }
-        };
-    }
 
-    /**
-     * 将 invokedynamic INVOKE 翻译为 LambdaExpr.
-     *
-     * <p>检测 lambda 表达式(lambda$method$N 模式)和方法引用.
-     * 对于字符串拼接(makeConcatWithConstants),委托到普通的 INVOKE 处理.
-     *
-     * <p>检测优先级:
-     * <ol>
-     *   <li>引导方法解析:检查实现方法句柄.
-     *       如果指向合成的 {@code lambda$xxx$N} 方法 → 表达式/块 lambda.
-     *       如果指向真实方法 → 方法引用({@code Class::method}).
-     *       如果指向 {@code <init>} → 构造方法引用({@code Class::new}).</li>
-     *   <li>基于名称的模式:名称中的 "::" 或 "new " 前缀.</li>
-     *   <li>SAM 名称启发式:如果 indy 名称是函数式接口方法名且无已解析信息,猜测方法引用.</li>
-     * </ol>
-     */
-    private Expression translateIndyInvoke(IrInstruction insn) {
-        String mName = insn.nameHint() != null ? insn.nameHint() : "lambda";
-        JavaType funcType = insn.resultType();
-        List<Value> operands = insn.operands();
-
-        // 字符串拼接:交由 StringConcatRewriter 后续处理
-        if (mName.contains("Concat") || mName.contains("concat")) {
-            return translateIndyAsRegularInvoke(insn);
-        }
-
-        // 从语义注解中读取已解析的引导方法信息
-        String implName = getIndyAnnotation(insn, "implName");
-        String implOwner = getIndyAnnotation(insn, "implOwner");
-        String implDescriptor = getIndyAnnotation(insn, "implDescriptor");
-
-        // 从操作数构建参数列表(捕获变量 + 工厂参数 → lambda 参数)
-        List<LambdaExpr.Param> params = buildIndyParams(operands);
-
-        // 当 INDY 操作数无法提供参数信息时(无捕获变量的 lambda),
-        // 使用实现方法描述符生成带类型的参数占位符,
-        // 确保 LambdaRewriter.buildLambdaBody 能正确替换
-        if (params.isEmpty() && implDescriptor != null && !implDescriptor.isEmpty()) {
-            params = StatementUtils.buildParamsFromDescriptor(implDescriptor);
-        }
-
-        // 检测方法引用模式(名称包含 "::" 或以 "new" 开头)
-        if (mName.contains("::")) {
-            String[] parts = mName.split("::", 2);
-            return LambdaExpr.methodRef(parts[0], parts.length > 1 ? parts[1] : "new",
-                    funcType);
-        }
-
-        // 通过 "new" 前缀的方法引用
-        if (mName.startsWith("new ")) {
-            String cls = mName.substring(4);
-            return LambdaExpr.methodRef(cls, "new", funcType);
-        }
-
-        // 已解析的引导方法信息:区分 lambda 和方法引用
-        if (implName != null && !implName.isEmpty() && implOwner != null) {
-            if (implName.startsWith("lambda$")) {
-                // Lambda:实现是合成的 lambda$xxx$N 方法
-                String bodyHint = "/* " + implName + " */";
-                return LambdaExpr.placeholder(params, bodyHint, funcType);
-            }
-            if ("<init>".equals(implName)) {
-                // 构造方法引用:ClassName::new
-                return LambdaExpr.methodRef(ExpressionTranslator.simplifyClassName(implOwner), "new", funcType);
-            }
-            // 方法引用:确定 owner 的表示方式
-            String owner = ExpressionTranslator.simplifyClassName(implOwner);
-            // 对于带捕获接收者的实例方法引用,使用变量名
-            if (!operands.isEmpty() && operands.getFirst() instanceof Variable v
-                    && v.name() != null && !"this".equals(v.name())) {
-                owner = v.name();
-            }
-            return LambdaExpr.methodRef(owner, implName, funcType);
-        }
-
-        // 回退启发式:如果名称是 SAM 方法名(非 lambda$),且返回类型类似函数式接口,猜测方法引用
-        if (NameUtils.isSamMethodName(mName) && NameUtils.isFunctionalInterfaceLike(funcType)) {
-            String owner = NameUtils.functionalInterfaceShortName(funcType);
-            if (owner != null && !owner.isEmpty()) {
-                return LambdaExpr.methodRef(owner, mName, funcType);
-            }
-        }
-
-        // Lambda 占位符回退
-        String bodyHint = "/* " + mName + " */";
-        return LambdaExpr.placeholder(params, bodyHint, funcType);
-    }
-
-    /** 从 INDY 操作数构建参数列表 */
-    private List<LambdaExpr.Param> buildIndyParams(List<Value> operands) {
-        List<LambdaExpr.Param> params = new ArrayList<>();
-        for (int i = 0; i < operands.size(); i++) {
-            Value op = operands.get(i);
-            JavaType pt = op.type();
-            String pName = "arg" + i;
-            if (op instanceof Variable v) {
-                String vn = v.name();
-                if (vn != null && !vn.startsWith("var") && !"this".equals(vn)) {
-                    pName = vn;
-                }
-            }
-            params.add(new LambdaExpr.Param(pName, pt));
-        }
-        return params;
-    }
 
     /** 从 INDY 注解属性中获取字符串值 */
     String getIndyAnnotation(IrInstruction insn, String key) {
@@ -1369,549 +1145,6 @@ public final class BlockReducer implements ReducerOps {
         return null;
     }
 
-    /** 回退方案:将 INDY 当作普通方法调用来处理 */
-    private Expression translateIndyAsRegularInvoke(IrInstruction insn) {
-        String mName = insn.nameHint() != null ? insn.nameHint() : "method";
-        List<Expression> args = new ArrayList<>();
-        for (Value op : insn.operands()) {
-            args.add(valueToExpr(op));
-        }
-        return new InvocationExpr(null, mName, args, insn.resultType());
-    }
-
-    /**
-     * 将单条 IR 指令翻译为 AST 表达式.
-     *
-     * <p>涵盖所有 IR 操作码类型的表达式翻译:CONST,LOAD,STORE(→赋值),
-     * FIELD_LOAD,FIELD_STORE(→字段赋值),BINARY,COMPARE,CONDITION,
-     * UNARY,INVOKE(含 INDY 的 lambda 翻译),CAST,NEW,NEW_ARRAY,
-     * INSTANCE_OF,ARRAY_LOAD,ARRAY_STORE,ARRAY_LENGTH,INC,THROW,PHI 等.
-     */
-    private Expression translateExpr(IrInstruction insn) {
-        return switch (insn.opcode()) {
-
-            // 常量
-            case CONST -> constToExpr(insn);
-
-            // 变量加载
-            case LOAD -> {
-                if (!insn.operands().isEmpty() && insn.operands().getFirst() instanceof Variable v) {
-                    yield varToExpr(v);
-                }
-                yield new VarExpr("var");
-            }
-
-            // 变量存储 → 赋值
-            case STORE -> {
-                Value target = insn.operands().getFirst();
-                Value source = insn.operands().size() > 1 ? insn.operands().get(1) : null;
-                Expression lhs;
-                if (target instanceof Variable v) {
-                    lhs = varToExpr(v);
-                } else {
-                    lhs = valueToExpr(target);
-                }
-                Expression rhs = source != null ? valueToExpr(source) : new VarExpr("varUnresolved");
-                // 复合赋值检测:x = x OP y → x OP= y
-                // 检测到时仅使用右操作数(剥离重复的左操作数)
-                BinaryOperator compoundOp = detectCompoundOp(lhs, rhs);
-                Expression assignRhs = rhs;
-                if (compoundOp != null && rhs instanceof BinExpr bin) {
-                    assignRhs = bin.right(); // 剥离重复的左操作数
-                }
-                // x += 1 → x++  /  x -= 1 → x--
-                if (compoundOp != null && assignRhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
-                        && lr.value() instanceof Integer i && i == 1) {
-                    if (compoundOp == BinaryOperator.ADD) {
-                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
-                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, lhs);
-                    } else if (compoundOp == BinaryOperator.SUB) {
-                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
-                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC, lhs);
-                    }
-                }
-                // 自增/自减检测:x = x + 1 → x++, x = x - 1 → x--
-                if (compoundOp == null && rhs instanceof BinExpr bin
-                        && expressionsMatch(lhs, bin.left())) {
-                    UnaryOperator incOp = StatementUtils.detectIncrement(bin);
-                    if (incOp != null) {
-                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(incOp, lhs);
-                    }
-                }
-                yield new AssignExpr(lhs, assignRhs, compoundOp);
-            }
-
-            // 字段加载——在隐式 'this' 上仅使用字段名,
-            // 除非存在同名的局部变量造成歧义.
-            // 对于带有 DECLARING_CLASS 标记的静态字段,输出 ClassName.fieldName.
-            case FIELD_LOAD -> {
-                Expression obj = insn.operands().isEmpty() ? null : valueToExpr(insn.operands().getFirst());
-                String fName = insn.nameHint() != null ? insn.nameHint() : "field";
-                // 检查是否有声明类注解的静态字段
-                if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS)) {
-                    var dcAnn = insn.getAnnotation(
-                            com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS);
-                    if (dcAnn != null) {
-                        String dc = dcAnn.getString(
-                                com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS);
-                        if (dc != null) {
-                            int lastSlash = dc.lastIndexOf('/');
-                            String simple = lastSlash >= 0
-                                    ? dc.substring(lastSlash + 1) : dc;
-                            // 内部类/内部枚举(如 EnumSwitchCheck$Color 的静态字段 RED):
-                            // 源码中用其简单名引用(Color.RED),不能保留 $ 二进名.
-                            int lastDollar = simple.lastIndexOf('$');
-                            obj = new VarExpr(lastDollar >= 0
-                                    ? simple.substring(lastDollar + 1) : simple);
-                        }
-                    }
-                }
-                // 在实例方法中,对 'this' 的字段加载 → 仅使用字段名,
-                // 除非局部变量与该字段名冲突(如 "lock = this.lock")
-                if (isInstanceMethod && obj instanceof VarExpr v && "this".equals(v.name())) {
-                    if (!localVarShadowsField(fName)) {
-                        yield new VarExpr(fName);
-                    }
-                }
-                yield new FieldAccessExpr(obj, fName);
-            }
-
-            // 字段存储 → 字段赋值
-            case FIELD_STORE -> {
-                // 操作数布局:静态字段(PUTSTATIC)仅 [value],实例字段(PUTFIELD)为 [obj, value].
-                // 值始终是最后一个操作数;对象仅实例字段存在.按布局取,避免静态字段被
-                // 误当成 obj,值被解析为 null 而回退 varUnresolved.
-                Value val = !insn.operands().isEmpty() ? insn.operands().getLast() : null;
-                Value obj = insn.operands().size() > 1 ? insn.operands().getFirst() : null;
-                String fName = insn.nameHint() != null ? insn.nameHint() : "field";
-                // 始终使用 this.fieldName 进行实例字段存储,
-                // 使输出能够清晰区分字段赋值和局部变量赋值.
-                // 防止将 "this.capacity = x" 错误输出为 "capacity = x".
-                Expression lhs;
-                if (isInstanceMethod && obj instanceof Variable v && v.slot() == 0) {
-                    lhs = new FieldAccessExpr(new VarExpr("this"), fName);
-                } else if (obj instanceof Variable v) {
-                    lhs = new FieldAccessExpr(varToExpr(v), fName);
-                } else {
-                    lhs = new FieldAccessExpr(null, fName);
-                }
-                Expression rhs = val != null ? valueToExpr(val) : new VarExpr("varUnresolved");
-                // 字段存储同样应用复合赋值和自增/自减检测
-                BinaryOperator compoundOp = detectCompoundOp(lhs, rhs);
-                Expression assignRhs = rhs;
-                if (compoundOp != null && rhs instanceof BinExpr bin) {
-                    assignRhs = bin.right();
-                }
-                // += 1 → ++, -= 1 → --
-                if (compoundOp != null && assignRhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
-                        && lr.value() instanceof Integer i && i == 1) {
-                    if (compoundOp == BinaryOperator.ADD) {
-                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
-                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, lhs);
-                    } else if (compoundOp == BinaryOperator.SUB) {
-                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
-                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC, lhs);
-                    }
-                }
-                if (compoundOp == null && rhs instanceof BinExpr bin
-                        && expressionsMatch(lhs, bin.left())) {
-                    UnaryOperator incOp = StatementUtils.detectIncrement(bin);
-                    if (incOp != null) {
-                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(incOp, lhs);
-                    }
-                }
-                yield new AssignExpr(lhs, assignRhs, compoundOp);
-            }
-
-            // 二元运算——使用原始字节码操作码推断运算符
-            case BINARY -> {
-                if (insn.operands().size() >= 2) {
-                    Expression left = valueToExpr(insn.operands().get(0));
-                    Expression right = valueToExpr(insn.operands().get(1));
-                    BinaryOperator binOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
-                    yield new BinExpr(binOp != null ? binOp : BinaryOperator.ADD, left, right);
-                }
-                yield new VarExpr("/* binary */");
-            }
-
-            // 比较运算
-            case COMPARE -> {
-                if (insn.operands().size() >= 2) {
-                    Expression left = valueToExpr(insn.operands().get(0));
-                    Expression right = valueToExpr(insn.operands().get(1));
-                    yield new BinExpr(BinaryOperator.EQ, left, right);
-                }
-                yield new VarExpr("/* compare */");
-            }
-
-            // 条件——使用原始字节码操作码推断比较运算符
-            case CONDITION -> {
-                if (insn.operands().size() >= 2) {
-                    Value leftOp = insn.operands().get(0);
-                    Value rightOp = insn.operands().get(1);
-
-                    // 检测布尔变量与 0 的比较:
-                    //   boolean == 0 → !boolean,  boolean != 0 → boolean
-                    // 此处理用于将 IFEQ/IFNE 字节码转为 if(flag) / if(!flag).
-                    // 同时处理返回布尔的函数调用(desiredAssertionStatus 等).
-                    // 短路合并(boolean r = a && b)的 r 在字节码中存为 int 0/1,
-                    // 但其定义 STORE←PHI 已被折叠为布尔表达式——同样按布尔处理.
-                    boolean leftIsBool = StatementUtils.isBooleanValue(leftOp)
-                            || isBooleanPhiReplacedVariable(leftOp);
-                    boolean rightIsBool = StatementUtils.isBooleanValue(rightOp)
-                            || isBooleanPhiReplacedVariable(rightOp);
-                    boolean rightIsZero = rightOp instanceof ConstantValue cv
-                            && cv.value() instanceof Integer i && i == 0;
-                    boolean leftIsZero = leftOp instanceof ConstantValue cv
-                            && cv.value() instanceof Integer i && i == 0;
-
-                    BinaryOperator cmpOp = IrInstruction.binaryOpFromBytecode(insn.originalOpcode());
-
-                    // 布尔+0 简化:仅当布尔值不来自 COMPARE 时适用.
-                    // COMPARE+CONDITION 需要保留原始比较运算符(如 GT),
-                    // 由下方的 COMPARE 合并逻辑处理.
-                    boolean leftFromCompare = leftOp instanceof InstructionRef ref
-                            && ref.instruction().opcode() == IrOpcode.COMPARE;
-                    boolean rightFromCompare = rightOp instanceof InstructionRef ref
-                            && ref.instruction().opcode() == IrOpcode.COMPARE;
-
-                    if (leftIsBool && rightIsZero && !leftFromCompare) {
-                        Expression varExpr = valueToExpr(leftOp);
-                        if (cmpOp == BinaryOperator.EQ) {
-                            yield new UnExpr(UnaryOperator.NOT, varExpr);
-                        } else if (cmpOp == BinaryOperator.NE) {
-                            yield varExpr;
-                        }
-                    }
-                    if (rightIsBool && leftIsZero && !rightFromCompare) {
-                        Expression varExpr = valueToExpr(rightOp);
-                        if (cmpOp == BinaryOperator.EQ) {
-                            yield new UnExpr(UnaryOperator.NOT, varExpr);
-                        } else if (cmpOp == BinaryOperator.NE) {
-                            yield varExpr;
-                        }
-                    }
-
-                    // 检测 COMPARE+CONDITION 模式
-                    Value cmpVal = null;
-                    if (rightOp instanceof InstructionRef ref
-                            && ref.instruction().opcode() == IrOpcode.COMPARE) {
-                        cmpVal = rightOp;
-                    } else if (leftOp instanceof InstructionRef ref
-                            && ref.instruction().opcode() == IrOpcode.COMPARE) {
-                        cmpVal = leftOp;
-                    }
-
-                    if (cmpVal != null) {
-                        IrInstruction cmp = ((InstructionRef) cmpVal).instruction();
-                        if (cmp.operands().size() >= 2) {
-                            Expression cmpLeft = valueToExpr(cmp.operands().get(0));
-                            Expression cmpRight = valueToExpr(cmp.operands().get(1));
-                            BinaryOperator cmpBinOp = IrInstruction.binaryOpFromBytecode(
-                                    insn.originalOpcode());
-                            if (cmpBinOp != null) {
-                                yield new BinExpr(cmpBinOp, cmpLeft, cmpRight);
-                            }
-                        }
-                    }
-
-                    // 常规条件(无 COMPARE 合并)
-                    Expression left = valueToExpr(leftOp);
-                    Expression right = valueToExpr(rightOp);
-                    yield new BinExpr(cmpOp != null ? cmpOp : BinaryOperator.EQ, left, right);
-                }
-                yield new VarExpr("/* condition */");
-            }
-
-            // 一元运算
-            case UNARY -> {
-                if (!insn.operands().isEmpty()) {
-                    UnaryOperator uop = StatementUtils.inferUnaryOp(insn.originalOpcode());
-                    yield new UnExpr(uop, valueToExpr(insn.operands().getFirst()));
-                }
-                yield new VarExpr("/* unary */");
-            }
-
-            // 方法调用——第一个操作数是接收者(非静态调用时)
-            case INVOKE -> {
-                // Invokedynamic(lambda / 方法引用):改为生成 LambdaExpr
-                if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
-                    yield indyTranslator.translate(insn);
-                }
-
-                List<Expression> args = new ArrayList<>();
-                boolean isConstructor = insn.hasTag(
-                        com.bingbaihanji.bdec.semantic.SemanticTag.CONSTRUCTOR_DELEGATION)
-                        || insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.THIS_CONSTRUCTOR)
-                        || insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.SUPER_CONSTRUCTOR);
-
-                String mName = insn.nameHint() != null ? insn.nameHint() : "method";
-
-                // 第一个操作数是接收者(IrBuilder 将其存储为目标)
-                int argStart = 0;
-                Expression target = null;
-                if (isConstructor) {
-                    // 构造函数:第一个操作数是 'this' (ALOAD_0)——跳过,使用语义名称
-                    argStart = 1;
-                    if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.SUPER_CONSTRUCTOR)) {
-                        mName = "super";
-                    } else if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.THIS_CONSTRUCTOR)) {
-                        mName = "this";
-                    } else {
-                        // 对象创建:NEW + INVOKESPECIAL <init> 模式
-                        // 将 "<init>" 替换为目标类的简单名称
-                        var ann = insn.getAnnotation(
-                                com.bingbaihanji.bdec.semantic.SemanticTag.CONSTRUCTOR_DELEGATION);
-                        if (ann != null) {
-                            String targetClass = ann.getString(
-                                    com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_TARGET_CLASS);
-                            if (targetClass != null) {
-                                int lastSlash = targetClass.lastIndexOf('/');
-                                mName = lastSlash >= 0
-                                        ? targetClass.substring(lastSlash + 1)
-                                        : targetClass;
-                            }
-                        }
-                    }
-                } else if (insn.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS)) {
-                    // 带声明类注解的静态调用 → 使用类名作为目标
-                    var dcAnn = insn.getAnnotation(
-                            com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS);
-                    if (dcAnn != null) {
-                        String dc = dcAnn.getString(
-                                com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS);
-                        if (dc != null) {
-                            // 静态调用目标:顶层类取包分隔后的简单名(com/foo/Bar → Bar);
-                            // 嵌套类/嵌套枚举(com/foo/Outer$Inner 或默认包的
-                            // Outer$Inner,如 EnumBinName$Color)取最后一个 $ 之后的段
-                            // (→ Inner/Color)。同一编译单元内嵌套类型以简单名可见,
-                            // 与下方 FIELD_LOAD 的静态字段目标处理保持同一约定;
-                            // 跨文件嵌套类(如 java/util/Map$Entry)理论上需
-                            // Outer.Inner + import,此处先按同编译单元简单名处理。
-                            // 匿名类($ 后跟数字)不适用此场景(源码无法对匿名类做静态调用)。
-                            int lastSlash = dc.lastIndexOf('/');
-                            String simple = lastSlash >= 0
-                                    ? dc.substring(lastSlash + 1) : dc;
-                            int lastDollar = simple.lastIndexOf('$');
-                            target = new VarExpr(lastDollar >= 0
-                                    ? simple.substring(lastDollar + 1) : simple);
-                        }
-                    }
-                    argStart = 0; // 所有操作数均为参数(无接收者)
-                } else if (!insn.operands().isEmpty()) {
-                    // 普通调用:第一个操作数是接收者 → 转为 target 表达式
-                    Value firstOp = insn.operands().getFirst();
-                    target = valueToExpr(firstOp);
-                    argStart = 1;
-                } else {
-                    // 无注解的静态调用——无目标
-                    argStart = 0;
-                }
-
-                for (int i = argStart; i < insn.operands().size(); i++) {
-                    args.add(valueToExpr(insn.operands().get(i)));
-                }
-                yield new InvocationExpr(target, mName, args, insn.resultType());
-            }
-
-            // 类型转换
-            case CAST -> {
-                Expression operand = !insn.operands().isEmpty()
-                        ? valueToExpr(insn.operands().getFirst()) : new VarExpr("varUnresolved");
-                yield new CastExpr(insn.resultType(), operand,
-                        renderOffsetTypeAnnotations(
-                                com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_CAST,
-                                insn.sourceOffset()));
-            }
-
-            // 对象创建——若已折叠则携带合并后的构造函数参数
-            case NEW -> {
-                NewExpr created;
-                if (currentNewToInit.containsKey(insn.id())) {
-                    List<IrInstruction> inits = currentNewToInit.get(insn.id());
-                    List<Expression> ctorArgs = new ArrayList<>();
-                    for (IrInstruction init : inits) {
-                        for (int i = 0; i < init.operands().size(); i++) {
-                            Value op = init.operands().get(i);
-                            // 跳过自引用(接收者 = 此 NEW 指令)
-                            if (op instanceof InstructionRef ref
-                                    && ref.instruction().id() == insn.id()) {
-                                continue;
-                            }
-                            ctorArgs.add(valueToExpr(op));
-                        }
-                    }
-                    // NewExpr 构造函数为 (type, dimensions, constructorArgs)
-                    // 注意:不再调用 stripEnclosingThis,因为 AstBuilder 保留了 this$0
-                    // 构造函数参数,调用处需传递 this 以保持一致性
-                    created = new NewExpr(insn.resultType(), List.of(), ctorArgs,
-                            List.of(), List.of(), renderOffsetTypeAnnotations(
-                            com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_NEW,
-                            insn.sourceOffset()));
-                } else {
-                    // NewExpr 构造函数为 (type, dimensions, constructorArgs)
-                    created = new NewExpr(insn.resultType(), List.of(), List.of(),
-                            List.of(), List.of(), renderOffsetTypeAnnotations(
-                            com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_NEW,
-                            insn.sourceOffset()));
-                }
-                // 菱形推断(有参):泛型类 + 存在参数个数匹配且涉及类型变量的构造器
-                // → 发射 new ArrayList<>(args),让 javac 从实参重推断类型实参.
-                // 无参 new 由声明目标类型置位(见 translateStmt 的 STORE 声明分支).
-                if (!created.constructorArgs().isEmpty()
-                        && created.instantiatedType() != null
-                        && created.instantiatedType().internalName() != null
-                        && com.bingbaihanji.bdec.ir.GenericMethodResolver.isGenericClass(
-                        created.instantiatedType().internalName())
-                        && com.bingbaihanji.bdec.ir.GenericMethodResolver.ctorParamsBindTypeVars(
-                        created.instantiatedType().internalName(),
-                        created.constructorArgs().size())) {
-                    created = created.withDiamond();
-                }
-                yield created;
-            }
-            case NEW_ARRAY -> {
-                // 从操作数中提取数组大小(由 NEWARRAY/ANEWARRAY 弹出栈的值)
-                List<Expression> dims = new ArrayList<>();
-                for (Value op : insn.operands()) {
-                    dims.add(valueToExpr(op));
-                }
-                if (dims.isEmpty()) {
-                    dims.add(new VarExpr("varUnresolved"));
-                }
-                yield new NewExpr(insn.resultType(), dims, List.of(),
-                        List.of(), List.of(), renderOffsetTypeAnnotations(
-                        com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_NEW,
-                        arrayExprStartOffset(insn)));
-            }
-
-            // instanceof:nameHint 携带目标类内部名
-            case INSTANCE_OF -> {
-                Expression obj = !insn.operands().isEmpty()
-                        ? valueToExpr(insn.operands().getFirst()) : new VarExpr("obj");
-                JavaType checkedType = insn.nameHint() != null
-                        ? JavaType.classType(insn.nameHint())
-                        : JavaType.classType("java/lang/Object");
-                yield new InstanceOfExpr(obj, checkedType,
-                        renderOffsetTypeAnnotations(
-                                com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_INSTANCEOF,
-                                insn.sourceOffset()));
-            }
-
-            // 数组元素加载:a[i]
-            case ARRAY_LOAD -> {
-                Expression arr = !insn.operands().isEmpty()
-                        ? valueToExpr(insn.operands().get(0)) : new VarExpr("arr");
-                Expression idx = insn.operands().size() > 1
-                        ? valueToExpr(insn.operands().get(1)) : new VarExpr("i");
-                yield new ArrayAccessExpr(arr, idx);
-            }
-            // 数组元素存储:a[i] = v
-            case ARRAY_STORE -> {
-                Expression arr = !insn.operands().isEmpty()
-                        ? valueToExpr(insn.operands().get(0)) : new VarExpr("arr");
-                // 若数组操作数是多次引用的 NEW_ARRAY,
-                // 使用临时变量而非内联 new 表达式(语义正确性).
-                if (!insn.operands().isEmpty()
-                        && insn.operands().get(0) instanceof InstructionRef ref
-                        && currentMultiRefArrayVar.containsKey(ref.instruction().id())) {
-                    arr = new VarExpr(currentMultiRefArrayVar.get(ref.instruction().id()));
-                }
-                Expression idx = insn.operands().size() > 1
-                        ? valueToExpr(insn.operands().get(1)) : new VarExpr("i");
-                Expression val = insn.operands().size() > 2
-                        ? valueToExpr(insn.operands().get(2)) : new VarExpr("varUnresolved");
-                yield new AssignExpr(new ArrayAccessExpr(arr, idx), val);
-            }
-
-            // 数组长度
-            case ARRAY_LENGTH -> {
-                Expression arr = !insn.operands().isEmpty()
-                        ? valueToExpr(insn.operands().getFirst()) : new VarExpr("arr");
-                yield new FieldAccessExpr(arr, "length");
-            }
-
-            // 自增指令(IINC)——操作数: [readVar, writeVar, ConstantValue(incr)]
-            case INC -> {
-                if (insn.operands().size() >= 3 && insn.operands().getFirst() instanceof Variable v) {
-                    Value incr = insn.operands().get(2); // 索引 2 是增量值
-                    VarExpr var = varToExpr(v);
-                    Expression rhs = valueToExpr(incr);
-                    // x += c → 若 c == 1 则转为 x++,c == -1 转为 x--
-                    if (rhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
-                            && lr.value() instanceof Integer i) {
-                        if (i == 1) {
-                            yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
-                                    com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, var);
-                        }
-                        if (i == -1) {
-                            yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
-                                    com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC, var);
-                        }
-                    }
-                    yield new AssignExpr(var, new BinExpr(BinaryOperator.ADD, var, rhs));
-                }
-                yield new VarExpr("/* inc */");
-            }
-
-            // 抛出异常
-            case THROW -> !insn.operands().isEmpty() ? valueToExpr(insn.operands().getFirst()) : new VarExpr("ex");
-
-            // PHI——选取属于当前分支上下文的操作数.
-            // 如果已知当前正在翻译哪些块(branchBlocks 提示),
-            // 选取定义指令位于这些块中的 PHI 操作数.
-            // 否则选取第一个非平凡操作数.
-            case PHI -> {
-                // 条件赋值折叠已把此 PHI 折叠为三元表达式(见 IfTranslator)——
-                // 后续 STORE 翻译时直接返回折叠结果,避免丢 false 分支值.
-                Expression replaced = phiReplacements.get(insn.id());
-                if (replaced != null) {
-                    yield replaced;
-                }
-                Expression resolved = null;
-                if (currentBranchBlocks != null) {
-                    for (Value op : insn.operands()) {
-                        if (op instanceof InstructionRef ref
-                                && currentBranchBlocks.contains(ref.instruction().blockId())) {
-                            resolved = translateExpr(ref.instruction());
-                            break;
-                        }
-                    }
-                }
-                if (resolved == null) {
-                    // value 位置(无分支上下文)的三元重建:PHI 作为 CONDITION/BINARY
-                    // 等指令的操作数被消费时,按 CFG 菱形还原为 CondExpr,避免取首
-                    // 操作数静默丢 false 分支值.
-                    if (currentBranchBlocks == null && currentIr != null) {
-                        resolved = IfTranslator.resolvePhiAsTernary(this, insn, currentIr);
-                    }
-                }
-                if (resolved == null) {
-                    for (Value op : insn.operands()) {
-                        if (op instanceof InstructionRef ref) {
-                            resolved = translateExpr(ref.instruction());
-                            break;
-                        }
-                        if (op instanceof ConstantValue(Object value, JavaType type)) {
-                            resolved = new LitExpr(value, type);
-                            break;
-                        }
-                        if (op instanceof com.bingbaihanji.bdec.ir.DynamicConstantValue dcv) {
-                            resolved = ExpressionTranslator.dynamicConstToExpr(dcv);
-                            break;
-                        }
-                        if (op instanceof Variable v) {
-                            resolved = varToExpr(v);
-                            break;
-                        }
-                    }
-                }
-                yield resolved != null ? resolved : new VarExpr("merge" + insn.id());
-            }
-
-            default -> new VarExpr("/* " + insn.opcode() + " */");
-        };
-    }
 
     /** 将 Value(Variable / ConstantValue / InstructionRef)转为 Expression.
      *  对于 InstructionRef,递归翻译引用的指令以构建正确的表达式树. */
@@ -1921,12 +1154,12 @@ public final class BlockReducer implements ReducerOps {
                 && currentMultiRefArrayVar.containsKey(ref.instruction().id())) {
             return new VarExpr(currentMultiRefArrayVar.get(ref.instruction().id()));
         }
-        return ExpressionTranslator.valueToExpr(v, currentVarStoreSource, this::translateExpr);
+        return ExpressionTranslator.valueToExpr(v, currentVarStoreSource, exprTranslator::translateExpr);
     }
 
     /** 变量 v 是否由布尔 phiReplacement 定义(短路合并 boolean r = a && b 的 r,
      *  字节码存为 int 0/1,但其定义 STORE←PHI 已被 IfTranslator 折叠为布尔表达式). */
-    private boolean isBooleanPhiReplacedVariable(Value v) {
+    public boolean isBooleanPhiReplacedVariable(Value v) {
         if (!(v instanceof Variable var) || currentIr == null) {
             return false;
         }
@@ -1943,58 +1176,21 @@ public final class BlockReducer implements ReducerOps {
         return false;
     }
 
-    /** 检测复合赋值模式:{@code x = x OP y} → {@code x OP= y}.
-     *  若模式匹配则返回运算符,否则返回 null(普通赋值). */
-    private BinaryOperator detectCompoundOp(Expression lhs, Expression rhs) {
-        if (!(rhs instanceof BinExpr bin)) {
-            return null;
-        }
-        // 匹配:lhs 与二元表达式的左操作数匹配
-        if (expressionsMatch(lhs, bin.left())) {
-            return bin.operator();
-        }
-        return null;
-    }
-
-    /** 检查两个表达式在结构上是否等价(相同的变量/字段).
-     *  处理等价关系:{@code VarExpr("size") ≈ FieldAccessExpr(this, "size")},
-     *  这是由于 {@code FIELD_LOAD on this} 发出了裸字段名. */
-    private boolean expressionsMatch(Expression a, Expression b) {
-        if (a instanceof VarExpr va && b instanceof VarExpr vb) {
-            return va.name().equals(vb.name());
-        }
-        if (a instanceof FieldAccessExpr fa && b instanceof FieldAccessExpr fb) {
-            return fa.fieldName().equals(fb.fieldName())
-                    && (fa.target() == null && fb.target() == null
-                    || (fa.target() != null && fb.target() != null
-                    && expressionsMatch(fa.target(), fb.target())));
-        }
-        // 跨类型:VarExpr("size") 匹配 FieldAccessExpr(this, "size")
-        if (a instanceof VarExpr va && b instanceof FieldAccessExpr fb) {
-            return fb.target() instanceof VarExpr t && "this".equals(t.name())
-                    && va.name().equals(fb.fieldName());
-        }
-        if (b instanceof VarExpr vb && a instanceof FieldAccessExpr fa) {
-            return fa.target() instanceof VarExpr t && "this".equals(t.name())
-                    && vb.name().equals(fa.fieldName());
-        }
-        return false;
-    }
 
     /** 将 Variable 转为相应的 VarExpr.
      *  使用变量名(优先从 LocalVariableTable 获取,回退到 "var" + originalIndex).
      *  代表 slot-0 临时值的版本化变量与 {@code this} 进行区分. */
-    private VarExpr varToExpr(Variable var) {
+    public VarExpr varToExpr(Variable var) {
         return ExpressionTranslator.varToExpr(var, isInstanceMethod);
     }
 
     /** 将 CONST IR 转为 LitExpr */
-    private Expression constToExpr(IrInstruction insn) {
+    public Expression constToExpr(IrInstruction insn) {
         return ExpressionTranslator.constToExpr(insn);
     }
 
     /** 检查是否有局部变量与给定字段名相同,这将在剥离 "this." 前缀时造成歧义 */
-    private boolean localVarShadowsField(String fieldName) {
+    public boolean localVarShadowsField(String fieldName) {
         if (currentIr == null || fieldName == null) {
             return false;
         }
@@ -2130,12 +1326,12 @@ public final class BlockReducer implements ReducerOps {
                 continue;
             }
             if (StatementUtils.isStatementRoot(insn)) {
-                Statement s = translateStmt(insn);
+                Statement s = exprTranslator.translateStmt(insn);
                 if (s != null) {
                     stmts.add(s);
                 }
             } else if (!consumed.contains(insn.id()) && insn.resultValue() != null) {
-                Expression e = translateExpr(insn);
+                Expression e = exprTranslator.translateExpr(insn);
                 if (e != null && !StatementUtils.isIgnorableExpr(e)) {
                     stmts.add(new ExpressionStatement(e));
                 }

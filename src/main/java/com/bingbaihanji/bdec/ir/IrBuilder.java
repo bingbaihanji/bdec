@@ -854,6 +854,28 @@ public final class IrBuilder {
         if (idx < locals.length) {
             locals[idx] = writeVar;
         }
+        // 数值混淆消除(参照 CFR ControlFlowNumericObf):同块相邻 INC 合并.
+        // x += 100; x -= 98 → x += 2——前一 INC 写入的变量版本即本次读取的版本
+        //(连续版本),且两指令相邻同块时合并增量.
+        // 跨块不合并:switch 贯穿中 case1 的 r+=1 与 case2 的 r+=2 在不同块,
+        // 直接进入 case2 时只有 r+=2,合并成 r+=3 会语义错误.
+        if (!instructions.isEmpty()) {
+            IrInstruction prev = instructions.get(instructions.size() - 1);
+            if (prev.opcode() == IrOpcode.INC && prev.blockId() == blockId
+                    && prev.operands().size() >= 3
+                    && prev.operands().get(1) instanceof Variable pv
+                    && pv.slot() == readVar.slot() && pv.version() == readVar.version()
+                    && prev.operands().get(2) instanceof ConstantValue pcv
+                    && pcv.value() instanceof Number pn) {
+                int combined = pn.intValue() + incr;
+                instructions.set(instructions.size() - 1,
+                        new IrInstruction(prev.id(), IrOpcode.INC, JavaType.INT,
+                                List.of(prev.operands().get(0), writeVar,
+                                        new ConstantValue(combined, JavaType.INT)),
+                                prev.sourceOffset(), prev.blockId()));
+                return; // 已合并进前一条,不新增
+            }
+        }
         instructions.add(new IrInstruction(nextId(), IrOpcode.INC, JavaType.INT,
                 List.of(readVar, writeVar, new ConstantValue(incr, JavaType.INT)),
                 offset, blockId));

@@ -214,5 +214,6 @@ P2 — 架构健康（可维护性）
 
 P3 — 功能补齐（投入大，收益中）
 
+
 6. 反混淆：先从 CFR op02obf 抄思路——识别除零/NPE/算术死分支的控制流混淆，再补算术/XOR 简化
 7. 测试语料扩充：CfrDiff 16 → 50+，补 Procyon 的 GenericsTests/SyncTests/EnhancedTryTests 主题

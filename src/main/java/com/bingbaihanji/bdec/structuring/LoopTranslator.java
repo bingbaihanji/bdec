@@ -231,22 +231,37 @@ public final class LoopTranslator {
             return StatementUtils.blockOf(result);
         }
         if (fExit && !tExit) {
-            // FALSE 分支是 break:if (!cond) break; + TRUE 区域
-            result.add(new IfStatement(AstCleanup.negateCond(cond),
-                    new com.bingbaihanji.bdec.ast.stmt.BreakStatement(), null));
-            if (!tLatch) {
-                result.addAll(translateLoopRegion(ops, trueTarget, latch, body, exitTargets,
-                        allGroups, ir, consumed, graph));
+            if (leadsOnlyToReturn(falseTarget, body, exitTargets, graph, ir, new HashSet<>())) {
+                // FALSE 分支是方法返回:if (!cond) return <值>;(翻译区域产生 return)
+                result.add(new IfStatement(AstCleanup.negateCond(cond),
+                        StatementUtils.blockOf(translateLoopRegion(ops, falseTarget, latch,
+                                body, exitTargets, allGroups, ir, consumed, graph)), null));
+            } else {
+                // FALSE 分支是 break:if (!cond) break; + TRUE 区域
+                result.add(new IfStatement(AstCleanup.negateCond(cond),
+                        new com.bingbaihanji.bdec.ast.stmt.BreakStatement(), null));
+                if (!tLatch) {
+                    result.addAll(translateLoopRegion(ops, trueTarget, latch, body, exitTargets,
+                            allGroups, ir, consumed, graph));
+                }
             }
             return StatementUtils.blockOf(result);
         }
         if (tExit && !fExit) {
-            // TRUE 分支是 break:if (cond) break; + FALSE 区域
-            result.add(new IfStatement(cond,
-                    new com.bingbaihanji.bdec.ast.stmt.BreakStatement(), null));
-            if (!fLatch) {
-                result.addAll(translateLoopRegion(ops, falseTarget, latch, body, exitTargets,
-                        allGroups, ir, consumed, graph));
+            if (leadsOnlyToReturn(trueTarget, body, exitTargets, graph, ir, new HashSet<>())) {
+                // TRUE 分支是方法返回:if (cond) return <值>;(for-each 早返回,
+                // 如 for(e:list){if(...) return e;} —— 出口是方法 RETURN 而非 break)
+                result.add(new IfStatement(cond,
+                        StatementUtils.blockOf(translateLoopRegion(ops, trueTarget, latch,
+                                body, exitTargets, allGroups, ir, consumed, graph)), null));
+            } else {
+                // TRUE 分支是 break:if (cond) break; + FALSE 区域
+                result.add(new IfStatement(cond,
+                        new com.bingbaihanji.bdec.ast.stmt.BreakStatement(), null));
+                if (!fLatch) {
+                    result.addAll(translateLoopRegion(ops, falseTarget, latch, body, exitTargets,
+                            allGroups, ir, consumed, graph));
+                }
             }
             return StatementUtils.blockOf(result);
         }
@@ -315,6 +330,42 @@ public final class LoopTranslator {
             }
         }
         return any;
+    }
+
+    /** 从 t 出发的路径是否最终通向方法 RETURN(而非普通循环 break). */
+    static boolean leadsOnlyToReturn(BasicBlock t, Set<BasicBlock> body,
+                                     Set<BasicBlock> exitTargets, ControlFlowGraph graph,
+                                     LinearIr ir, Set<BasicBlock> visited) {
+        if (!visited.add(t)) {
+            return true;
+        }
+        if (!body.contains(t) || exitTargets.contains(t)) {
+            // 在循环体外:出口块含 RETURN 指令即方法返回
+            return blockIsReturn(t, ir);
+        }
+        if (!ir.instructionsOf(t).isEmpty()) {
+            return false;
+        }
+        boolean any = false;
+        for (var e : graph.outgoingOf(t)) {
+            if (e.kind() == EdgeKind.EXCEPTION) {
+                continue;
+            }
+            any = true;
+            if (!leadsOnlyToReturn(e.target(), body, exitTargets, graph, ir, visited)) {
+                return false;
+            }
+        }
+        return any;
+    }
+
+    /** 块中是否含 RETURN 指令(方法出口). */
+    private static boolean blockIsReturn(BasicBlock b, LinearIr ir) {
+        if (b == null) {
+            return false;
+        }
+        return ir.instructionsOf(b).stream()
+                .anyMatch(i -> i.opcode() == IrOpcode.RETURN);
     }
 
 

@@ -33,6 +33,21 @@ public final class TypeReferenceUtil {
     }
 
     /**
+     * 嵌套类型的嵌套简单名:剥包前缀 + 最后一个 {@code $} 段.
+     * 如 {@code com/example/Outer$Inner} → {@code Inner}(同编译单元嵌套类型
+     * 引用用嵌套简单名;二进制名 {@code Outer$Inner} 是非法标识符).
+     * 匿名类({@code X$1})保持原样(数字后缀非合法类型名).
+     */
+    public static String nestedSimpleName(String internal) {
+        String simple = simpleName(internal);
+        int lastDollar = simple.lastIndexOf('$');
+        if (lastDollar >= 0 && !ClassNames.isAnonymousClassName(simple)) {
+            return simple.substring(lastDollar + 1);
+        }
+        return simple;
+    }
+
+    /**
      * 将签名解析出的父类/接口类型渲染为源码引用名.
      * <ul>
      *   <li>根节点(父类/接口自身)用简单名(依赖 import),维持原有约定;</li>
@@ -77,9 +92,9 @@ public final class TypeReferenceUtil {
                 String internal = t.internalName();
                 String simple = internal != null ? simpleName(internal) : "Object";
                 if (path.isEmpty()) {
-                    // 根节点:维持原有简单名渲染,与调用处的
-                    // collectImport(JavaType.classType(...)) 配合
-                    sb.append(simple);
+                    // 根节点:嵌套类型用嵌套简单名(如 implements Shape,
+                    // 而非二进制名 Outer$Shape——非法标识符无法重编译).
+                    sb.append(nestedSimpleName(internal != null ? internal : "Object"));
                 } else {
                     // 泛型实参:沿用字段类型的短名 + import 收集约定
                     if (!ClassNames.isAnonymousClassName(simple)) {
