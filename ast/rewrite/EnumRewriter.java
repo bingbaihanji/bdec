@@ -299,7 +299,7 @@ public class EnumRewriter implements RewriteRule {
                     continue;
                 }
                 // 常量体方法此前绕过标准 AST 重写链直接渲染,导致 lambda
-                // 占位符不合并、for-each 不重建、三元/装箱等不恢复.此处对
+                // 占位符不合并,for-each 不重建,三元/装箱等不恢复.此处对
                 // 方法体应用同一批重写器(以内部类为 context.classFile,
                 // 使 LambdaRewriter 能在该类中找到 lambda$ 合成方法).
                 md = rewriteEnumBodyMethod(md, ctx, inner, unit);
@@ -398,8 +398,8 @@ public class EnumRewriter implements RewriteRule {
     }
 
     /**
-     * 对常量体方法的方法体应用标准 AST 重写链,使 lambda 占位符合并、
-     * for-each 重建、三元/装箱等恢复与常规方法一致.
+     * 对常量体方法的方法体应用标准 AST 重写链,使 lambda 占位符合并,
+     * for-each 重建,三元/装箱等恢复与常规方法一致.
      *
      * <p>将单个方法包装进合成编译单元,以内部类自身为
      * {@code context.classFile()}(LambdaRewriter 需在该类中找到

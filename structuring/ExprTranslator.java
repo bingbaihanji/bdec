@@ -1,8 +1,29 @@
 package com.bingbaihanji.bdec.structuring;
 
-import com.bingbaihanji.bdec.ast.expr.*;
-import com.bingbaihanji.bdec.ast.stmt.*;
-import com.bingbaihanji.bdec.ir.*;
+import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.AssignExpr;
+import com.bingbaihanji.bdec.ast.expr.BinExpr;
+import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
+import com.bingbaihanji.bdec.ast.expr.CastExpr;
+import com.bingbaihanji.bdec.ast.expr.Expression;
+import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.InstanceOfExpr;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
+import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.NewExpr;
+import com.bingbaihanji.bdec.ast.expr.UnExpr;
+import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
+import com.bingbaihanji.bdec.ast.expr.VarExpr;
+import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
+import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
+import com.bingbaihanji.bdec.ir.ConstantValue;
+import com.bingbaihanji.bdec.ir.InstructionRef;
+import com.bingbaihanji.bdec.ir.IrInstruction;
+import com.bingbaihanji.bdec.ir.IrOpcode;
+import com.bingbaihanji.bdec.ir.Value;
+import com.bingbaihanji.bdec.ir.Variable;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 
@@ -443,11 +464,11 @@ public final class ExprTranslator {
                             // 静态调用目标:顶层类取包分隔后的简单名(com/foo/Bar → Bar);
                             // 嵌套类/嵌套枚举(com/foo/Outer$Inner 或默认包的
                             // Outer$Inner,如 EnumBinName$Color)取最后一个 $ 之后的段
-                            // (→ Inner/Color)。同一编译单元内嵌套类型以简单名可见,
+                            // (→ Inner/Color).同一编译单元内嵌套类型以简单名可见,
                             // 与下方 FIELD_LOAD 的静态字段目标处理保持同一约定;
                             // 跨文件嵌套类(如 java/util/Map$Entry)理论上需
-                            // Outer.Inner + import,此处先按同编译单元简单名处理。
-                            // 匿名类($ 后跟数字)不适用此场景(源码无法对匿名类做静态调用)。
+                            // Outer.Inner + import,此处先按同编译单元简单名处理.
+                            // 匿名类($ 后跟数字)不适用此场景(源码无法对匿名类做静态调用).
                             int lastSlash = dc.lastIndexOf('/');
                             String simple = lastSlash >= 0
                                     ? dc.substring(lastSlash + 1) : dc;

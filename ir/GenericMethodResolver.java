@@ -42,10 +42,6 @@ public final class GenericMethodResolver {
     private GenericMethodResolver() {
     }
 
-    /** 方法签名模板:参数类型与返回类型(含类型变量). */
-    private record MethodSig(JavaType[] paramTypes, JavaType returnType) {
-    }
-
     /**
      * 从调用点实参推断泛型返回类型.
      *
@@ -367,15 +363,33 @@ public final class GenericMethodResolver {
     }
 
     private static JavaType primitiveOf(Class<?> c) {
-        if (c == int.class) return JavaType.INT;
-        if (c == boolean.class) return JavaType.BOOLEAN;
-        if (c == byte.class) return JavaType.BYTE;
-        if (c == short.class) return JavaType.SHORT;
-        if (c == char.class) return JavaType.CHAR;
-        if (c == long.class) return JavaType.LONG;
-        if (c == float.class) return JavaType.FLOAT;
-        if (c == double.class) return JavaType.DOUBLE;
-        if (c == void.class) return JavaType.VOID;
+        if (c == int.class) {
+            return JavaType.INT;
+        }
+        if (c == boolean.class) {
+            return JavaType.BOOLEAN;
+        }
+        if (c == byte.class) {
+            return JavaType.BYTE;
+        }
+        if (c == short.class) {
+            return JavaType.SHORT;
+        }
+        if (c == char.class) {
+            return JavaType.CHAR;
+        }
+        if (c == long.class) {
+            return JavaType.LONG;
+        }
+        if (c == float.class) {
+            return JavaType.FLOAT;
+        }
+        if (c == double.class) {
+            return JavaType.DOUBLE;
+        }
+        if (c == void.class) {
+            return JavaType.VOID;
+        }
         return JavaType.classType("java/lang/Object");
     }
 
@@ -481,5 +495,9 @@ public final class GenericMethodResolver {
             }
             default -> t;
         };
+    }
+
+    /** 方法签名模板:参数类型与返回类型(含类型变量). */
+    private record MethodSig(JavaType[] paramTypes, JavaType returnType) {
     }
 }

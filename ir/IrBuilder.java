@@ -90,6 +90,40 @@ public final class IrBuilder {
     // ── 前驱合并 ────────────────────────────────────────────────────
 
     /**
+     * 按变量的 LVT 声明类型折叠被存常量(仅 boolean/char).
+     *
+     * <p>JVM 操作数栈上这些窄类型一律表现为 int(ICONST/BIPUSH 等):
+     * <ul>
+     *   <li>boolean 必须折叠——否则渲染成非法的 {@code boolean b = 1};</li>
+     *   <li>char 折叠为字符字面量(与 handleInvoke 的 char 参数折叠一致),
+     *       否则 {@code char c = 59} 失真;</li>
+     *   <li>byte/short 不折叠——常量整型直接用于 {@code byte b = 10} 声明
+     *       是合法的(常量收窄赋值),而折叠后经发射器会多出 {@code (byte) }
+     *       冗余强转.</li>
+     * </ul>
+     * 沿 InstructionRef 链追溯底层 CONST 常量,按声明类型重标.</p>
+     */
+    private static Value foldStoreConstant(Value val, JavaType declaredType) {
+        if (declaredType == null) {
+            return val;
+        }
+        ConstantValue cv = unwrapConstant(val);
+        if (cv == null) {
+            return val;
+        }
+        return switch (declaredType.kind()) {
+            case BOOLEAN -> cv.value() instanceof Integer i
+                    ? new ConstantValue(i != 0, JavaType.BOOLEAN) : val;
+            case CHAR -> cv.value() instanceof Number n
+                    && n.intValue() >= 0 && n.intValue() <= 0xFFFF
+                    ? new ConstantValue((char) n.intValue(), JavaType.CHAR) : val;
+            default -> val;
+        };
+    }
+
+    // ── 主模拟 — 模拟一个基本块 ───────────────────────────────────────
+
+    /**
      * 通过对每个基本块进行符号执行,从控制流图构建线性IR.
      *
      * @param cfg              控制流图
@@ -189,7 +223,11 @@ public final class IrBuilder {
         return new LinearIr(method, cfg, allInstructions, variables);
     }
 
-    // ── 主模拟 — 模拟一个基本块 ───────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    //  按操作码类别的处理函数
+    // ═══════════════════════════════════════════════════════════════════
+
+    // ── 栈操作 ─────────────────────────────────────────────────────
 
     /**
      * 返回基本块的排序列表,使每个块的前驱尽可能在其之前处理.
@@ -261,12 +299,6 @@ public final class IrBuilder {
 
         return result;
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    //  按操作码类别的处理函数
-    // ═══════════════════════════════════════════════════════════════════
-
-    // ── 栈操作 ─────────────────────────────────────────────────────
 
     /**
      * 合并一个基本块所有前驱的帧状态.
@@ -557,6 +589,8 @@ public final class IrBuilder {
         return new FrameState(stack, locals);
     }
 
+    // ── 常量 ───────────────────────────────────────────────────────
+
     /**
      * 处理POP/POP2操作码,从操作数栈弹出值.
      */
@@ -569,8 +603,6 @@ public final class IrBuilder {
             stack.pop();
         }
     }
-
-    // ── 常量 ───────────────────────────────────────────────────────
 
     /**
      * 处理DUP系列操作码,复制或交换操作数栈上的值.
@@ -636,6 +668,8 @@ public final class IrBuilder {
         }
     }
 
+    // ── 加载 ──────────────────────────────────────────────────────
+
     /**
      * 处理各种iconst/lconst/fconst/dconst和bipush/sipush常量加载.
      * 发射CONST IR指令使值能跨基本块边界通过InstructionRef链引用.
@@ -682,8 +716,6 @@ public final class IrBuilder {
         }
     }
 
-    // ── 加载 ──────────────────────────────────────────────────────
-
     /**
      * 处理LDC/LDC_W/LDC2_W常量池加载指令.
      * 发射CONST IR指令使值能通过InstructionRef链引用.
@@ -711,6 +743,8 @@ public final class IrBuilder {
         constInsn.setResultValue(new InstructionRef(constInsn, value.type()));
         stack.push(new InstructionRef(constInsn, value.type()));
     }
+
+    // ── 存储 ──────────────────────────────────────────────────────
 
     /**
      * 处理局部变量加载指令(ILOAD,ALOAD等).
@@ -754,7 +788,7 @@ public final class IrBuilder {
         stack.push(v);
     }
 
-    // ── 存储 ──────────────────────────────────────────────────────
+    // ── IINC ──────────────────────────────────────────────────────
 
     /**
      * 根据加载操作码确定对应类型.
@@ -768,8 +802,6 @@ public final class IrBuilder {
             default -> JavaType.classType("java/lang/Object");
         };
     }
-
-    // ── IINC ──────────────────────────────────────────────────────
 
     /**
      * 处理局部变量存储指令(ISTORE,ASTORE等).
@@ -801,38 +833,6 @@ public final class IrBuilder {
         // "n = cap - 1 | cap - 1 >>> 1" → "n = n | n >>> 1"(错误!)
         locals[idx] = var;
         instructions.add(IrInstruction.store(nextId(), var, val, offset, blockId));
-    }
-
-    /**
-     * 按变量的 LVT 声明类型折叠被存常量(仅 boolean/char).
-     *
-     * <p>JVM 操作数栈上这些窄类型一律表现为 int(ICONST/BIPUSH 等):
-     * <ul>
-     *   <li>boolean 必须折叠——否则渲染成非法的 {@code boolean b = 1};</li>
-     *   <li>char 折叠为字符字面量(与 handleInvoke 的 char 参数折叠一致),
-     *       否则 {@code char c = 59} 失真;</li>
-     *   <li>byte/short 不折叠——常量整型直接用于 {@code byte b = 10} 声明
-     *       是合法的(常量收窄赋值),而折叠后经发射器会多出 {@code (byte) }
-     *       冗余强转.</li>
-     * </ul>
-     * 沿 InstructionRef 链追溯底层 CONST 常量,按声明类型重标.</p>
-     */
-    private static Value foldStoreConstant(Value val, JavaType declaredType) {
-        if (declaredType == null) {
-            return val;
-        }
-        ConstantValue cv = unwrapConstant(val);
-        if (cv == null) {
-            return val;
-        }
-        return switch (declaredType.kind()) {
-            case BOOLEAN -> cv.value() instanceof Integer i
-                    ? new ConstantValue(i != 0, JavaType.BOOLEAN) : val;
-            case CHAR -> cv.value() instanceof Number n
-                    && n.intValue() >= 0 && n.intValue() <= 0xFFFF
-                    ? new ConstantValue((char) n.intValue(), JavaType.CHAR) : val;
-            default -> val;
-        };
     }
 
     // ── 算术 ─────────────────────────────────────────────────────

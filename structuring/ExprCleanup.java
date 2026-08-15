@@ -1,5 +1,6 @@
 package com.bingbaihanji.bdec.structuring;
 
+import com.bingbaihanji.bdec.ast.AnnotationRenderer;
 import com.bingbaihanji.bdec.ast.expr.BinExpr;
 import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
 import com.bingbaihanji.bdec.ast.expr.Expression;
@@ -10,7 +11,6 @@ import com.bingbaihanji.bdec.ast.expr.NewExpr;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
-import com.bingbaihanji.bdec.ast.AnnotationRenderer;
 import com.bingbaihanji.bdec.bytecode.model.TypePathElement;
 import com.bingbaihanji.bdec.ir.Variable;
 import com.bingbaihanji.bdec.type.JavaType;

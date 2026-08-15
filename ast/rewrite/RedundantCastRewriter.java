@@ -68,21 +68,6 @@ public class RedundantCastRewriter implements RewriteRule {
     /** 递归清理冗余强转的转换器. */
     private static final class CastCleaner extends AstTransformer {
 
-        @Override
-        protected Expression transformCast(CastExpr e) {
-            Expression op = e.operand();
-            JavaType opType = operandType(op);
-            if (opType != null && e.targetType() != null
-                    && opType.kind() == TypeKind.CLASS
-                    && e.targetType().kind() == TypeKind.CLASS
-                    && opType.internalName() != null
-                    && opType.internalName().equals(e.targetType().internalName())) {
-                // 操作数静态类型已是目标类型:强转冗余,递归清理操作数内的强转后返回
-                return transformExpr(op);
-            }
-            return super.transformCast(e);
-        }
-
         /** 表达式的静态类型(用于冗余判定;无法确定返回 null 则不强转抑制). */
         private static JavaType operandType(Expression e) {
             if (e instanceof InvocationExpr inv) {
@@ -104,6 +89,21 @@ public class RedundantCastRewriter implements RewriteRule {
                 return fa.inferredType();
             }
             return null;
+        }
+
+        @Override
+        protected Expression transformCast(CastExpr e) {
+            Expression op = e.operand();
+            JavaType opType = operandType(op);
+            if (opType != null && e.targetType() != null
+                    && opType.kind() == TypeKind.CLASS
+                    && e.targetType().kind() == TypeKind.CLASS
+                    && opType.internalName() != null
+                    && opType.internalName().equals(e.targetType().internalName())) {
+                // 操作数静态类型已是目标类型:强转冗余,递归清理操作数内的强转后返回
+                return transformExpr(op);
+            }
+            return super.transformCast(e);
         }
     }
 }
