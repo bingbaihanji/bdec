@@ -29,6 +29,5 @@ __pycache__/
 *.pyc
 
 # ---- 本地/文档目录(不纳入 git) ----
-config/
 doc/
 docs/
