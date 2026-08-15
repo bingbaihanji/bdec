@@ -15,6 +15,11 @@ import static org.junit.Assert.assertTrue;
 
 public class InstructionDecoderTest {
 
+    private static Instruction decode(byte[] code) throws IOException {
+        return new InstructionDecoder().decode(
+                new DataInputStream(new ByteArrayInputStream(code)), 0);
+    }
+
     @Test
     public void testDecodeIconst0() throws IOException {
         // iconst_0 = opcode 3, no operands
@@ -107,10 +112,5 @@ public class InstructionDecoderTest {
         assertEquals(-1, decode(new byte[]{(byte) 0xBC, 0x0A}).varIndex());    // newarray T_INT(10)
         // 显式索引指令(ILOAD)的操作数才是变量索引.
         assertEquals(5, decode(new byte[]{0x15, 0x05}).varIndex());            // iload 5
-    }
-
-    private static Instruction decode(byte[] code) throws IOException {
-        return new InstructionDecoder().decode(
-                new DataInputStream(new ByteArrayInputStream(code)), 0);
     }
 }

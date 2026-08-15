@@ -137,6 +137,8 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             case VARIABLE_DECL -> emitVariableDecl(stmt);
             case BREAK -> w.token("break").write(";").newLine();
             case CONTINUE -> w.token("continue").write(";").newLine();
+            case GOTO -> emitGoto((com.bingbaihanji.bdec.ast.stmt.GotoStatement) stmt);
+            case LABEL -> emitLabel((com.bingbaihanji.bdec.ast.stmt.LabelStatement) stmt);
             case SYNCHRONIZED -> emitSynchronized(stmt);
             case TRY -> emitTry(stmt);
             default -> w.write("// " + stmt.kind()).newLine();
@@ -553,6 +555,16 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
      *
      * @param stmt throw 语句节点
      */
+    /** 发射不可归约兜底的 goto 跳转语句. */
+    private void emitGoto(com.bingbaihanji.bdec.ast.stmt.GotoStatement g) {
+        w.token("goto").space().write(g.label()).write(";").newLine();
+    }
+
+    /** 发射不可归约兜底的标签声明(行首,不缩进加码). */
+    private void emitLabel(com.bingbaihanji.bdec.ast.stmt.LabelStatement l) {
+        w.write(l.label()).write(":").newLine();
+    }
+
     private void emitThrow(Statement stmt) {
         w.token("throw").space();
         if (stmt instanceof ThrowStatement ts && ts.expression() != null) {

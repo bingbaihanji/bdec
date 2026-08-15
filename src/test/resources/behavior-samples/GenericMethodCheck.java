@@ -1,4 +1,5 @@
 class GenericMethodCheck {
+
     static <T> T pick(boolean b, T x, T y) {
         return b ? x : y;
     }

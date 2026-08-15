@@ -18,12 +18,27 @@ import static org.junit.Assert.assertTrue;
  *
  * <p>此前 {@code -jar} 模式用 {@code DecompileContext.empty}(无跨类加载器),
  * 内部/匿名类被当作独立类反编译成带 {@code $} 的文件(非法类名),外层类反而
- * 缺失嵌套声明。修复:预扫描 JAR 建立"内部名 → 字节"映射,逐顶层类反编译时
- * 经 map-backed loader 内联嵌套类(参照 CFR/Procyon/Vineflower 的按名回查)。
+ * 缺失嵌套声明.修复:预扫描 JAR 建立"内部名 → 字节"映射,逐顶层类反编译时
+ * 经 map-backed loader 内联嵌套类(参照 CFR/Procyon/Vineflower 的按名回查).
  * 本测试用同一机制(编译 → 收集 class 映射 → 反编译顶层类)验证嵌套枚举
- * 常量体与成员内部类被正确内联且可重编译。</p>
+ * 常量体与成员内部类被正确内联且可重编译.</p>
  */
 public class JarModeRoundTripTest {
+
+    private static void deleteRecursively(Path dir) {
+        try {
+            if (!Files.exists(dir)) {
+                return;
+            }
+            if (Files.isDirectory(dir)) {
+                try (var files = Files.list(dir)) {
+                    files.forEach(JarModeRoundTripTest::deleteRecursively);
+                }
+            }
+            Files.deleteIfExists(dir);
+        } catch (Exception ignored) {
+        }
+    }
 
     @Test
     public void testJarModeInlinesNestedClasses() throws Exception {
@@ -75,21 +90,6 @@ public class JarModeRoundTripTest {
             DecompileTestHarness.assertRecompiles(out, "Outer", Map.of());
         } finally {
             deleteRecursively(tmp);
-        }
-    }
-
-    private static void deleteRecursively(Path dir) {
-        try {
-            if (!Files.exists(dir)) {
-                return;
-            }
-            if (Files.isDirectory(dir)) {
-                try (var files = Files.list(dir)) {
-                    files.forEach(JarModeRoundTripTest::deleteRecursively);
-                }
-            }
-            Files.deleteIfExists(dir);
-        } catch (Exception ignored) {
         }
     }
 }

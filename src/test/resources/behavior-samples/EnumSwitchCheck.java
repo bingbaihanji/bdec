@@ -1,5 +1,4 @@
 class EnumSwitchCheck {
-    enum Color { RED, GREEN, BLUE }
 
     static int f(Color c) {
         switch (c) {
@@ -30,5 +29,11 @@ class EnumSwitchCheck {
 
     public static void main(String[] args) {
         System.out.println(check());
+    }
+
+    enum Color {
+        RED,
+        GREEN,
+        BLUE
     }
 }

@@ -1,4 +1,13 @@
 class EnumBodyCheck {
+
+    public static String check() {
+        return Color.RED.desc() + "|" + Color.BLUE.desc();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(check());
+    }
+
     enum Color {
         RED {
             public String desc() {
@@ -10,14 +19,7 @@ class EnumBodyCheck {
                 return "blue";
             }
         };
+
         public abstract String desc();
-    }
-
-    public static String check() {
-        return Color.RED.desc() + "|" + Color.BLUE.desc();
-    }
-
-    public static void main(String[] args) {
-        System.out.println(check());
     }
 }

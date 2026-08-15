@@ -23,25 +23,24 @@ import static org.junit.Assert.assertFalse;
  * 执行级语义等价测试 harness.
  *
  * <p>JADX 风格 check() round-trip:编译源码 → BDEC 反编译 → 重编译反编译产物 →
- * 用同一输入分别运行"原始 class"与"反编译→重编译 class",比对退出码与 stdout。
+ * 用同一输入分别运行"原始 class"与"反编译→重编译 class",比对退出码与 stdout.
  * 捕获"能编译但行为错"的静默语义错误——文本断言({@link DecompileTestHarness} 的
- * assertContains/assertRecompiles)无法覆盖的层级。</p>
+ * assertContains/assertRecompiles)无法覆盖的层级.</p>
  *
  * <p><b>执行模式</b>:进程级 {@code java -cp}(默认)——天然防死循环(循环边界 bug
- * 正是目标)、防 {@code System.exit}/崩溃挂死测试 JVM、类路径隔离无同名类污染;
- * 代价是每次 JVM 启动约数百毫秒。样例约定:{@code public static String check()}
- * 返回确定性规范串,{@code main} 打印它,使 stdout 成为唯一比对通道。</p>
+ * 正是目标),防 {@code System.exit}/崩溃挂死测试 JVM,类路径隔离无同名类污染;
+ * 代价是每次 JVM 启动约数百毫秒.样例约定:{@code public static String check()}
+ * 返回确定性规范串,{@code main} 打印它,使 stdout 成为唯一比对通道.</p>
  *
  * <p><b>与 {@link DecompileTestHarness} 的关系</b>:后者在 finally 中删除临时编译目录,
  * 本 harness 需保留两份 class 目录到运行结束,故自管临时目录并直接复用
- * {@link BdecEngine} + {@link DecompileContext}。</p>
+ * {@link BdecEngine} + {@link DecompileContext}.</p>
  */
 public final class SemanticEquivalenceHarness {
 
-    private SemanticEquivalenceHarness() {}
+    private static final Pattern PACKAGE_PATTERN = Pattern.compile("(?m)^\\s*package\\s+([\\w.]+)\\s*;");
 
-    /** 一次进程运行的结果. */
-    public record RunResult(int exitCode, String stdout, String stderr, boolean timedOut) {}
+    private SemanticEquivalenceHarness() {}
 
     /** javac(source) → BDEC → javac(反编译产物) → 两侧运行 → 断言退出码+stdout 相等. */
     public static void assertSemanticallyEquivalent(String source, String className) throws Exception {
@@ -193,12 +192,10 @@ public final class SemanticEquivalenceHarness {
         return m.find() ? m.group(1) + "." + className : className;
     }
 
-    private static final Pattern PACKAGE_PATTERN = Pattern.compile("(?m)^\\s*package\\s+([\\w.]+)\\s*;");
-
     private static String findJavaExecutable() {
         String javaHome = System.getProperty("java.home");
         if (javaHome != null) {
-            for (String name : new String[] {"bin/java.exe", "bin/java"}) {
+            for (String name : new String[]{"bin/java.exe", "bin/java"}) {
                 Path candidate = Path.of(javaHome, name);
                 if (Files.exists(candidate)) {
                     return candidate.toString();
@@ -222,7 +219,8 @@ public final class SemanticEquivalenceHarness {
 
     private static String readResource(String path) throws IOException {
         try (InputStream in = SemanticEquivalenceHarness.class.getClassLoader()
-                .getResourceAsStream(path)) {
+                .getResourceAsStream(path)
+        ) {
             if (in == null) {
                 throw new IllegalStateException("resource not found: " + path);
             }
@@ -245,9 +243,14 @@ public final class SemanticEquivalenceHarness {
         }
     }
 
+    /** 一次进程运行的结果. */
+    public record RunResult(int exitCode, String stdout, String stderr, boolean timedOut) {}
+
     /** 后台排空子进程输出流的守护线程(防管道缓冲填满导致 waitFor 挂死). */
     private static final class StreamDrain extends Thread {
+
         private final InputStream in;
+
         private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
 
         StreamDrain(InputStream in) {

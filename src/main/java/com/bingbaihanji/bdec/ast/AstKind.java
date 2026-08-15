@@ -34,6 +34,10 @@ public enum AstKind {
     BREAK,
     /** continue 继续语句 */
     CONTINUE,
+    /** 带标签跳转语句(goto label;——不可归约 CFG 兜底) */
+    GOTO,
+    /** 标签声明语句(label: ——不可归约 CFG 兜底) */
+    LABEL,
     /** 变量声明语句 */
     VARIABLE_DECL,
     /** synchronized 同步语句 */

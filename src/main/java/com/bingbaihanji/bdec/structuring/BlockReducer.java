@@ -4,6 +4,7 @@ import com.bingbaihanji.bdec.ast.AnnotationRenderer;
 import com.bingbaihanji.bdec.ast.expr.*;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
@@ -139,6 +140,40 @@ public final class BlockReducer implements ReducerOps {
             return java.util.Map.of();
         }
         return AnnotationRenderer.groupByTypePath(v.typeAnnotations());
+    }
+
+    /** 记录归约语句与所属组. */
+    private static void addStatement(List<Statement> statements,
+                                     List<Integer> stmtGroupIdx,
+                                     Statement s, int gi) {
+        statements.add(s);
+        stmtGroupIdx.add(gi);
+    }
+
+    /** 表达式是否产生 boolean 值(用于 int 变量声明重标). */
+    private static boolean isBooleanExpression(Expression e) {
+        if (e == null) {
+            return false;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.BinExpr bin) {
+            BinaryOperator op = bin.operator();
+            return op == BinaryOperator.AND || op == BinaryOperator.OR
+                    || op == BinaryOperator.EQ || op == BinaryOperator.NE
+                    || op == BinaryOperator.LT || op == BinaryOperator.GT
+                    || op == BinaryOperator.LE || op == BinaryOperator.GE;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.UnExpr ue) {
+            return ue.operator() == com.bingbaihanji.bdec.ast.expr.UnaryOperator.NOT;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit) {
+            return lit.value() instanceof Boolean;
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
+            return inv.returnType() != null
+                    && inv.returnType().kind() == TypeKind.BOOLEAN;
+        }
+        // 注意:不含 VarExpr——引用 int 变量的复制会误标为 boolean.
+        return false;
     }
 
     /**
@@ -310,7 +345,20 @@ public final class BlockReducer implements ReducerOps {
                     if (body != null && !StatementUtils.isEmptyBlock(body)) {
                         s = LoopTranslator.wrapLoopStatement(this, loopInfo, body, extractCondition(group, ir));
                     } else {
-                        s = translateGroup(group, ir);
+                        // 空循环体:不可归约分裂后头块含体(do-while 形态,如
+                        // D: r++; if(x>0) → C' 回边,D 既含体又含条件).用头的
+                        // 非条件语句作循环体,按 do-while 包装——否则循环被
+                        // 退化为普通顺序语句,静默丢失循环语义.
+                        List<Statement> headerBody = translateHeaderNonCondition(group, ir);
+                        if (!headerBody.isEmpty()) {
+                            Expression cond = AstCleanup.simplifyCondition(
+                                    extractCondition(group, ir));
+                            s = new LoopStatement(LoopStatement.LoopKind.DO_WHILE,
+                                    cond != null ? cond : new VarExpr("true"),
+                                    StatementUtils.blockOf(headerBody));
+                        } else {
+                            s = translateGroup(group, ir);
+                        }
                     }
                 } else {
                     // 仅处理器的"循环"(来自自引用异常边):
@@ -373,35 +421,35 @@ public final class BlockReducer implements ReducerOps {
                     .anyMatch(s -> s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement);
             if (!hasExplicitReturn) {
                 for (int i = statements.size() - 1; i >= 0; i--) {
-                Statement s = statements.get(i);
-                if (s instanceof ExpressionStatement es
-                        && es.expression() != null
-                        && !StatementUtils.isIgnorableExpr(es.expression())
-                        && !StatementUtils.isVoidExpr(es.expression())
-                        && !StatementUtils.isAssignExpr(es.expression())) {
-                    statements.set(i, new ReturnStatement(es.expression()));
-                    break;
-                }
-                if (s instanceof BlockStatement bs && !bs.statements().isEmpty()) {
-                    Statement last = bs.statements().get(bs.statements().size() - 1);
-                    if (last instanceof ExpressionStatement es
+                    Statement s = statements.get(i);
+                    if (s instanceof ExpressionStatement es
                             && es.expression() != null
                             && !StatementUtils.isIgnorableExpr(es.expression())
                             && !StatementUtils.isVoidExpr(es.expression())
                             && !StatementUtils.isAssignExpr(es.expression())) {
-                        List<Statement> newStmts = new ArrayList<>(bs.statements());
-                        newStmts.set(newStmts.size() - 1,
-                                new ReturnStatement(es.expression()));
-                        statements.set(i, new BlockStatement(newStmts));
-                        // 不 break——前面可能还有需要包装的孤立表达式
+                        statements.set(i, new ReturnStatement(es.expression()));
+                        break;
                     }
+                    if (s instanceof BlockStatement bs && !bs.statements().isEmpty()) {
+                        Statement last = bs.statements().get(bs.statements().size() - 1);
+                        if (last instanceof ExpressionStatement es
+                                && es.expression() != null
+                                && !StatementUtils.isIgnorableExpr(es.expression())
+                                && !StatementUtils.isVoidExpr(es.expression())
+                                && !StatementUtils.isAssignExpr(es.expression())) {
+                            List<Statement> newStmts = new ArrayList<>(bs.statements());
+                            newStmts.set(newStmts.size() - 1,
+                                    new ReturnStatement(es.expression()));
+                            statements.set(i, new BlockStatement(newStmts));
+                            // 不 break——前面可能还有需要包装的孤立表达式
+                        }
+                    }
+                    // 跳过已处理的 ReturnStatement 或空块,继续向前扫描
+                    if (s instanceof ReturnStatement || s instanceof BlockStatement) {
+                        continue;
+                    }
+                    break;
                 }
-                // 跳过已处理的 ReturnStatement 或空块,继续向前扫描
-                if (s instanceof ReturnStatement || s instanceof BlockStatement) {
-                    continue;
-                }
-                break;
-            }
             }
         }
 
@@ -429,14 +477,6 @@ public final class BlockReducer implements ReducerOps {
         // 这些是 SynchronizedStatement 之前设置监视器对象的代码)
         root = AstCleanup.stripSyncPreambles(root);
         return root;
-    }
-
-    /** 记录归约语句与所属组. */
-    private static void addStatement(List<Statement> statements,
-                                     List<Integer> stmtGroupIdx,
-                                     Statement s, int gi) {
-        statements.add(s);
-        stmtGroupIdx.add(gi);
     }
 
     /** 检查循环体内是否包含 switch 块(typeSwitch 重启循环). */
@@ -719,7 +759,6 @@ public final class BlockReducer implements ReducerOps {
         }
         return best != null ? translateExpr(best) : null;
     }
-
 
     /**
      * 将块组翻译为语句树.
@@ -1270,7 +1309,6 @@ public final class BlockReducer implements ReducerOps {
         return params;
     }
 
-
     /** 从 INDY 注解属性中获取字符串值 */
     String getIndyAnnotation(IrInstruction insn, String key) {
         for (com.bingbaihanji.bdec.semantic.SemanticAnnotation ann : insn.annotations()) {
@@ -1395,7 +1433,7 @@ public final class BlockReducer implements ReducerOps {
             case FIELD_STORE -> {
                 // 操作数布局:静态字段(PUTSTATIC)仅 [value],实例字段(PUTFIELD)为 [obj, value].
                 // 值始终是最后一个操作数;对象仅实例字段存在.按布局取,避免静态字段被
-                // 误当成 obj、值被解析为 null 而回退 varUnresolved.
+                // 误当成 obj,值被解析为 null 而回退 varUnresolved.
                 Value val = !insn.operands().isEmpty() ? insn.operands().getLast() : null;
                 Value obj = insn.operands().size() > 1 ? insn.operands().getFirst() : null;
                 String fName = insn.nameHint() != null ? insn.nameHint() : "field";
@@ -1828,32 +1866,6 @@ public final class BlockReducer implements ReducerOps {
                 return true;
             }
         }
-        return false;
-    }
-
-    /** 表达式是否产生 boolean 值(用于 int 变量声明重标). */
-    private static boolean isBooleanExpression(Expression e) {
-        if (e == null) {
-            return false;
-        }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.BinExpr bin) {
-            BinaryOperator op = bin.operator();
-            return op == BinaryOperator.AND || op == BinaryOperator.OR
-                    || op == BinaryOperator.EQ || op == BinaryOperator.NE
-                    || op == BinaryOperator.LT || op == BinaryOperator.GT
-                    || op == BinaryOperator.LE || op == BinaryOperator.GE;
-        }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.UnExpr ue) {
-            return ue.operator() == com.bingbaihanji.bdec.ast.expr.UnaryOperator.NOT;
-        }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit) {
-            return lit.value() instanceof Boolean;
-        }
-        if (e instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
-            return inv.returnType() != null
-                    && inv.returnType().kind() == TypeKind.BOOLEAN;
-        }
-        // 注意:不含 VarExpr——引用 int 变量的复制会误标为 boolean.
         return false;
     }
 

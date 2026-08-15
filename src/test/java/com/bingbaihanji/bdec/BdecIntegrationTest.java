@@ -11,6 +11,14 @@ import static org.junit.Assert.assertTrue;
 
 public class BdecIntegrationTest {
 
+    /** 从测试 classpath 加载预编译样例类(由 Maven test-compile 阶段生成). */
+    private static byte[] loadPrecompiledClass(String simpleName) throws Exception {
+        var in = BdecIntegrationTest.class.getResourceAsStream(
+                "/com/bytecode/test/" + simpleName + ".class");
+        assertNotNull("precompiled test class not found: " + simpleName, in);
+        return in.readAllBytes();
+    }
+
     @Test
     public void testDecompileTestClass() throws Exception {
         String internalName = "com/bytecode/test/TestClass1";
@@ -27,13 +35,5 @@ public class BdecIntegrationTest {
                 result.success());
         assertNotNull("decompiled code should be non-null", result.decompiledCode());
         assertTrue("decompiled code should not be empty", !result.decompiledCode().isEmpty());
-    }
-
-    /** 从测试 classpath 加载预编译样例类(由 Maven test-compile 阶段生成). */
-    private static byte[] loadPrecompiledClass(String simpleName) throws Exception {
-        var in = BdecIntegrationTest.class.getResourceAsStream(
-                "/com/bytecode/test/" + simpleName + ".class");
-        assertNotNull("precompiled test class not found: " + simpleName, in);
-        return in.readAllBytes();
     }
 }

@@ -1,9 +1,6 @@
 class LambdaCaptureCheck {
-    static int factor = 5;
 
-    interface Fn {
-        int apply(int x);
-    }
+    static int factor = 5;
 
     static int lambda(int a, int b) {
         Fn f = v -> v * a + b + factor;
@@ -16,5 +13,10 @@ class LambdaCaptureCheck {
 
     public static void main(String[] args) {
         System.out.println(check());
+    }
+
+    interface Fn {
+
+        int apply(int x);
     }
 }

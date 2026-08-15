@@ -79,12 +79,34 @@ final class CondyBytecodeBuilder {
             } else {
                 int[] a = (int[]) e;
                 switch (a[a.length - 1]) {
-                    case 0 -> {out.writeByte(7); out.writeShort(a[0]);}                    // Class
-                    case 1 -> {out.writeByte(12); out.writeShort(a[0]); out.writeShort(a[1]);} // NameAndType
-                    case 2 -> {out.writeByte(8); out.writeShort(a[0]);}                    // String
-                    case 3 -> {out.writeByte(15); out.writeByte(a[0]); out.writeShort(a[1]);} // MethodHandle
-                    case 4 -> {out.writeByte(17); out.writeShort(a[0]); out.writeShort(a[1]);} // Dynamic
-                    case 5 -> {out.writeByte(10); out.writeShort(a[0]); out.writeShort(a[1]);} // Methodref
+                    case 0 -> {
+                        out.writeByte(7);
+                        out.writeShort(a[0]);
+                    }                    // Class
+                    case 1 -> {
+                        out.writeByte(12);
+                        out.writeShort(a[0]);
+                        out.writeShort(a[1]);
+                    } // NameAndType
+                    case 2 -> {
+                        out.writeByte(8);
+                        out.writeShort(a[0]);
+                    }                    // String
+                    case 3 -> {
+                        out.writeByte(15);
+                        out.writeByte(a[0]);
+                        out.writeShort(a[1]);
+                    } // MethodHandle
+                    case 4 -> {
+                        out.writeByte(17);
+                        out.writeShort(a[0]);
+                        out.writeShort(a[1]);
+                    } // Dynamic
+                    case 5 -> {
+                        out.writeByte(10);
+                        out.writeShort(a[0]);
+                        out.writeShort(a[1]);
+                    } // Methodref
                     default -> throw new IllegalStateException("bad cp entry");
                 }
             }
@@ -106,53 +128,27 @@ final class CondyBytecodeBuilder {
         java.io.DataOutputStream bsm = new java.io.DataOutputStream(bsmBos);
         bsm.writeShort(4); // 4 个引导方法
         // getStaticFinal(CondyHolder.class, "VALUE")
-        bsm.writeShort(mhGSF); bsm.writeShort(2); bsm.writeShort(clHolder); bsm.writeShort(sVALUE);
+        bsm.writeShort(mhGSF);
+        bsm.writeShort(2);
+        bsm.writeShort(clHolder);
+        bsm.writeShort(sVALUE);
         // enumConstant(TimeUnit.class, "SECONDS")
-        bsm.writeShort(mhEC); bsm.writeShort(2); bsm.writeShort(clTimeUnit); bsm.writeShort(sSECONDS);
+        bsm.writeShort(mhEC);
+        bsm.writeShort(2);
+        bsm.writeShort(clTimeUnit);
+        bsm.writeShort(sSECONDS);
         // nullConstant()
-        bsm.writeShort(mhNC); bsm.writeShort(0);
+        bsm.writeShort(mhNC);
+        bsm.writeShort(0);
         // primitiveClass(int.class)
-        bsm.writeShort(mhPC); bsm.writeShort(1); bsm.writeShort(clI);
+        bsm.writeShort(mhPC);
+        bsm.writeShort(1);
+        bsm.writeShort(clI);
         byte[] bsmBytes = bsmBos.toByteArray();
         out.writeInt(bsmBytes.length);
         out.write(bsmBytes);
         out.flush();
         return bos.toByteArray();
-    }
-
-    /** 常量池构建器:维护条目列表,提供各类型的快捷添加方法. */
-    private static final class CpBuilder {
-        private final java.util.List<Object> entries = new java.util.ArrayList<>();
-
-        CpBuilder() {
-            entries.add(null); // 索引 0 占位
-        }
-
-        java.util.List<Object> entries() {return entries;}
-
-        int u(String s) {entries.add(s); return entries.size() - 1;}
-
-        int c(int utf8Idx) {entries.add(new int[]{utf8Idx, 0}); return entries.size() - 1;}
-
-        int n(int nameIdx, int descIdx) {
-            entries.add(new int[]{nameIdx, descIdx, 1});
-            return entries.size() - 1;
-        }
-
-        int s(int utf8Idx) {entries.add(new int[]{utf8Idx, 2}); return entries.size() - 1;}
-
-        /** CONSTANT_MethodHandle:先建 Methodref(Class + nameAndType),再建句柄. */
-        int h(int refKind, int classIdx, int natIdx) {
-            entries.add(new int[]{classIdx, natIdx, 5}); // Methodref
-            int refIdx = entries.size() - 1;
-            entries.add(new int[]{refKind, refIdx, 3});  // MethodHandle
-            return entries.size() - 1;
-        }
-
-        int d(int bsmIdx, int natIdx) {
-            entries.add(new int[]{bsmIdx, natIdx, 4});
-            return entries.size() - 1;
-        }
     }
 
     /** 写一个 {@code public static Object m() { return <ldc condy>; } } 方法.
@@ -176,5 +172,50 @@ final class CondyBytecodeBuilder {
         byte[] codeBytes = codeBos.toByteArray();
         out.writeInt(codeBytes.length);
         out.write(codeBytes);
+    }
+
+    /** 常量池构建器:维护条目列表,提供各类型的快捷添加方法. */
+    private static final class CpBuilder {
+
+        private final java.util.List<Object> entries = new java.util.ArrayList<>();
+
+        CpBuilder() {
+            entries.add(null); // 索引 0 占位
+        }
+
+        java.util.List<Object> entries() {return entries;}
+
+        int u(String s) {
+            entries.add(s);
+            return entries.size() - 1;
+        }
+
+        int c(int utf8Idx) {
+            entries.add(new int[]{utf8Idx, 0});
+            return entries.size() - 1;
+        }
+
+        int n(int nameIdx, int descIdx) {
+            entries.add(new int[]{nameIdx, descIdx, 1});
+            return entries.size() - 1;
+        }
+
+        int s(int utf8Idx) {
+            entries.add(new int[]{utf8Idx, 2});
+            return entries.size() - 1;
+        }
+
+        /** CONSTANT_MethodHandle:先建 Methodref(Class + nameAndType),再建句柄. */
+        int h(int refKind, int classIdx, int natIdx) {
+            entries.add(new int[]{classIdx, natIdx, 5}); // Methodref
+            int refIdx = entries.size() - 1;
+            entries.add(new int[]{refKind, refIdx, 3});  // MethodHandle
+            return entries.size() - 1;
+        }
+
+        int d(int bsmIdx, int natIdx) {
+            entries.add(new int[]{bsmIdx, natIdx, 4});
+            return entries.size() - 1;
+        }
     }
 }

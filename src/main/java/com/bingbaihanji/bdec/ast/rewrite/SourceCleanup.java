@@ -80,7 +80,14 @@ public class SourceCleanup implements RewriteRule {
                 boolean nonVoid = md.returnType() != null
                         && md.returnType().kind() != TypeKind.VOID;
                 Set<String> paramNames = new HashSet<>(java.util.Arrays.asList(md.parameterNames()));
-                members.add(withBody(md, fix(md.body(), nonVoid, md.returnType(), fieldNames, paramNames)));
+                Statement body = fix(md.body(), nonVoid, md.returnType(), fieldNames, paramNames);
+                // 构造器:super()/this() 必须为首句(JLS 8.8.7.1).
+                // javac 对捕获局部变量的局部类会在 super() 之前发射 val$X
+                // 赋值(字节码合法,源码非法),忠实还原会编译失败.
+                if (md.name() != null && md.name().equals(td.simpleName())) {
+                    body = fixConstructorSuperOrder(body);
+                }
+                members.add(withBody(md, body));
             } else {
                 members.add(m);
             }
@@ -425,6 +432,40 @@ public class SourceCleanup implements RewriteRule {
     }
 
     /** 将分支体中已提升变量的声明转为赋值语句(无初始化器则删除该声明). */
+    /** 构造器体:把 super()/this() 调用移到首句(JLS super 必须第一).
+     *  javac 对捕获局部变量的局部类在字节码里把 val$X 赋值放在 super() 之前,
+     *  源码必须反之. */
+    private Statement fixConstructorSuperOrder(Statement body) {
+        if (!(body instanceof BlockStatement bs)) {
+            return body;
+        }
+        List<Statement> stmts = new ArrayList<>(bs.statements());
+        int superIdx = -1;
+        for (int i = 0; i < stmts.size(); i++) {
+            if (isCtorDelegation(stmts.get(i))) {
+                superIdx = i;
+                break;
+            }
+        }
+        if (superIdx > 0) {
+            Statement superCall = stmts.remove(superIdx);
+            stmts.add(0, superCall);
+        }
+        return new BlockStatement(stmts);
+    }
+
+    /** 语句是否为 super()/this() 构造器委托调用. */
+    private boolean isCtorDelegation(Statement s) {
+        if (!(s instanceof ExpressionStatement es)) {
+            return false;
+        }
+        if (!(es.expression() instanceof InvocationExpr inv)) {
+            return false;
+        }
+        String name = inv.methodName();
+        return "super".equals(name) || "this".equals(name);
+    }
+
     private Statement hoistBranchDecls(Statement s, Set<String> hoisted) {
         if (s instanceof VariableDeclaration vd && hoisted.contains(vd.name())) {
             if (vd.initializer() != null) {

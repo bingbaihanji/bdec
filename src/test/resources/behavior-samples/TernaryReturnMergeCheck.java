@@ -1,12 +1,16 @@
 class TernaryReturnMergeCheck {
+
     static int fooCount;
+
     static int foo() {
         fooCount++;
         return 1;
     }
+
     static int bar() {
         return 2;
     }
+
     static int m(boolean b) {
         int y = b ? foo() : bar();
         return y;

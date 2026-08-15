@@ -21,11 +21,11 @@ public class EnumConstantAnnotTest {
     public void testEnumConstantDeprecatedAnnotation() throws Exception {
         DecompileTestHarness h = new DecompileTestHarness();
         String out = h.decompileSource("""
-                enum E {
-                    @Deprecated A,
-                    B
-                }
-                """, "E");
+                                       enum E {
+                                           @Deprecated A,
+                                           B
+                                       }
+                                       """, "E");
         DecompileTestHarness.assertContains(out, "@Deprecated A");
     }
 
@@ -33,14 +33,14 @@ public class EnumConstantAnnotTest {
     public void testEnumConstantCustomAnnotation() throws Exception {
         DecompileTestHarness h = new DecompileTestHarness();
         String out = h.decompileSource("""
-                import java.lang.annotation.*;
-                @Retention(RetentionPolicy.RUNTIME) @Target({ElementType.FIELD, ElementType.TYPE_USE})
-                @interface Tag { String value(); }
-                enum E2 {
-                    @Tag("x") A,
-                    B
-                }
-                """, "E2");
+                                       import java.lang.annotation.*;
+                                       @Retention(RetentionPolicy.RUNTIME) @Target({ElementType.FIELD, ElementType.TYPE_USE})
+                                       @interface Tag { String value(); }
+                                       enum E2 {
+                                           @Tag("x") A,
+                                           B
+                                       }
+                                       """, "E2");
         DecompileTestHarness.assertContains(out, "@Tag(\"x\") A");
     }
 
@@ -48,14 +48,14 @@ public class EnumConstantAnnotTest {
     public void testEnumConstructorParameterAnnotation() throws Exception {
         DecompileTestHarness h = new DecompileTestHarness();
         String out = h.decompileSource("""
-                import java.lang.annotation.*;
-                @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.PARAMETER)
-                @interface P {}
-                enum E3 {
-                    X("arg");
-                    E3(@P String s) {}
-                }
-                """, "E3");
+                                       import java.lang.annotation.*;
+                                       @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.PARAMETER)
+                                       @interface P {}
+                                       enum E3 {
+                                           X("arg");
+                                           E3(@P String s) {}
+                                       }
+                                       """, "E3");
         DecompileTestHarness.assertContains(out, "@P String s");
     }
 }

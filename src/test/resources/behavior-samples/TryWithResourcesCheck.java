@@ -1,17 +1,6 @@
 class TryWithResourcesCheck {
+
     static final StringBuilder orderLog = new StringBuilder();
-
-    static class R implements AutoCloseable {
-        final String name;
-
-        R(String n) {
-            this.name = n;
-        }
-
-        public void close() {
-            orderLog.append(name);
-        }
-    }
 
     static String twr() {
         StringBuilder sb = new StringBuilder();
@@ -28,5 +17,18 @@ class TryWithResourcesCheck {
 
     public static void main(String[] args) {
         System.out.println(check());
+    }
+
+    static class R implements AutoCloseable {
+
+        final String name;
+
+        R(String n) {
+            this.name = n;
+        }
+
+        public void close() {
+            orderLog.append(name);
+        }
     }
 }

@@ -65,6 +65,36 @@ public class CfrDiffTest {
         return new int[]{p.waitFor()};
     }
 
+    /** 断言给定源码可独立重新编译(类路径指向样例 classes 目录). */
+    private static void assertRecompiles(JavaCompiler compiler, Path classes, Path work,
+                                         String who, String name, String source) {
+        try {
+            Path rcDir = work.resolve(who + "-rc");
+            Files.createDirectory(rcDir);
+            Path srcFile = rcDir.resolve(name + ".java");
+            Files.writeString(srcFile, source, StandardCharsets.UTF_8);
+            int rc = compiler.run(null, null, null,
+                    "-d", rcDir.toString(), "-cp", classes.toString(),
+                    srcFile.toString());
+            org.junit.Assert.assertEquals(
+                    who + " output for " + name + " must recompile:\n" + source, 0, rc);
+        } catch (Exception e) {
+            throw new RuntimeException(who + " recompile failed for " + name, e);
+        }
+    }
+
+    private static void deleteRecursively(Path dir) {
+        try {
+            if (Files.isDirectory(dir)) {
+                try (var files = Files.list(dir)) {
+                    files.forEach(CfrDiffTest::deleteRecursively);
+                }
+            }
+            Files.deleteIfExists(dir);
+        } catch (Exception ignored) {
+        }
+    }
+
     /**
      * 编译样例源码,分别用 BDEC 与 CFR 反编译,两份输出都必须可重新编译.
      * 样例集:控制流基础样例(数组/布尔方法/do-while/if-else/instanceof/new/静态调用).
@@ -132,35 +162,5 @@ public class CfrDiffTest {
             }
         }
         org.junit.Assert.assertTrue("no samples checked", checked > 0);
-    }
-
-    /** 断言给定源码可独立重新编译(类路径指向样例 classes 目录). */
-    private static void assertRecompiles(JavaCompiler compiler, Path classes, Path work,
-                                         String who, String name, String source) {
-        try {
-            Path rcDir = work.resolve(who + "-rc");
-            Files.createDirectory(rcDir);
-            Path srcFile = rcDir.resolve(name + ".java");
-            Files.writeString(srcFile, source, StandardCharsets.UTF_8);
-            int rc = compiler.run(null, null, null,
-                    "-d", rcDir.toString(), "-cp", classes.toString(),
-                    srcFile.toString());
-            org.junit.Assert.assertEquals(
-                    who + " output for " + name + " must recompile:\n" + source, 0, rc);
-        } catch (Exception e) {
-            throw new RuntimeException(who + " recompile failed for " + name, e);
-        }
-    }
-
-    private static void deleteRecursively(Path dir) {
-        try {
-            if (Files.isDirectory(dir)) {
-                try (var files = Files.list(dir)) {
-                    files.forEach(CfrDiffTest::deleteRecursively);
-                }
-            }
-            Files.deleteIfExists(dir);
-        } catch (Exception ignored) {
-        }
     }
 }

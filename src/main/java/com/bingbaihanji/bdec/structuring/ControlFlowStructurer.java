@@ -1,7 +1,9 @@
 package com.bingbaihanji.bdec.structuring;
 
 import com.bingbaihanji.bdec.DecompileContext;
+import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.bytecode.model.Instruction;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowEdge;
@@ -208,12 +210,93 @@ public class ControlFlowStructurer {
                     finalIfAnns, finalSwitchAnns, loopAnns);
         }
         blockReducer = new BlockReducer(!ir.method().isStatic());
-        BlockStatement body = blockReducer.reduce(graph, ir, loopAnns, finalIfAnns, finalSwitchAnns, finalTryCatch);
-
-        // 7. 后处理:合并共享同一处理器的相邻 try-finally 块
-        body = finallyRecognizer.merge(body, finalTryCatch);
+        BlockStatement body;
+        if (IrreducibleHandler.isReducible(graph)) {
+            body = blockReducer.reduce(graph, ir, loopAnns, finalIfAnns, finalSwitchAnns, finalTryCatch);
+            // 7. 后处理:合并共享同一处理器的相邻 try-finally 块
+            body = finallyRecognizer.merge(body, finalTryCatch);
+        } else {
+            // 不可归约 CFG:结构化为 if/loop 会丢失语义或产出错误结构.
+            // 以扁平 + 标签 + goto 输出(参照 Procyon),保证语义正确.
+            body = flatIrreducibleFallback(ir, graph);
+        }
 
         return new StructuredMethod(ir.method(), ir, body, loopAnns, ifAnns, switchAnns, finalTryCatch);
+    }
+
+    /**
+     * 不可归约 CFG 的扁平回退:逐基本块发射 {@code label: <语句>; goto <下一块>}.
+     *
+     * <p>参照 Procyon 的 labeled-goto:结构化为 if/loop 会丢失语义或产出错误结构时,
+     * 以扁平 + 标签 + goto 输出,保证<b>语义正确</b>(虽不美观).块内语句经
+     * {@link BlockReducer#translateGroup} 翻译(自动跳过 CONDITION);控制流按出边
+     * 发射:CONDITION 块 → {@code if (cond) goto A; goto B;},RETURN/THROW 由
+     * translateGroup 输出,其余 → {@code goto 目标}.</p>
+     */
+    private BlockStatement flatIrreducibleFallback(LinearIr ir, ControlFlowGraph graph) {
+        Map<Integer, String> labelName = new java.util.HashMap<>();
+        for (BasicBlock b : graph.blocks()) {
+            if (b != graph.entryBlock() && b != graph.exitBlock()) {
+                labelName.put(b.id(), "lbl" + b.id());
+            }
+        }
+        List<Statement> stmts = new ArrayList<>();
+        for (BasicBlock b : graph.blocks()) {
+            if (b == graph.exitBlock()
+                    || (b == graph.entryBlock() && b.instructions().isEmpty())) {
+                // 跳过出口块与空入口块(入口无指令,其 goto 是冗余跳转到首个真实块)
+                continue;
+            }
+            String label = labelName.get(b.id());
+            if (label != null) {
+                stmts.add(new com.bingbaihanji.bdec.ast.stmt.LabelStatement(label));
+            }
+            // 块内语句(translateGroup 跳过 CONDITION)
+            Statement blockStmts = blockReducer.translateGroup(new BlockGroup(b), ir);
+            if (blockStmts instanceof BlockStatement bs) {
+                stmts.addAll(bs.statements());
+            } else if (blockStmts != null) {
+                stmts.add(blockStmts);
+            }
+            // 控制流:条件块 → if-goto;非条件 → goto 出边目标
+            boolean hasCond = ir.instructionsOf(b).stream()
+                    .anyMatch(i -> i.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.CONDITION);
+            if (hasCond) {
+                Expression cond = AstCleanup.simplifyCondition(
+                        blockReducer.extractCondition(new BlockGroup(b), ir));
+                BasicBlock trueTarget = null, falseTarget = null;
+                for (var e : graph.outgoingOf(b)) {
+                    if (e.kind() == EdgeKind.TRUE_BRANCH) {
+                        trueTarget = e.target();
+                    } else if (e.kind() == EdgeKind.FALSE_BRANCH) {
+                        falseTarget = e.target();
+                    }
+                }
+                if (cond != null && trueTarget != null && falseTarget != null
+                        && labelName.containsKey(trueTarget.id())
+                        && labelName.containsKey(falseTarget.id())) {
+                    stmts.add(new com.bingbaihanji.bdec.ast.stmt.IfStatement(cond,
+                            new com.bingbaihanji.bdec.ast.stmt.GotoStatement(
+                                    labelName.get(trueTarget.id())), null));
+                    stmts.add(new com.bingbaihanji.bdec.ast.stmt.GotoStatement(
+                            labelName.get(falseTarget.id())));
+                }
+            } else {
+                for (var e : graph.outgoingOf(b)) {
+                    if (e.kind() == EdgeKind.EXCEPTION
+                            || e.kind() == EdgeKind.RETURN
+                            || e.kind() == EdgeKind.THROW
+                            || e.target() == graph.exitBlock()) {
+                        continue;
+                    }
+                    String target = labelName.get(e.target().id());
+                    if (target != null) {
+                        stmts.add(new com.bingbaihanji.bdec.ast.stmt.GotoStatement(target));
+                    }
+                }
+            }
+        }
+        return new BlockStatement(stmts);
     }
 
     // ── 折叠操作 ────────────────────────────────────────

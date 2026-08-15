@@ -45,13 +45,31 @@ public class BytecodeTestRoundTripTest {
         dir.delete();
     }
 
+    /**
+     * 从 target/test-classes/ 加载内部类的字节加载器.
+     * EnumRewriter 依赖它读取枚举常量匿名类体(E$1.class 等).
+     */
+    private static java.util.function.Function<String, byte[]> testClassByteLoader() {
+        Path testClassesDir = Paths.get("target/test-classes/");
+        return internalName -> {
+            try {
+                Path innerFile = testClassesDir.resolve(internalName + ".class");
+                if (Files.exists(innerFile)) {
+                    return Files.readAllBytes(innerFile);
+                }
+            } catch (Exception ignored) {
+            }
+            return null;
+        };
+    }
+
+    // === Helper: decompile a pre-compiled .class and recompile ===
+
     @Before
     public void setUp() throws Exception {
         harness = new DecompileTestHarness();
         tempDir = Files.createTempDirectory("bdec-bytetest-");
     }
-
-    // === Helper: decompile a pre-compiled .class and recompile ===
 
     @After
     public void tearDown() {
@@ -122,24 +140,6 @@ public class BytecodeTestRoundTripTest {
         } catch (Exception e) {
             return "ERROR: " + e.getMessage();
         }
-    }
-
-    /**
-     * 从 target/test-classes/ 加载内部类的字节加载器.
-     * EnumRewriter 依赖它读取枚举常量匿名类体(E$1.class 等).
-     */
-    private static java.util.function.Function<String, byte[]> testClassByteLoader() {
-        Path testClassesDir = Paths.get("target/test-classes/");
-        return internalName -> {
-            try {
-                Path innerFile = testClassesDir.resolve(internalName + ".class");
-                if (Files.exists(innerFile)) {
-                    return Files.readAllBytes(innerFile);
-                }
-            } catch (Exception ignored) {
-            }
-            return null;
-        };
     }
 
     // === Round-trip tests for each class ===
@@ -264,13 +264,13 @@ public class BytecodeTestRoundTripTest {
         // MULTIANEWARRAY 必须保留元素类型:
         // new int[2][4] 不得降级为 new Object[2][4](IrBuilder 曾硬编码 Object)
         String out = harness.decompileSource("""
-                class MultiNewArray {
-                    int[][] grid() { return new int[2][4]; }
-                    String[][] table() { return new String[3][5]; }
-                    int[][][] cube() { return new int[2][3][4]; }
-                    long[][] longs() { return new long[2][3]; }
-                }
-                """, "MultiNewArray");
+                                             class MultiNewArray {
+                                                 int[][] grid() { return new int[2][4]; }
+                                                 String[][] table() { return new String[3][5]; }
+                                                 int[][][] cube() { return new int[2][3][4]; }
+                                                 long[][] longs() { return new long[2][3]; }
+                                             }
+                                             """, "MultiNewArray");
         DecompileTestHarness.assertContains(out,
                 "new int[2][4]",
                 "new String[3][5]",
@@ -283,10 +283,10 @@ public class BytecodeTestRoundTripTest {
         // 父类/接口的泛型类型参数必须从 Signature 重建(Base<String>,I<Integer>),
         // 而非退化为无泛型(extends Base,implements I).
         String out = harness.decompileSource("""
-                class Base<T> {}
-                interface I<T> {}
-                class Foo extends Base<String> implements I<Integer> {}
-                """, "Foo");
+                                             class Base<T> {}
+                                             interface I<T> {}
+                                             class Foo extends Base<String> implements I<Integer> {}
+                                             """, "Foo");
         DecompileTestHarness.assertContains(out,
                 "extends Base<String>",
                 "implements I<Integer>");
@@ -307,11 +307,11 @@ public class BytecodeTestRoundTripTest {
     public void testNestedWildcardBound() throws Exception {
         // 通配符边界自身的泛型参数(? extends Comparable<String>)必须保留
         String out = harness.decompileSource("""
-                import java.util.List;
-                class WildBound {
-                    public List<? extends Comparable<String>> m() { return null; }
-                }
-                """, "WildBound");
+                                             import java.util.List;
+                                             class WildBound {
+                                                 public List<? extends Comparable<String>> m() { return null; }
+                                             }
+                                             """, "WildBound");
         DecompileTestHarness.assertContains(out,
                 "List<? extends Comparable<String>>");
     }

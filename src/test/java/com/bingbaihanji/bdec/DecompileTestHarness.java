@@ -63,70 +63,6 @@ public class DecompileTestHarness {
     }
 
     /**
-     * Compile a .java resource file, then decompile it with BDEC.
-     *
-     * @param resourcePath path relative to src/test/resources/ (e.g. "m2-controlflow/IfElseSample.java")
-     * @return the decompiled Java source text
-     */
-    public String decompileResource(String resourcePath) throws Exception {
-        Path resourceFile = findResource(resourcePath);
-        String source = Files.readString(resourceFile, StandardCharsets.UTF_8);
-        return decompileSource(source, resourcePath);
-    }
-
-    /**
-     * Compile a Java source string, then decompile the first .class found.
-     */
-    public String decompileSource(String source, String className) throws Exception {
-        Path tmpDir = Files.createTempDirectory("bdec-test-");
-        try {
-            // Write source to temp file
-            Path srcFile = tmpDir.resolve(extractSimpleName(className) + ".java");
-            Files.writeString(srcFile, source, StandardCharsets.UTF_8);
-
-            // Compile with javac
-            JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-            if (compiler == null) {
-                throw new RuntimeException("No system Java compiler available. Run with JDK, not JRE.");
-            }
-            int compileResult = compiler.run(null, null, null,
-                    "-g", "-d", tmpDir.toString(),
-                    srcFile.toString());
-            if (compileResult != 0) {
-                throw new RuntimeException("Compilation failed for: " + className);
-            }
-
-            // Find the .class file
-            List<Path> classFiles = Files.walk(tmpDir)
-                    .filter(p -> p.toString().endsWith(".class"))
-                    .toList();
-            if (classFiles.isEmpty()) {
-                throw new RuntimeException("No .class file produced for: " + className);
-            }
-
-            // Decompile the main class file (prefer exact match over inner/anonymous classes).
-            // When javac compiles sources with inner classes or enums, it produces multiple
-            // .class files (e.g. Foo.class, Foo$Inner.class, Foo$1.class). We need the
-            // top-level class, which has no '$' in its simple file name.
-            String expectedFileName = extractSimpleName(className) + ".class";
-            Path classFile = classFiles.stream()
-                    .filter(p -> p.getFileName().toString().equals(expectedFileName))
-                    .findFirst()
-                    .orElse(classFiles.get(0));
-            BdecEngine engine = new BdecEngine(config, d -> {});
-            BdecResult result = engine.decompile(classFile,
-                    DecompileContext.empty(config));
-            if (!result.success()) {
-                throw new RuntimeException("Decompilation failed: " + result.cause());
-            }
-            return result.decompiledCode();
-        } finally {
-            // Cleanup temp dir
-            deleteRecursively(tmpDir);
-        }
-    }
-
-    /**
      * Compile a Java source string and decompile the top-level class, with a
      * bytecode loader that resolves inner/anonymous classes ({@code E$1} etc.)
      * from the temp directory — needed by {@code EnumRewriter} to read enum
@@ -208,6 +144,82 @@ public class DecompileTestHarness {
         }
     }
 
+    private static void deleteRecursively(Path dir) {
+        try {
+            if (Files.isDirectory(dir)) {
+                try (var files = Files.list(dir)) {
+                    files.forEach(DecompileTestHarness::deleteRecursively);
+                }
+            }
+            Files.deleteIfExists(dir);
+        } catch (IOException ignored) {
+        }
+    }
+
+    /**
+     * Compile a .java resource file, then decompile it with BDEC.
+     *
+     * @param resourcePath path relative to src/test/resources/ (e.g. "m2-controlflow/IfElseSample.java")
+     * @return the decompiled Java source text
+     */
+    public String decompileResource(String resourcePath) throws Exception {
+        Path resourceFile = findResource(resourcePath);
+        String source = Files.readString(resourceFile, StandardCharsets.UTF_8);
+        return decompileSource(source, resourcePath);
+    }
+
+    /**
+     * Compile a Java source string, then decompile the first .class found.
+     */
+    public String decompileSource(String source, String className) throws Exception {
+        Path tmpDir = Files.createTempDirectory("bdec-test-");
+        try {
+            // Write source to temp file
+            Path srcFile = tmpDir.resolve(extractSimpleName(className) + ".java");
+            Files.writeString(srcFile, source, StandardCharsets.UTF_8);
+
+            // Compile with javac
+            JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+            if (compiler == null) {
+                throw new RuntimeException("No system Java compiler available. Run with JDK, not JRE.");
+            }
+            int compileResult = compiler.run(null, null, null,
+                    "-g", "-d", tmpDir.toString(),
+                    srcFile.toString());
+            if (compileResult != 0) {
+                throw new RuntimeException("Compilation failed for: " + className);
+            }
+
+            // Find the .class file
+            List<Path> classFiles = Files.walk(tmpDir)
+                    .filter(p -> p.toString().endsWith(".class"))
+                    .toList();
+            if (classFiles.isEmpty()) {
+                throw new RuntimeException("No .class file produced for: " + className);
+            }
+
+            // Decompile the main class file (prefer exact match over inner/anonymous classes).
+            // When javac compiles sources with inner classes or enums, it produces multiple
+            // .class files (e.g. Foo.class, Foo$Inner.class, Foo$1.class). We need the
+            // top-level class, which has no '$' in its simple file name.
+            String expectedFileName = extractSimpleName(className) + ".class";
+            Path classFile = classFiles.stream()
+                    .filter(p -> p.getFileName().toString().equals(expectedFileName))
+                    .findFirst()
+                    .orElse(classFiles.get(0));
+            BdecEngine engine = new BdecEngine(config, d -> {});
+            BdecResult result = engine.decompile(classFile,
+                    DecompileContext.empty(config));
+            if (!result.success()) {
+                throw new RuntimeException("Decompilation failed: " + result.cause());
+            }
+            return result.decompiledCode();
+        } finally {
+            // Cleanup temp dir
+            deleteRecursively(tmpDir);
+        }
+    }
+
     private Path findResource(String resourcePath) {
         // Try classpath first (Maven copies src/test/resources to classpath root)
         try (InputStream is = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
@@ -233,17 +245,5 @@ public class DecompileTestHarness {
             name = name.substring(0, name.length() - 5);
         }
         return name;
-    }
-
-    private static void deleteRecursively(Path dir) {
-        try {
-            if (Files.isDirectory(dir)) {
-                try (var files = Files.list(dir)) {
-                    files.forEach(DecompileTestHarness::deleteRecursively);
-                }
-            }
-            Files.deleteIfExists(dir);
-        } catch (IOException ignored) {
-        }
     }
 }

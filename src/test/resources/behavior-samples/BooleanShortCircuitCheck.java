@@ -1,4 +1,5 @@
 class BooleanShortCircuitCheck {
+
     static int calls;
 
     static boolean side(boolean v) {

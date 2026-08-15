@@ -13,11 +13,11 @@ import java.nio.file.Path;
  * <pre>
  *   A: if x&gt;0 goto B else goto C
  *   B: goto D
- *   C: goto D          (C 有 A、D 两个前驱 —— 不可归约)
+ *   C: goto D          (C 有 A,D 两个前驱 —— 不可归约)
  *   D: ...; if x&gt;0 goto C   (D 回跳 C)
  *   E: return
  * </pre>
- * 循环 {C, D} 有多个入口(A→C、D→C),不可归约.</p>
+ * 循环 {C, D} 有多个入口(A→C,D→C),不可归约.</p>
  */
 public final class IrreducibleClassGen {
 
@@ -36,21 +36,29 @@ public final class IrreducibleClassGen {
         out.writeShort(52);  // major Java 8
         out.writeShort(9);   // constant_pool_count (8 entries + 1)
         // #1 Class
-        out.writeByte(7); out.writeShort(2);
+        out.writeByte(7);
+        out.writeShort(2);
         // #2 Utf8 "Irr"
-        out.writeByte(1); out.writeUTF("Irr");
+        out.writeByte(1);
+        out.writeUTF("Irr");
         // #3 Class
-        out.writeByte(7); out.writeShort(4);
+        out.writeByte(7);
+        out.writeShort(4);
         // #4 Utf8
-        out.writeByte(1); out.writeUTF("java/lang/Object");
+        out.writeByte(1);
+        out.writeUTF("java/lang/Object");
         // #5 Utf8 "m"
-        out.writeByte(1); out.writeUTF("m");
+        out.writeByte(1);
+        out.writeUTF("m");
         // #6 Utf8 "(I)I"
-        out.writeByte(1); out.writeUTF("(I)I");
+        out.writeByte(1);
+        out.writeUTF("(I)I");
         // #7 Utf8 "Code"
-        out.writeByte(1); out.writeUTF("Code");
+        out.writeByte(1);
+        out.writeUTF("Code");
         // #8 Utf8 "x"
-        out.writeByte(1); out.writeUTF("x");
+        out.writeByte(1);
+        out.writeUTF("x");
 
         out.writeShort(0x0021); // access: public super
         out.writeShort(1);      // this_class = #1

@@ -1,5 +1,6 @@
 class GenericCastCheck {
-    static Object[] arr = { "a", Integer.valueOf(1) };
+
+    static Object[] arr = {"a", Integer.valueOf(1)};
 
     static String at(int i) {
         return (String) arr[i];

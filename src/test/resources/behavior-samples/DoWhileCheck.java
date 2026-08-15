@@ -1,4 +1,5 @@
 class DoWhileCheck {
+
     static int count(int n) {
         int c = 0;
         int i = 0;

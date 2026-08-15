@@ -1,4 +1,5 @@
 class SwitchFallthroughCheck {
+
     static int f(int x) {
         int r = 0;
         switch (x) {

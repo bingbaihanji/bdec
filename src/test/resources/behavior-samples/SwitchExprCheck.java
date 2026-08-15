@@ -1,4 +1,5 @@
 class SwitchExprCheck {
+
     static int f(int x) {
         return switch (x) {
             case 1 -> 10;

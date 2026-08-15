@@ -14,30 +14,30 @@ import org.junit.Test;
 public class MethodRefReceiverAnnotationRoundTripTest {
 
     private static final String SOURCE = """
-            import java.lang.annotation.ElementType;
-            import java.lang.annotation.Retention;
-            import java.lang.annotation.RetentionPolicy;
-            import java.lang.annotation.Target;
-            import java.util.function.Function;
-            import java.util.function.Supplier;
-
-            @Retention(RetentionPolicy.RUNTIME)
-            @Target(ElementType.TYPE_USE)
-            @interface A {
-            }
-
-            class C {
-                static <T> T id(T t) {
-                    return t;
-                }
-
-                void m() {
-                    Function<String, String> f = @A C::id;
-                    Supplier<C> s = @A C::new;
-                    Function<String, String> g = @A C::<@A String>id;
-                }
-            }
-            """;
+                                         import java.lang.annotation.ElementType;
+                                         import java.lang.annotation.Retention;
+                                         import java.lang.annotation.RetentionPolicy;
+                                         import java.lang.annotation.Target;
+                                         import java.util.function.Function;
+                                         import java.util.function.Supplier;
+                                         
+                                         @Retention(RetentionPolicy.RUNTIME)
+                                         @Target(ElementType.TYPE_USE)
+                                         @interface A {
+                                         }
+                                         
+                                         class C {
+                                             static <T> T id(T t) {
+                                                 return t;
+                                             }
+                                         
+                                             void m() {
+                                                 Function<String, String> f = @A C::id;
+                                                 Supplier<C> s = @A C::new;
+                                                 Function<String, String> g = @A C::<@A String>id;
+                                             }
+                                         }
+                                         """;
 
     @Test
     public void testMethodRefReceiverAnnotation() throws Exception {

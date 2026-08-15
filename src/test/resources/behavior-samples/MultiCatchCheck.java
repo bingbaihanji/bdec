@@ -1,4 +1,5 @@
 class MultiCatchCheck {
+
     static String f(int x) {
         try {
             if (x == 1) {

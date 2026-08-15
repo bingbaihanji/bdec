@@ -193,7 +193,7 @@ public final class BdecCli {
         int success = 0, failed = 0;
 
         // 第一阶段:读取 JAR 中全部 .class 字节(内部名 → 字节),跳过 module-info/package-info.
-        // 参考 CFR(ClassFileSourceImpl 预扫描 class→jar 映射)、Procyon(JarTypeLoader 按名
+        // 参考 CFR(ClassFileSourceImpl 预扫描 class→jar 映射),Procyon(JarTypeLoader 按名
         // 回查)与 Vineflower(StructContext name→unit 映射):先建立映射,再按内部名惰性读.
         Map<String, byte[]> classBytes = new java.util.HashMap<>();
         try (JarInputStream jis = new JarInputStream(

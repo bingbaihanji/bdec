@@ -1,4 +1,5 @@
 class StringSwitchCheck {
+
     static int f(String s) {
         switch (s) {
             case "foo":

@@ -1,4 +1,5 @@
 class StringConcatCheck {
+
     static String concat(String a, String b, int n, Object o) {
         return a + b + n + ":" + o;
     }

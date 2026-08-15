@@ -1,4 +1,5 @@
 class SynchronizedCheck {
+
     static int counter;
 
     static int m() {

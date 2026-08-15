@@ -1,4 +1,5 @@
 class StringMethodsCheck {
+
     static String f(String s) {
         return s.substring(2, 5) + "|" + s.charAt(0) + "|" + s.indexOf('o');
     }

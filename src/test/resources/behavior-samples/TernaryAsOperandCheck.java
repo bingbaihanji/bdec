@@ -1,4 +1,5 @@
 class TernaryAsOperandCheck {
+
     static int cond(int a, int b, int c, int d, int e) {
         return (a > 0 ? b : c) > 0 ? d : e;
     }

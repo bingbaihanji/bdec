@@ -467,6 +467,14 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
             } else {
                 w.write(String.valueOf(d));
             }
+        } else if (v instanceof Number n && lit.type() != null
+                && (lit.type().kind() == com.bingbaihanji.bdec.type.TypeKind.BYTE
+                || lit.type().kind() == com.bingbaihanji.bdec.type.TypeKind.SHORT)) {
+            // byte/short 无字面量后缀:常量实参传给 byte/short 参数时
+            //(如 calc((byte)10))须显式强转,否则重编译报"有损转换".
+            w.write(lit.type().kind() == com.bingbaihanji.bdec.type.TypeKind.BYTE
+                    ? "(byte) " : "(short) ");
+            w.write(String.valueOf(n));
         } else {
             w.write(String.valueOf(v));
         }

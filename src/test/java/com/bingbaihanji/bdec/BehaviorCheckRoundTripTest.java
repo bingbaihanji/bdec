@@ -6,9 +6,9 @@ import org.junit.Test;
  * 执行级语义等价测试套件:15 个行为样例.
  *
  * <p>每个样例是 {@code src/test/resources/behavior-samples/} 下的自包含 Java 源
- * ({@code public static String check()} + {@code main} 打印确定性输出)。harness
+ * ({@code public static String check()} + {@code main} 打印确定性输出).harness
  * 编译原始源码 → BDEC 反编译 → 重编译反编译产物 → 用同一输入运行两份,比对
- * 退出码与 stdout。捕获"能编译但行为错"的静默语义错误。</p>
+ * 退出码与 stdout.捕获"能编译但行为错"的静默语义错误.</p>
  */
 public class BehaviorCheckRoundTripTest {
 
@@ -146,4 +146,60 @@ public class BehaviorCheckRoundTripTest {
     public void testSynchronized() throws Exception {
         SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("SynchronizedCheck");
     }
+
+    @Test(timeout = 120_000)
+    public void testAnonymousClass() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("AnonymousClassCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testLocalClassCapture() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("LocalClassCaptureCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testVarargs() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("VarargsCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testArrayInitializer() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("ArrayInitializerCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testNestedGeneric() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("NestedGenericCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testStaticInit() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("StaticInitCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testOverload() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("OverloadCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testCharByte() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("CharByteCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testInstanceofChain() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("InstanceofChainCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testFoldedIncContinue() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("FoldedIncContinueCheck");
+    }
+
+    @Test(timeout = 120_000)
+    public void testSyncInstance() throws Exception {
+        SemanticEquivalenceHarness.assertSemanticallyEquivalentResource("SyncInstanceCheck");
+    }
+
 }

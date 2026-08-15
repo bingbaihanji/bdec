@@ -1,8 +1,8 @@
 package com.bingbaihanji.bdec;
 
-import com.bingbaihanji.bdec.bytecode.parser.ClassFileReader;
 import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
+import com.bingbaihanji.bdec.bytecode.parser.ClassFileReader;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.CfgBuilder;
 import com.bingbaihanji.bdec.cfg.ControlFlowEdge;
@@ -17,6 +17,7 @@ import java.nio.file.Paths;
 
 /** Debug utility: dump CFG + IR for a method. */
 public class CfgDebug {
+
     public static void main(String[] args) throws Exception {
         String className = args.length > 0 ? args[0] : "TestClass1";
         String methodName = args.length > 1 ? args[1] : "testMethod";
@@ -33,8 +34,12 @@ public class CfgDebug {
 
         ClassFileModel model = new ClassFileReader().read(internalName, bytes);
         for (MethodModel method : model.methods()) {
-            if (!method.name().equals(methodName)) continue;
-            if (method.instructions() == null || method.instructions().isEmpty()) continue;
+            if (!method.name().equals(methodName)) {
+                continue;
+            }
+            if (method.instructions() == null || method.instructions().isEmpty()) {
+                continue;
+            }
 
             CfgBuilder cfgBuilder = new CfgBuilder();
             ControlFlowGraph cfg = cfgBuilder.build(method);

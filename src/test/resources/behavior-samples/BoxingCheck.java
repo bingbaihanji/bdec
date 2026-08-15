@@ -1,4 +1,5 @@
 class BoxingCheck {
+
     static int idCompare() {
         Integer a = 1000;
         Integer b = 1000;

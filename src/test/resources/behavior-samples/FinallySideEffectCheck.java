@@ -1,4 +1,5 @@
 class FinallySideEffectCheck {
+
     static int x;
 
     static int m() {

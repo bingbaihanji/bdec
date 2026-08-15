@@ -1,4 +1,4 @@
-class NestedBreakContinueCheck {
+class FoldedIncContinueCheck {
 
     static int sum(int n) {
         int s = 0;
@@ -6,16 +6,13 @@ class NestedBreakContinueCheck {
             if (i % 2 == 0) {
                 continue;
             }
-            if (i > 7) {
-                break;
-            }
             s += i;
         }
         return s;
     }
 
     public static String check() {
-        return "" + sum(10);
+        return "" + sum(6);
     }
 
     public static void main(String[] args) {

@@ -1,4 +1,5 @@
 class NestedTernaryCheck {
+
     static int m(int a, int b, int c, int d, int e) {
         return a > 0 ? (b > 0 ? c : d) : e;
     }
