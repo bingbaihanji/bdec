@@ -8,7 +8,9 @@ import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.ast.stmt.ThrowStatement;
+import com.bingbaihanji.bdec.bytecode.model.MethodModel;
 import com.bingbaihanji.bdec.bytecode.model.TypePathElement;
+import com.bingbaihanji.bdec.bytecode.parser.SignatureParser;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.DominatorTree;
@@ -140,6 +142,47 @@ public final class BlockReducer implements ReducerOps {
             return java.util.Map.of();
         }
         return AnnotationRenderer.groupByTypePath(v.typeAnnotations());
+    }
+
+    /**
+     * 当前方法的泛型返回类型:优先取 Signature 属性解析的返回类型
+     * (带泛型实参),否则回退描述符返回类型.
+     */
+    private JavaType genericMethodReturnType() {
+        if (currentIr == null || currentIr.method() == null) {
+            return null;
+        }
+        MethodModel m = currentIr.method();
+        if (m.signature() != null && !m.signature().isEmpty()) {
+            try {
+                JavaType[] sig = SignatureParser.parseMethodSignature(m.signature());
+                if (sig != null && sig.length > 0) {
+                    return sig[sig.length - 1];
+                }
+            } catch (Exception ignored) {
+                // 保持默认
+            }
+        }
+        return m.returnType();
+    }
+
+    /**
+     * 目标类型绑定的菱形推断:声明类型带泛型实参且初始化式为泛型类的
+     * {@code new} 时置菱形标志——{@code List<String> x = new ArrayList<>()}
+     * 让 javac 从赋值目标重推断类型实参.仅当新对象类本身是泛型类时才置位.
+     */
+    private static Expression markTargetDiamond(Expression rhs, JavaType declType) {
+        if (!(rhs instanceof NewExpr ne)
+                || declType == null || declType.typeArguments().isEmpty()
+                || ne.instantiatedType() == null
+                || ne.instantiatedType().internalName() == null) {
+            return rhs;
+        }
+        if (!com.bingbaihanji.bdec.ir.GenericMethodResolver.isGenericClass(
+                ne.instantiatedType().internalName())) {
+            return rhs;
+        }
+        return ne.withDiamond();
     }
 
     /** 记录归约语句与所属组. */
@@ -1121,6 +1164,9 @@ public final class BlockReducer implements ReducerOps {
                     yield new ReturnStatement(null);
                 } else {
                     Expression retVal = valueToExpr(insn.operands().getFirst());
+                    // 目标类型绑定的菱形推断(return 场景):方法返回类型带泛型实参
+                    // 时置菱形标志(如 return new HashMap<>();)
+                    retVal = markTargetDiamond(retVal, genericMethodReturnType());
                     // 应用语义注解中的布尔折叠
                     retVal = AstCleanup.applyBooleanAnnotation(insn, retVal);
                     // 对 boolean 返回方法,将整数字面量转为布尔值
@@ -1190,7 +1236,8 @@ public final class BlockReducer implements ReducerOps {
                         // 局部变量上的 JSR-308 类型注解(0x40):渲染后按
                         // 类型路径分组附加到声明(如 "@A String x")
                         yield new com.bingbaihanji.bdec.ast.stmt.VariableDeclaration(
-                                declType, declName, rhs, renderVarTypeAnnotations(v));
+                                declType, declName, markTargetDiamond(rhs, declType),
+                                renderVarTypeAnnotations(v));
                     }
                 }
                 Expression e = translateExpr(insn);
@@ -1634,9 +1681,20 @@ public final class BlockReducer implements ReducerOps {
                         String dc = dcAnn.getString(
                                 com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS);
                         if (dc != null) {
+                            // 静态调用目标:顶层类取包分隔后的简单名(com/foo/Bar → Bar);
+                            // 嵌套类/嵌套枚举(com/foo/Outer$Inner 或默认包的
+                            // Outer$Inner,如 EnumBinName$Color)取最后一个 $ 之后的段
+                            // (→ Inner/Color)。同一编译单元内嵌套类型以简单名可见,
+                            // 与下方 FIELD_LOAD 的静态字段目标处理保持同一约定;
+                            // 跨文件嵌套类(如 java/util/Map$Entry)理论上需
+                            // Outer.Inner + import,此处先按同编译单元简单名处理。
+                            // 匿名类($ 后跟数字)不适用此场景(源码无法对匿名类做静态调用)。
                             int lastSlash = dc.lastIndexOf('/');
-                            target = new VarExpr(lastSlash >= 0
-                                    ? dc.substring(lastSlash + 1) : dc);
+                            String simple = lastSlash >= 0
+                                    ? dc.substring(lastSlash + 1) : dc;
+                            int lastDollar = simple.lastIndexOf('$');
+                            target = new VarExpr(lastDollar >= 0
+                                    ? simple.substring(lastDollar + 1) : simple);
                         }
                     }
                     argStart = 0; // 所有操作数均为参数(无接收者)
@@ -1668,6 +1726,7 @@ public final class BlockReducer implements ReducerOps {
 
             // 对象创建——若已折叠则携带合并后的构造函数参数
             case NEW -> {
+                NewExpr created;
                 if (currentNewToInit.containsKey(insn.id())) {
                     List<IrInstruction> inits = currentNewToInit.get(insn.id());
                     List<Expression> ctorArgs = new ArrayList<>();
@@ -1685,16 +1744,31 @@ public final class BlockReducer implements ReducerOps {
                     // NewExpr 构造函数为 (type, dimensions, constructorArgs)
                     // 注意:不再调用 stripEnclosingThis,因为 AstBuilder 保留了 this$0
                     // 构造函数参数,调用处需传递 this 以保持一致性
-                    yield new NewExpr(insn.resultType(), List.of(), ctorArgs,
+                    created = new NewExpr(insn.resultType(), List.of(), ctorArgs,
+                            List.of(), List.of(), renderOffsetTypeAnnotations(
+                            com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_NEW,
+                            insn.sourceOffset()));
+                } else {
+                    // NewExpr 构造函数为 (type, dimensions, constructorArgs)
+                    created = new NewExpr(insn.resultType(), List.of(), List.of(),
                             List.of(), List.of(), renderOffsetTypeAnnotations(
                             com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_NEW,
                             insn.sourceOffset()));
                 }
-                // NewExpr 构造函数为 (type, dimensions, constructorArgs)
-                yield new NewExpr(insn.resultType(), List.of(), List.of(),
-                        List.of(), List.of(), renderOffsetTypeAnnotations(
-                        com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_NEW,
-                        insn.sourceOffset()));
+                // 菱形推断(有参):泛型类 + 存在参数个数匹配且涉及类型变量的构造器
+                // → 发射 new ArrayList<>(args),让 javac 从实参重推断类型实参.
+                // 无参 new 由声明目标类型置位(见 translateStmt 的 STORE 声明分支).
+                if (!created.constructorArgs().isEmpty()
+                        && created.instantiatedType() != null
+                        && created.instantiatedType().internalName() != null
+                        && com.bingbaihanji.bdec.ir.GenericMethodResolver.isGenericClass(
+                        created.instantiatedType().internalName())
+                        && com.bingbaihanji.bdec.ir.GenericMethodResolver.ctorParamsBindTypeVars(
+                        created.instantiatedType().internalName(),
+                        created.constructorArgs().size())) {
+                    created = created.withDiamond();
+                }
+                yield created;
             }
             case NEW_ARRAY -> {
                 // 从操作数中提取数组大小(由 NEWARRAY/ANEWARRAY 弹出栈的值)

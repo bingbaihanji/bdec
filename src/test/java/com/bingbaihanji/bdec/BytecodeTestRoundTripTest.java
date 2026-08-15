@@ -232,7 +232,7 @@ public class BytecodeTestRoundTripTest {
                 "public void annotatedMethod(@AnnotationDemo(\"param\") String param)");
         // 嵌套泛型局部变量(var map = new HashMap<String, List<Integer>>())
         DecompileTestHarness.assertContains(src2,
-                "HashMap<String, List<Integer>> map = new HashMap()");
+                "HashMap<String, List<Integer>> map = new HashMap<>()");
     }
 
     @Test

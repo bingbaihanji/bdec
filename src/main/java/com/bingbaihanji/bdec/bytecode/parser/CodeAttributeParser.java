@@ -116,9 +116,9 @@ final class CodeAttributeParser {
                         }
                     }
                 }
-                case "RuntimeVisibleTypeAnnotations" -> {
+                case "RuntimeVisibleTypeAnnotations", "RuntimeInvisibleTypeAnnotations" -> {
                     // Code 内的类型注解(局部变量 0x40/0x41,cast/new 等
-                    // 偏移量相关目标)——合并到方法级类型注解列表
+                    // 偏移量相关目标,含 CLASS retention)——合并到方法级类型注解列表
                     List<TypeAnnotationEntry> codeAnns = annotationParser.parseTypeAnnotations(in, pool);
                     if (codeAnns != null && !codeAnns.isEmpty()) {
                         codeTypeAnns.addAll(codeAnns);

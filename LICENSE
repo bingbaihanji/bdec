@@ -199,3 +199,20 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+
+
+
+P1 — 泛型传播框架化（提升输出质量，工作量中）
+
+把 inferGenericReturnType 从点对点升级为基于调用点实参 + 方法签名泛型变量绑定的传播：先支持 List.of/Map.of/Collections.emptyList/流式链返回值，再逐步覆盖。参照 Procyon Reifier + TypeManager 结构，但用轻量方案（BDEC 不必引入完整签名物化）。
+
+P2 — 架构健康（可维护性）
+
+4. 第六轮拆分 BlockReducer（2128 行 → 按模式拆出 emitter/表达式语境化）
+5. 去重 EnumRewriter 与 AstBuilder 的泛型闸门（抽共享）
+
+P3 — 功能补齐（投入大，收益中）
+
+6. 反混淆：先从 CFR op02obf 抄思路——识别除零/NPE/算术死分支的控制流混淆，再补算术/XOR 简化
+7. 测试语料扩充：CfrDiff 16 → 50+，补 Procyon 的 GenericsTests/SyncTests/EnhancedTryTests 主题

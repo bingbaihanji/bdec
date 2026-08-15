@@ -3,9 +3,13 @@ package com.bingbaihanji.bdec;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 import com.bingbaihanji.bdec.type.TypeResolver;
+import com.bingbaihanji.bdec.util.TypeText;
 import org.junit.Test;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -131,6 +135,34 @@ public class GenericArraySignatureRoundTripTest {
         // TypeResolver 混合形态(外层维度累积)displayName 不受回归
         JavaType tr = TypeResolver.parseFieldDescriptor("[[Ljava/lang/String;");
         assertEquals("String[][]", tr.displayName());
+    }
+
+    /**
+     * TypeText.render(重写器合成类型路径)对 TypeResolver 维度累积形态
+     * 多维数组的括号数不得翻倍——修复前 {@code [[String} 渲染为
+     * {@code String[][][]}(多一层),3 维 {@code [[[String} 渲染为
+     * 6 个括号.与 {@code displayName}/{@code arrayBaseName} 的
+     * {@code remaining = max(1, dims - element.dims)} 补差一致.
+     */
+    @Test
+    public void testTypeTextRenderCumulativeDimsBracketCount() {
+        Set<String> imports = new HashSet<>();
+        // [[Ljava/lang/String; → ARRAY(ARRAY(String,1),2) 累积形态
+        JavaType t2 = TypeResolver.parseFieldDescriptor("[[Ljava/lang/String;");
+        assertEquals("String[][]",
+                TypeText.render(t2, "", Map.of(), imports));
+        // [[[Ljava/lang/String; → 3 维,每层补差不得翻倍
+        JavaType t3 = TypeResolver.parseFieldDescriptor("[[[Ljava/lang/String;");
+        assertEquals("String[][][]",
+                TypeText.render(t3, "", Map.of(), imports));
+        // 基本数组不变
+        JavaType t1 = TypeResolver.parseFieldDescriptor("[Ljava/lang/String;");
+        assertEquals("String[]",
+                TypeText.render(t1, "", Map.of(), imports));
+        // 基本类型数组也不变
+        JavaType ti = TypeResolver.parseFieldDescriptor("[[I");
+        assertEquals("int[][]",
+                TypeText.render(ti, "", Map.of(), imports));
     }
 
     @Test

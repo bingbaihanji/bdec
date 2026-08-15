@@ -1,9 +1,11 @@
 package com.bingbaihanji.bdec.ir;
 
+import com.bingbaihanji.bdec.bytecode.model.LocalVariableEntry;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
 import com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry;
 import com.bingbaihanji.bdec.bytecode.parser.SignatureParser;
 import com.bingbaihanji.bdec.type.JavaType;
+import com.bingbaihanji.bdec.type.TypeResolver;
 
 import java.util.List;
 
@@ -38,14 +40,22 @@ final class VariableFactory {
                 }
             }
         }
-        Variable v = new Variable(slot, maxVersion + 1, type, isParam, slot);
+        // 解析 LVT 条目(作用域感知,与 lookupVarName 相同的选择规则),
+        // 使变量名与声明类型来自作用域一致的条目,避免槽位复用时的跨作用域错配.
+        // 名称允许回退到已结束作用域的最近条目(仅作为命名兜底),
+        // 但声明类型只用"确切覆盖或窗口匹配"的条目——回退匹配可能命中
+        // 已结束作用域的前一个变量(如 instanceof 模式变量 s 与 switch 判别式
+        // 复用同一槽位),其类型会把 {@code Object s = o} 误收窄成 {@code String s = o}.
+        LocalVariableEntry lvtEntry = lookupVarEntry(method, slot, offset);
+        LocalVariableEntry typeEntry = lookupTypeEntry(method, slot, offset);
+        Variable v = new Variable(slot, maxVersion + 1,
+                lookupDeclaredType(typeEntry, type), isParam, slot);
         // 向前传播局部变量表名称以便新版本保留原始参数名.
         // 但是跳过实例方法中的槽位0:'this'仅版本0有效;
         // 对槽位0的写入是一个重用该槽位的不同变量.
-        // 使用作用域感知查找,无匹配时回退到 flat map(兼容无调试信息的 class)
         // 使用作用域感知查找.不退回 flat map,
         // 因为 last-wins 会在槽位复用时产生跨作用域的错误命名.
-        String lvtName = method.lookupVarName(slot, offset);
+        String lvtName = lvtEntry != null ? lvtEntry.name() : null;
         if (lvtName != null
                 && !(slot == 0 && maxVersion > 0 && !method.isStatic())) {
             // slot 0 的保护仅适用于实例方法的 this 槽——
@@ -100,5 +110,97 @@ final class VariableFactory {
         }
         variables.add(v);
         return v;
+    }
+
+    /**
+     * 按 STORE 偏移量查找槽位对应的 LVT 条目(作用域感知).
+     *
+     * <p>选择规则与 {@link MethodModel#lookupVarName} 完全一致:
+     * 先精确作用域覆盖,再 (pc, pc+4] 窗口(条目 startPc 指向 STORE 之后),
+     * 最后回退到 startPc<=pc 的最近条目.返回的条目同时携带变量名与
+     * 声明类型描述符,保证名称与类型来自同一条目,槽位复用时不串味.</p>
+     */
+    private static LocalVariableEntry lookupVarEntry(MethodModel method, int slot, int pc) {
+        for (LocalVariableEntry entry : method.localVarEntries()) {
+            if (entry.slot() == slot && entry.covers(pc)) {
+                return entry;
+            }
+        }
+        LocalVariableEntry windowBest = null;
+        for (LocalVariableEntry entry : method.localVarEntries()) {
+            if (entry.slot() == slot && entry.startPc() > pc && entry.startPc() <= pc + 4
+                    && (windowBest == null || entry.startPc() < windowBest.startPc())) {
+                windowBest = entry;
+            }
+        }
+        if (windowBest != null) {
+            return windowBest;
+        }
+        LocalVariableEntry best = null;
+        for (LocalVariableEntry entry : method.localVarEntries()) {
+            if (entry.slot() == slot && entry.startPc() <= pc
+                    && (best == null || entry.startPc() > best.startPc())) {
+                best = entry;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * 按 STORE 偏移量查找槽位对应 LVT 条目中"可靠的声明类型"来源.
+     *
+     * <p>仅接受两种可靠匹配(与 {@link #lookupVarEntry} 的前两阶段相同):
+     * <ul>
+     *   <li>确切作用域覆盖:条目 {@code covers(pc)},变量当前就在作用域内;</li>
+     *   <li>(pc, pc+4] 窗口:条目 startPc 指向 STORE 之后的首条指令
+     *       (JVMS 规定),即本次 STORE 正是该变量的首次定义.</li>
+     * </ul>
+     * 不采用 {@code startPc <= pc} 的回退——槽位复用时回退可能命中
+     * 已结束作用域的前一个变量,其声明类型不是本次写入变量的类型
+     * (例如 instanceof 模式变量 s 与 switch 判别式共享槽位).</p>
+     */
+    private static LocalVariableEntry lookupTypeEntry(MethodModel method, int slot, int pc) {
+        for (LocalVariableEntry entry : method.localVarEntries()) {
+            if (entry.slot() == slot && entry.covers(pc)) {
+                return entry;
+            }
+        }
+        LocalVariableEntry windowBest = null;
+        for (LocalVariableEntry entry : method.localVarEntries()) {
+            if (entry.slot() == slot && entry.startPc() > pc && entry.startPc() <= pc + 4
+                    && (windowBest == null || entry.startPc() < windowBest.startPc())) {
+                windowBest = entry;
+            }
+        }
+        return windowBest;
+    }
+
+    /**
+     * 从 LVT 条目解析变量的声明类型描述符(LocalVariableTable 的 typeDesc).
+     *
+     * <p>有 LVT 时优先采用 LVT 声明的类型——修复"变量声明类型收窄":
+     * {@code Object o = new ArrayList()} 此前用被存值 {@code ArrayList} 作为
+     * 变量类型,现改为 LVT 声明的 {@code Object}.无 LVT(无调试信息)或
+     * 描述符解析失败时回退到被存值类型 {@code fallback}.</p>
+     */
+    private static JavaType lookupDeclaredType(LocalVariableEntry entry, JavaType fallback) {
+        if (entry == null || entry.typeDesc() == null) {
+            return fallback;
+        }
+        try {
+            JavaType declared = TypeResolver.parseFieldType(entry.typeDesc());
+            return declared != null ? declared : fallback;
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    /**
+     * 供 {@link IrBuilder#handleStore} 使用:按偏移量解析槽位在 LVT 中声明的类型,
+     * 无可靠匹配条目时回退 {@code fallback}.与 {@code createWriteVar} 内部使用的
+     * 类型选择规则一致(同一 {@code lookupTypeEntry} 选择逻辑).
+     */
+    static JavaType lookupDeclaredType(MethodModel method, int slot, int pc, JavaType fallback) {
+        return lookupDeclaredType(lookupTypeEntry(method, slot, pc), fallback);
     }
 }

@@ -275,14 +275,20 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         //                         元素数组([ARRAY])在后一个 "[]" 前
         if (type.kind() == TypeKind.ARRAY) {
             StringBuilder sb = new StringBuilder();
+            // TypeResolver 维度累积形态(如 [[String → ARRAY(ARRAY(String,1),2)):
+            // 元素递归已含内层括号,外层仅补差值,否则括号翻倍(与 arrayBaseName 同式).
+            JavaType elem = elementOfArray(type);
+            int outerDims = (elem != null && elem.kind() == TypeKind.ARRAY)
+                    ? Math.max(1, type.arrayDimensions() - elem.arrayDimensions())
+                    : type.arrayDimensions();
             java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> elemPath = path;
             for (int d = 0; d < type.arrayDimensions(); d++) {
                 elemPath = appendPath(elemPath,
                         com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_ARRAY, d);
             }
-            sb.append(renderAnnotatedType(elementOfArray(type), elemPath, anns));
+            sb.append(renderAnnotatedType(elem, elemPath, anns));
             java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> cur = path;
-            for (int d = 0; d < type.arrayDimensions(); d++) {
+            for (int d = 0; d < outerDims; d++) {
                 boolean annotated = false;
                 for (String a : anns.getOrDefault(cur, java.util.List.of())) {
                     sb.append(' ').append(a);
@@ -798,6 +804,11 @@ public class ExpressionEmitter implements AstVisitor<Void, Void> {
         } else {
             // JSR-308 注解对象创建:new @A ArrayList<>()(含泛型参数递归)
             w.write("new ").write(renderAnnotatedBase(type, java.util.List.of(), anns));
+        }
+        // 菱形推断:类型实参可被构造器实参或目标类型推断时发射 new ArrayList<>(...).
+        // 匿名类不可用菱形(Java 语法限制).
+        if (n.diamond() && !n.isAnonymousClass()) {
+            w.write("<>");
         }
         if (!n.constructorArgs().isEmpty()) {
             // 构造器参数调用(如 new ArrayList(args))

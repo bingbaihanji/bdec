@@ -248,37 +248,4 @@ final class BootstrapResolver {
                 rawType.descriptor(), typeArgs, rawType.arrayDimensions());
     }
 
-    /**
-     * 从方法实参推断返回类型的泛型参数.
-     * 例如 Arrays.asList(String[]) → List<String>
-     */
-    static JavaType inferGenericReturnType(String declaringClass,
-                                           String methodName,
-                                           JavaType returnType,
-                                           List<Value> args) {
-        // Arrays.asList(T...): 返回 List<T>,从数组元素类型提取 T
-        if ("java/util/Arrays".equals(declaringClass) && "asList".equals(methodName)
-                && !args.isEmpty()) {
-            JavaType argType = args.getFirst().type();
-            // 从数组类型中提取元素类型
-            if (argType.arrayDimensions() > 0 && argType.descriptor() != null) {
-                String elemDesc = argType.descriptor().replaceFirst("^\\[+", "");
-                JavaType elemType;
-                if (elemDesc.startsWith("L") && elemDesc.endsWith(";")) {
-                    elemType = JavaType.classType(
-                            elemDesc.substring(1, elemDesc.length() - 1));
-                } else {
-                    // 基元类型数组:保留原类型但去掉数组维度
-                    elemType = new JavaType(argType.kind(),
-                            argType.internalName(), argType.descriptor(),
-                            argType.typeArguments(), 0);
-                }
-                return new JavaType(TypeKind.CLASS, returnType.internalName(),
-                        returnType.descriptor(), List.of(elemType),
-                        returnType.arrayDimensions());
-            }
-        }
-        // Collections.emptyList() / List.of() 等也可在此扩展
-        return returnType;
-    }
 }

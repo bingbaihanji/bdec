@@ -88,43 +88,64 @@ public class AstBuilder {
             TypeReferenceUtil.collectImport(v.genericType(), imports, thisClass);
             TypeReferenceUtil.collectImport(v.type(), imports, thisClass);
         }
-        for (var insn : sm.ir().instructions()) {
+        collectIrTypeImports(sm.ir().instructions(),
+                t -> TypeReferenceUtil.collectImport(t, imports, thisClass));
+    }
+
+    /**
+     * 扫描 IR 指令中引用的类型并交给收集器.
+     *
+     * <p>覆盖局部变量表之外的表达式内类型:静态调用声明类(DECLARING_CLASS,
+     * 如 {@code java.util.Collections.emptyList()}),INDY 的 SAM 函数式接口
+     * 类型与实现所有者(lambda/方法引用),NEW/NEW_ARRAY 结果类型,INSTANCE_OF
+     * 目标,迭代器模式({@code iterator()/hasNext()/next()} → Iterator),
+     * {@code Map.entry()} → Map.Entry.常规方法路径({@link #collectBodyImports})
+     * 与枚举常量体方法路径(EnumRewriter)共用——常量体内仅出现在表达式中的类型
+     * 不暴露于变量表,否则输出短名却无 import.</p>
+     *
+     * @param instructions 线性 IR 指令列表(可为 null)
+     * @param collector    类型收集回调(如 {@code TypeReferenceUtil.collectImport}
+     *                     或 {@code TypeText.render})
+     */
+    public static void collectIrTypeImports(
+            java.util.List<com.bingbaihanji.bdec.ir.IrInstruction> instructions,
+            java.util.function.Consumer<com.bingbaihanji.bdec.type.JavaType> collector) {
+        if (instructions == null) {
+            return;
+        }
+        for (var insn : instructions) {
             // 静态方法调用:检查DECLARING_CLASS注解
             for (var ann : insn.annotations()) {
                 if (ann.is(com.bingbaihanji.bdec.semantic.SemanticTag.DECLARING_CLASS)) {
                     String declClass = ann.getString(
                             com.bingbaihanji.bdec.semantic.SemanticAnnotation.KEY_DECLARING_CLASS);
                     if (declClass != null) {
-                        TypeReferenceUtil.collectImport(com.bingbaihanji.bdec.type.JavaType.classType(declClass),
-                                imports, thisClass);
+                        collector.accept(com.bingbaihanji.bdec.type.JavaType.classType(declClass));
                     }
                 }
                 if (ann.is(com.bingbaihanji.bdec.semantic.SemanticTag.INDY)) {
                     // lambda/方法引用:SAM 函数式接口类型(如 Function,Supplier)
                     // 与实现所有者类型(方法引用的接收者,如 ArrayList::new 的 ArrayList)
                     // 均需收集 import,否则发射器只能输出全限定名或裸短名.
-                    TypeReferenceUtil.collectImport(insn.resultType(), imports, thisClass);
+                    collector.accept(insn.resultType());
                     String implOwner = ann.getString("implOwner");
                     if (implOwner != null) {
-                        TypeReferenceUtil.collectImport(
-                                com.bingbaihanji.bdec.type.JavaType.classType(implOwner),
-                                imports, thisClass);
+                        collector.accept(com.bingbaihanji.bdec.type.JavaType.classType(implOwner));
                     }
                 }
             }
             // NEW指令:从resultType提取类型
             if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.NEW) {
-                TypeReferenceUtil.collectImport(insn.resultType(), imports, thisClass);
+                collector.accept(insn.resultType());
             }
             // NEW_ARRAY指令:提取数组元素类型
             if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.NEW_ARRAY) {
-                TypeReferenceUtil.collectImport(insn.resultType(), imports, thisClass);
+                collector.accept(insn.resultType());
             }
             // INSTANCE_OF指令:从nameHint提取目标类型
             if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.INSTANCE_OF
                     && insn.nameHint() != null) {
-                TypeReferenceUtil.collectImport(com.bingbaihanji.bdec.type.JavaType.classType(insn.nameHint()),
-                        imports, thisClass);
+                collector.accept(com.bingbaihanji.bdec.type.JavaType.classType(insn.nameHint()));
             }
             // Iterator模式:当调用iterator()/hasNext()/next()时,添加Iterator导入
             if (insn.opcode() == com.bingbaihanji.bdec.ir.IrOpcode.INVOKE
@@ -132,15 +153,13 @@ public class AstBuilder {
                 String mName = insn.nameHint();
                 if ("iterator".equals(mName) || "hasNext".equals(mName)
                         || "next".equals(mName)) {
-                    TypeReferenceUtil.collectImport(com.bingbaihanji.bdec.type.JavaType.classType(
-                            "java/util/Iterator"), imports, thisClass);
+                    collector.accept(com.bingbaihanji.bdec.type.JavaType.classType("java/util/Iterator"));
                 }
                 // Map.entry() 调用需要 Map.Entry 的导入
                 if ("entry".equals(mName) && insn.resultType() != null
                         && insn.resultType().internalName() != null
                         && insn.resultType().internalName().contains("Map$Entry")) {
-                    TypeReferenceUtil.collectImport(com.bingbaihanji.bdec.type.JavaType.classType(
-                            "java/util/Map$Entry"), imports, thisClass);
+                    collector.accept(com.bingbaihanji.bdec.type.JavaType.classType("java/util/Map$Entry"));
                 }
             }
         }
@@ -247,6 +266,15 @@ public class AstBuilder {
             }
         }
 
+        // record 组件名 → Record 属性组件条目映射:组件声明注解以 Record 属性
+        // 为准(javac 把目标不含 FIELD 的组件注解只写在此处,不复制到 backing
+        // 字段声明注解),字段渲染须取组件注解而非 backing 字段注解.
+        java.util.Map<String, com.bingbaihanji.bdec.bytecode.model.constantpool.RecordComponentEntry>
+                recordComps = new java.util.HashMap<>();
+        for (var rc : classFile.recordComponents()) {
+            recordComps.put(rc.name(), rc);
+        }
+
         // 构建字段声明
         for (FieldModel field : classFile.fields()) {
             // 跳过 ACC_SYNTHETIC 字段,但保留内部类的 this$X 外围引用字段,
@@ -278,16 +306,26 @@ public class AstBuilder {
             if (init == null && "$assertionsDisabled".equals(field.name())) {
                 init = new com.bingbaihanji.bdec.ast.expr.LitExpr(false, JavaType.BOOLEAN);
             }
-            // 字段上的注解(RuntimeVisibleAnnotations)
+            // 字段上的注解(RuntimeVisibleAnnotations).record 组件字段以 Record
+            // 属性组件的注解为准(权威源);其余字段用 backing 字段注解.
+            List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> annSource
+                    = field.annotations();
+            var rc = recordComps.get(field.name());
+            if (rc != null) {
+                annSource = rc.annotations();
+            }
             List<String> fieldAnns = new ArrayList<>();
-            for (var ann : field.annotations()) {
+            for (var ann : annSource) {
                 fieldAnns.add(renderAnnotation(ann));
                 collectAnnotationImports(ann, imports, simpleName);
             }
-            // 字段类型上的 JSR-308 类型注解(RuntimeVisibleTypeAnnotations)
+            // 字段类型上的 JSR-308 类型注解(RuntimeVisibleTypeAnnotations).
+            // stripDeclarationDupes:剔除 javac 对"声明目标+TYPE_USE"双发射的类型副本
             java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
                     List<String>> fieldTypeAnns = buildTypeAnnotationMap(
-                    field.typeAnnotations(),
+                    stripDeclarationDupes(field.typeAnnotations(),
+                            com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_FIELD,
+                            -1, annSource, elementRootPath(displayType)),
                     com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_FIELD,
                     -1, imports, simpleName);
             FieldDeclaration fd = new FieldDeclaration(
@@ -419,13 +457,30 @@ public class AstBuilder {
             // 返回类型(0x14),形式参数类型(0x16,按参数下标对齐),throws 类型(0x17)
             var typeAnns = method.typeAnnotations();
             java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
-                    List<String>> retTypeAnns = buildTypeAnnotationMap(typeAnns,
+                    List<String>> retTypeAnns = buildTypeAnnotationMap(
+                    stripDeclarationDupes(typeAnns,
+                            com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_METHOD_RETURN,
+                            -1, method.annotations(), elementRootPath(returnType)),
                     com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_METHOD_RETURN,
                     -1, imports, simpleName);
             java.util.List<java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
                     List<String>>> paramTypeAnns = new ArrayList<>();
             for (int pi = 0; pi < paramTypes.length; pi++) {
-                paramTypeAnns.add(buildTypeAnnotationMap(typeAnns,
+                // 参数声明注解按尾部对齐(枚举构造器前导合成参数、内部类 this$0),
+                // 与声明注解渲染一致的 offset 计算
+                List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> pDecl = List.of();
+                if (method.parameterAnnotations() != null) {
+                    int numP = method.parameterAnnotations().size();
+                    int offset = paramTypes.length - numP;
+                    int declIdx = pi - offset;
+                    if (declIdx >= 0 && declIdx < numP) {
+                        pDecl = method.parameterAnnotations().get(declIdx);
+                    }
+                }
+                paramTypeAnns.add(buildTypeAnnotationMap(
+                        stripDeclarationDupes(typeAnns,
+                                com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_FORMAL_PARAMETER,
+                                pi, pDecl, elementRootPath(paramTypes[pi])),
                         com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry.TARGET_FORMAL_PARAMETER,
                         pi, imports, simpleName));
             }
@@ -714,6 +769,70 @@ public class AstBuilder {
             collectAnnotationImports(e.annotation(), imports, simpleName);
         }
         return map.isEmpty() ? java.util.Map.of() : map;
+    }
+
+    /**
+     * 计算成员类型元素根路径:非数组为 {@code []},N 维数组为
+     * {@code [ARRAY(0)..ARRAY(N-1)]}.
+     *
+     * <p>javac 对同时声明"声明目标(FIELD/METHOD/PARAMETER)+TYPE_USE"的注解,
+     * 在同一成员上双发射:类型副本落在元素根路径——裸 {@code @A int[] x} 的
+     * 声明注解类型副本落 {@code [ARRAY]}(元素),而显式 {@code int @A [] x}
+     * 的数组自身注解落 {@code []}(数组本身).按元素根路径匹配才能只剔除
+     * 声明副本,保留 {@code int @A []} 这类有意双写的数组注解.</p>
+     */
+    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>
+            elementRootPath(com.bingbaihanji.bdec.type.JavaType type) {
+        int dims = type != null && type.kind() == com.bingbaihanji.bdec.type.TypeKind.ARRAY
+                ? type.arrayDimensions() : 0;
+        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> path
+                = new ArrayList<>(dims);
+        for (int d = 0; d < dims; d++) {
+            path.add(new com.bingbaihanji.bdec.bytecode.model.TypePathElement(
+                    com.bingbaihanji.bdec.bytecode.model.TypePathElement.KIND_ARRAY, d));
+        }
+        return path;
+    }
+
+    /**
+     * 剔除与声明注解重复的类型注解条目(javac 双发射去重).
+     *
+     * <p>同一成员上源码一个 {@code @A} 会同时落入声明注解属性与类型注解属性,
+     * 类型副本落在元素根路径(见 {@link #elementRootPath}).保留声明版,剔除
+     * 该路径上同值的类型副本——否则输出同一注解两次(非 repeatable)无法重编译.
+     * 仅作用于指定目标类型(字段/返回/参数)与指定路径,其他目标的类型注解
+     * (如 Code 内局部变量 0x40)不受影响.</p>
+     *
+     * @param entries    类型注解条目列表
+     * @param targetType 目标类型(字段 0x13 / 返回 0x14 / 参数 0x16)
+     * @param targetIdx  带下标目标的索引(参数下标),无下标目标传 -1
+     * @param declAnns   同成员声明注解列表(要保留的版本)
+     * @param elementRoot 该成员类型元素根路径
+     * @return 剔除重复后的类型注解条目列表
+     */
+    private static java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry>
+            stripDeclarationDupes(
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry> entries,
+            int targetType, int targetIdx,
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.AnnotationEntry> declAnns,
+            java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement> elementRoot) {
+        if (entries == null || entries.isEmpty()
+                || declAnns == null || declAnns.isEmpty()) {
+            return entries;
+        }
+        java.util.List<com.bingbaihanji.bdec.bytecode.model.TypeAnnotationEntry> result
+                = new ArrayList<>(entries.size());
+        for (var e : entries) {
+            if (e.targetType() == targetType
+                    && (targetIdx < 0 || (e.targetInfo() != null
+                    && e.targetInfo().length > 0 && e.targetInfo()[0] == targetIdx))
+                    && e.typePath().equals(elementRoot)
+                    && declAnns.contains(e.annotation())) {
+                continue; // javac 声明注解的类型副本,剔除
+            }
+            result.add(e);
+        }
+        return result.isEmpty() ? java.util.List.of() : result;
     }
 
     /** 渲染注解为源码行,如 "@Retention(RetentionPolicy.RUNTIME)" */

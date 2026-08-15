@@ -785,6 +785,15 @@ public final class IrBuilder {
         }
         int idx = varIndex(insn, op);
         Value val = stack.pop();
+        // 优先采用 LVT 声明的变量类型(修复"声明类型收窄":
+        // Object o = new ArrayList() 此前被收窄为 ArrayList o).
+        // 无 LVT 时回退到被存值类型.
+        JavaType declaredType = VariableFactory.lookupDeclaredType(
+                currentMethod, idx, offset, val.type());
+        // JVM 将 boolean/char/byte/short 以 int 形式存于栈上,而 LVT 声明的
+        // 是窄类型.按声明类型折叠常量实参(与 handleInvoke 的 boolean 参数
+        // 折叠一致),否则渲染成 "boolean b = 1" / "char c = 59" 等非法或失真输出.
+        val = foldStoreConstant(val, declaredType);
         // 每次存储都创建一个新版本——防止"this"槽位混淆
         Variable var = VariableFactory.createWriteVar(variables, idx, val.type(), offset, currentMethod);
         // 将新Variable存入locals数组确保后续LOAD找到Variable而非原始InstructionRef.
@@ -792,6 +801,38 @@ public final class IrBuilder {
         // "n = cap - 1 | cap - 1 >>> 1" → "n = n | n >>> 1"(错误!)
         locals[idx] = var;
         instructions.add(IrInstruction.store(nextId(), var, val, offset, blockId));
+    }
+
+    /**
+     * 按变量的 LVT 声明类型折叠被存常量(仅 boolean/char).
+     *
+     * <p>JVM 操作数栈上这些窄类型一律表现为 int(ICONST/BIPUSH 等):
+     * <ul>
+     *   <li>boolean 必须折叠——否则渲染成非法的 {@code boolean b = 1};</li>
+     *   <li>char 折叠为字符字面量(与 handleInvoke 的 char 参数折叠一致),
+     *       否则 {@code char c = 59} 失真;</li>
+     *   <li>byte/short 不折叠——常量整型直接用于 {@code byte b = 10} 声明
+     *       是合法的(常量收窄赋值),而折叠后经发射器会多出 {@code (byte) }
+     *       冗余强转.</li>
+     * </ul>
+     * 沿 InstructionRef 链追溯底层 CONST 常量,按声明类型重标.</p>
+     */
+    private static Value foldStoreConstant(Value val, JavaType declaredType) {
+        if (declaredType == null) {
+            return val;
+        }
+        ConstantValue cv = unwrapConstant(val);
+        if (cv == null) {
+            return val;
+        }
+        return switch (declaredType.kind()) {
+            case BOOLEAN -> cv.value() instanceof Integer i
+                    ? new ConstantValue(i != 0, JavaType.BOOLEAN) : val;
+            case CHAR -> cv.value() instanceof Number n
+                    && n.intValue() >= 0 && n.intValue() <= 0xFFFF
+                    ? new ConstantValue((char) n.intValue(), JavaType.CHAR) : val;
+            default -> val;
+        };
     }
 
     // ── 算术 ─────────────────────────────────────────────────────
@@ -1030,10 +1071,19 @@ public final class IrBuilder {
             }
         }
 
-        // 对已知泛型方法尝试从实参推断返回类型的泛型参数.
-        // 例如 Arrays.asList(String[]) → List<String>
-        returnType = BootstrapResolver.inferGenericReturnType(declaringClass, methodName,
-                returnType, args);
+        // 从调用点实参 + 方法泛型签名推断返回类型的泛型参数
+        // (反射取 java.* 方法签名,绑定类型变量;如 Map.of("a",1) → Map<String,Integer>)
+        if (op != Opcode.INVOKESTATIC && receiver != null) {
+            // 实例方法:接收者的类型实参替换类类型变量
+            // (如 List<String> l 的 l.get(0) → String,供冗余强转抑制)
+            JavaType recvType = receiver instanceof Variable rv && rv.genericType() != null
+                    ? rv.genericType() : receiver.type();
+            returnType = GenericMethodResolver.inferInstanceReturnType(declaringClass,
+                    methodName, recvType, returnType, paramTypes, args);
+        } else {
+            returnType = GenericMethodResolver.inferGenericReturnType(declaringClass, methodName,
+                    returnType, paramTypes, args);
+        }
 
         IrInstruction inv = IrInstruction.invoke(nextId(), receiver, args, returnType,
                 offset, blockId, methodName);
