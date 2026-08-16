@@ -148,8 +148,17 @@ public final class ExprTranslator {
                         // 通配符不能作声明类型(? extends V x 非法)→ 用边界(V),
                         // 值本身经下方 applyGenericDeclCast 强转.
                         declType = ExprCleanup.wildcardBound(declType);
-                        if (declType.kind() == TypeKind.INT && ExprCleanup.isBooleanExpression(rhs)) {
+                        if (declType.kind() == TypeKind.INT
+                                && (ExprCleanup.isBooleanExpression(rhs)
+                                || ops.isVarInBooleanContext(v))) {
                             declType = JavaType.BOOLEAN;
+                            // 收窄后初始化常量须转布尔字面量(int 0/1 → false/true),
+                            // 否则 "boolean x = 0" 无法编译.
+                            if (rhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit
+                                    && lit.value() instanceof Integer iv) {
+                                rhs = new com.bingbaihanji.bdec.ast.expr.LitExpr(
+                                        iv != 0, JavaType.BOOLEAN);
+                            }
                         }
                         // 泛型声明强转:声明类型为类型变量/泛型而被存值是通配符
                         // 或擦除 Object 时插入 (V)(如 V newValue = function.apply(...)

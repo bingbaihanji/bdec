@@ -190,6 +190,20 @@ public final class BlockReducer implements ReducerOps {
         return null;
     }
 
+    /** 操作数是否为变量(直接 Variable 或 LOAD 指令结果). */
+    private static boolean operandIsVar(Value op, Variable var) {
+        if (op instanceof Variable ov) {
+            return ov.slot() == var.slot();
+        }
+        if (op instanceof InstructionRef ref) {
+            IrInstruction def = ref.instruction();
+            return def.opcode() == IrOpcode.LOAD && !def.operands().isEmpty()
+                    && def.operands().getFirst() instanceof Variable lv
+                    && lv.slot() == var.slot();
+        }
+        return false;
+    }
+
     @Override
     public java.util.Map<Integer, List<IrInstruction>> currentNewToInit() {
         return currentNewToInit;
@@ -1088,22 +1102,28 @@ public final class BlockReducer implements ReducerOps {
                     if (s instanceof ExpressionStatement es
                             && StatementUtils.isPostIncDec(es.expression())) {
                         UnExpr inc = (UnExpr) es.expression();
-                        // 仅局部变量自增参与折叠;字段自增(this.counter++)
-                        // 直接作为独立语句输出.
-                        if (!(inc.operand() instanceof VarExpr target)) {
+                        // 局部变量或实例字段自增均可参与折叠(字段自增
+                        // this.nextIndex++ 在 return array[nextIndex++] 中应
+                        // 折进数组下标,否则数组读到自增后的值错位一跳);
+                        // 静态字段/复杂目标直接独立输出.
+                        String incName = null;
+                        if (inc.operand() instanceof VarExpr target) {
+                            incName = target.name();
+                        } else if (inc.operand() instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
+                                && fa.target() instanceof VarExpr tv
+                                && "this".equals(tv.name())) {
+                            incName = fa.fieldName();
+                        }
+                        if (incName == null) {
                             stmts.add(s);
                             continue;
                         }
-                        // 向后折叠:自增语句紧随引用该变量的语句之后
-                        if (!stmts.isEmpty()) {
-                            Statement folded = StatementUtils.foldPostInc(stmts.get(stmts.size() - 1),
-                                    target.name(), inc.operator());
-                            if (folded != null) {
-                                stmts.set(stmts.size() - 1, folded);
-                                continue; // 跳过独立的自增语句
-                            }
-                        }
-                        // 向前折叠:自增语句在引用该变量的语句之前
+                        // 先挂 pending,优先向前折叠进后续引用该变量的语句——
+                        // 向后折叠(自增折进前一句)只在自增是该变量最后一次引用时
+                        // 才安全.字节码 "lastIndex = nextIndex; return
+                        // array[nextIndex++]" 的 iinc 紧邻 return 的数组下标,
+                        // 向后折进 lastIndex 会错成 "lastIndex = nextIndex++"
+                        // 且 return 读到自增后的值(数组错位一跳,首元素变 null).
                         if (pendingPostInc == null) {
                             pendingPostInc = s;
                             continue;
@@ -1114,17 +1134,40 @@ public final class BlockReducer implements ReducerOps {
                     }
                     if (pendingPostInc != null) {
                         UnExpr inc = (UnExpr) ((ExpressionStatement) pendingPostInc).expression();
-                        if (!(inc.operand() instanceof VarExpr target)) {
+                        String pName = null;
+                        if (inc.operand() instanceof VarExpr target) {
+                            pName = target.name();
+                        } else if (inc.operand() instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
+                                && fa.target() instanceof VarExpr tv
+                                && "this".equals(tv.name())) {
+                            pName = fa.fieldName();
+                        }
+                        if (pName == null) {
                             stmts.add(pendingPostInc);
                             pendingPostInc = null;
                             stmts.add(s);
                             continue;
                         }
-                        Statement folded = StatementUtils.foldPostInc(s, target.name(), inc.operator());
+                        // 优先向前折叠进当前语句(如 return array[nextIndex++] 的
+                        // 数组下标引用自增前的值,iinc 紧邻其后)
+                        Statement folded = StatementUtils.foldPostInc(s, pName, inc.operator());
                         if (folded != null) {
                             stmts.add(folded);
                             pendingPostInc = null;
                             continue;
+                        }
+                        // 向前失败(当前语句不引用该变量)→ 向后折叠进前一条语句
+                        //(如 println(v); v++ 的 v++ 是尾部,折进 println(v)).
+                        if (!stmts.isEmpty()) {
+                            Statement back = StatementUtils.foldPostInc(
+                                    stmts.get(stmts.size() - 1),
+                                    pName, inc.operator());
+                            if (back != null) {
+                                stmts.set(stmts.size() - 1, back);
+                                pendingPostInc = null;
+                                stmts.add(s);
+                                continue;
+                            }
                         }
                         stmts.add(pendingPostInc);
                         pendingPostInc = null;
@@ -1151,10 +1194,30 @@ public final class BlockReducer implements ReducerOps {
         }
 
         // 冲刷待折叠的后置自增(必须在空检查之前——
-        // 仅有自增语句的组其 stmts 为空但 pendingPostInc 非空)
+        // 仅有自增语句的组其 stmts 为空但 pendingPostInc 非空).
+        // 自增是块尾时向后折叠进前一条语句(println(v); v++ → println(v++)).
         if (pendingPostInc != null) {
-            stmts.add(pendingPostInc);
-            pendingPostInc = null;
+            UnExpr inc = (UnExpr) ((ExpressionStatement) pendingPostInc).expression();
+            String pName = null;
+            if (inc.operand() instanceof VarExpr tv) {
+                pName = tv.name();
+            } else if (inc.operand() instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
+                    && fa.target() instanceof VarExpr tv2
+                    && "this".equals(tv2.name())) {
+                pName = fa.fieldName();
+            }
+            if (pName != null && !stmts.isEmpty()) {
+                Statement back = StatementUtils.foldPostInc(
+                        stmts.get(stmts.size() - 1), pName, inc.operator());
+                if (back != null) {
+                    stmts.set(stmts.size() - 1, back);
+                    pendingPostInc = null;
+                }
+            }
+            if (pendingPostInc != null) {
+                stmts.add(pendingPostInc);
+                pendingPostInc = null;
+            }
         }
         if (stmts.isEmpty()) {
             return new BlockStatement(List.of());
@@ -1210,7 +1273,6 @@ public final class BlockReducer implements ReducerOps {
         return new BlockStatement(stmts);
     }
 
-
     /** 从 INDY 注解属性中获取字符串值 */
     String getIndyAnnotation(IrInstruction insn, String key) {
         for (com.bingbaihanji.bdec.semantic.SemanticAnnotation ann : insn.annotations()) {
@@ -1223,7 +1285,6 @@ public final class BlockReducer implements ReducerOps {
         }
         return null;
     }
-
 
     /** 将 Value(Variable / ConstantValue / InstructionRef)转为 Expression.
      *  对于 InstructionRef,递归翻译引用的指令以构建正确的表达式树. */
@@ -1257,6 +1318,47 @@ public final class BlockReducer implements ReducerOps {
         return false;
     }
 
+    /**
+     * 变量是否在布尔上下文中使用:作为 boolean 返回方法的 return 值,或作为
+     * 逻辑运算(BINARY AND/OR/XOR)操作数且另一操作数为布尔值.用于把字节码中
+     * 按 int 0/1 存储的布尔局部变量(如 {@code changed |= add()})声明收窄为
+     * boolean,否则 {@code int x = 0} 与 boolean 复合赋值无法编译.
+     */
+    @Override
+    public boolean isVarInBooleanContext(Value v) {
+        if (!(v instanceof Variable var) || currentIr == null) {
+            return false;
+        }
+        for (IrInstruction insn : currentIr.instructions()) {
+            switch (insn.opcode()) {
+                case RETURN -> {
+                    // 仅 boolean 返回方法的 return 值——非布尔方法(如 int hashCode)
+                    // 的 return 变量不得收窄(否则 "boolean var = binarySearch(...)"
+                    // 且 return boolean 无法赋给 int 返回).
+                    if (currentMethodReturnsBoolean() && !insn.operands().isEmpty()
+                            && operandIsVar(insn.operands().getFirst(), var)) {
+                        return true;
+                    }
+                }
+                case BINARY -> {
+                    if (insn.operands().size() >= 2) {
+                        Value a = insn.operands().get(0);
+                        Value b = insn.operands().get(1);
+                        boolean aIsVar = operandIsVar(a, var);
+                        boolean bIsVar = operandIsVar(b, var);
+                        // 变量参与逻辑运算且另一操作数为布尔值
+                        if ((aIsVar && !bIsVar && StatementUtils.isBooleanValue(b))
+                                || (bIsVar && !aIsVar && StatementUtils.isBooleanValue(a))) {
+                            return true;
+                        }
+                    }
+                }
+                default -> {
+                }
+            }
+        }
+        return false;
+    }
 
     /** 将 Variable 转为相应的 VarExpr.
      *  使用变量名(优先从 LocalVariableTable 获取,回退到 "var" + originalIndex).

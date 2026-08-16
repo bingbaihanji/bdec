@@ -575,8 +575,12 @@ public final class LoopTranslator {
         if (b == null) {
             return false;
         }
+        // RETURN 或 THROW 都是方法终止分支:循环体内 if 的该分支应结构化
+        // 为 if (!cond) return/throw(而非 if (cond) break + 循环后补 throw,
+        // 后者把仅条件成立才执行的 throw 变成无条件执行,语义错误).
         return ir.instructionsOf(b).stream()
-                .anyMatch(i -> i.opcode() == IrOpcode.RETURN);
+                .anyMatch(i -> i.opcode() == IrOpcode.RETURN
+                        || i.opcode() == IrOpcode.THROW);
     }
 
     /**

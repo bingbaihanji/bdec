@@ -243,15 +243,22 @@ public final class TypeReferenceUtil {
         switch (type.kind()) {
             case CLASS -> {
                 String internalName = type.internalName();
-                if (internalName != null && !simpleName(internalName).equals(thisClass)) {
-                    String dotted = internalName.replace('/', '.');
-                    // 对命名内部类将 $ 转换为 .(如 Map$Entry → Map.Entry),
-                    // 但跳过匿名类(如 TestClass2$1——数字开头的"名称"非法)
-                    if (ClassNames.isAnonymousClassName(simpleName(internalName))) {
-                        return; // 匿名类不导入
+                if (internalName != null) {
+                    String simple = simpleName(internalName);
+                    // 当前类的嵌套类型(如 ArraySet$Itr)同类内按简单名引用即可,
+                    // 不需 import——且可能为 private(从外部导入报"私有访问"错误).
+                    boolean nestedOfThis = thisClass != null
+                            && simple.startsWith(thisClass + "$");
+                    if (!simple.equals(thisClass) && !nestedOfThis) {
+                        String dotted = internalName.replace('/', '.');
+                        // 对命名内部类将 $ 转换为 .(如 Map$Entry → Map.Entry),
+                        // 但跳过匿名类(如 TestClass2$1——数字开头的"名称"非法)
+                        if (ClassNames.isAnonymousClassName(simple)) {
+                            return; // 匿名类不导入
+                        }
+                        dotted = dotted.replace('$', '.');
+                        imports.add(dotted);
                     }
-                    dotted = dotted.replace('$', '.');
-                    imports.add(dotted);
                 }
                 // 递归泛型实参(字段渲染走 import 感知短名,实参同样需要 import)
                 for (JavaType arg : type.typeArguments()) {

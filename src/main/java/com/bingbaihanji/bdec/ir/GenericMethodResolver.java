@@ -1,6 +1,7 @@
 package com.bingbaihanji.bdec.ir;
 
 import com.bingbaihanji.bdec.bytecode.parser.SignatureParser;
+import com.bingbaihanji.bdec.structuring.ExprCleanup;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 
@@ -12,8 +13,10 @@ import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 泛型方法返回类型推断(轻量反射方案,替代点对点硬编码).
@@ -312,6 +315,114 @@ public final class GenericMethodResolver {
             // 反射失败:保持空绑定
         }
         return bindings;
+    }
+
+    /**
+     * 把方法泛型参数绑定到接收者类型实参,供参数级泛型强转使用.
+     *
+     * <p>JDK 方法签名中的类型变量(Predicate.test 的 T)在调用类不在作用域,
+     * 直接作为泛型参数会插入 {@code (T) x} 强转到未定义类型变量(编译错误).
+     * 当接收者携带泛型实参(如 {@code param0 : Predicate<? super E>})时,
+     * 按位置把类类型参数绑定为接收者实参 → {@code test} 形参变为 {@code ? super E},
+     * 强转目标经 {@link ExprCleanup#wildcardBound} 得 {@code E}({@code (E) x}).</p>
+     *
+     * <p>两个来源的类类型参数:</p>
+     * <ul>
+     *   <li>{@code classTypeParams != null}(自类,类签名可得):按位置恒等绑定,
+     *       保留在作用域的类型变量(如 Cache&lt;K,V&gt; 的 get 形参 K).</li>
+     *   <li>{@code classTypeParams == null}(跨类,JDK):反射类类型参数;反射失败
+     *       或接收者无类型实参(原始类型)无法绑定 → 返回 null,调用方不设泛型
+     *       参数(避免 {@code (T)});绑定后仍残留未绑定类型变量(方法级)同样返回 null.</li>
+     * </ul>
+     */
+    public static JavaType[] bindParamsToReceiver(JavaType[] methodParams,
+                                                  JavaType[] classTypeParams,
+                                                  String declaringClass,
+                                                  JavaType receiverType) {
+        if (methodParams == null || methodParams.length == 0) {
+            return methodParams;
+        }
+        if (classTypeParams != null && classTypeParams.length > 0) {
+            // 自类:类签名类型参数按位置绑定(恒等映射,保留在作用域类型变量)
+            if (receiverType == null || receiverType.typeArguments().isEmpty()) {
+                return methodParams;
+            }
+            Map<String, JavaType> bindings = new HashMap<>();
+            int n = Math.min(classTypeParams.length, receiverType.typeArguments().size());
+            for (int i = 0; i < n; i++) {
+                if (classTypeParams[i] != null && classTypeParams[i].internalName() != null) {
+                    bindings.put(classTypeParams[i].internalName(),
+                            receiverType.typeArguments().get(i));
+                }
+            }
+            return bindings.isEmpty() ? methodParams : substituteAll(methodParams, bindings);
+        }
+        // 跨类:反射类类型参数;失败/原始接收者无法绑定 → null
+        if (receiverType == null || receiverType.typeArguments().isEmpty()) {
+            return null;
+        }
+        Map<String, JavaType> bindings = mapClassTypeParams(declaringClass, receiverType);
+        if (bindings.isEmpty()) {
+            return null;
+        }
+        JavaType[] out = substituteAll(methodParams, bindings);
+        // 绑定后仍含未绑定类型变量(方法级 T 等,不在接收者实参)→ 保守不设
+        Set<String> recvVars = new HashSet<>();
+        for (JavaType arg : receiverType.typeArguments()) {
+            collectVarNames(arg, recvVars);
+        }
+        for (JavaType p : out) {
+            if (containsForeignVar(p, recvVars)) {
+                return null;
+            }
+        }
+        return out;
+    }
+
+    private static JavaType[] substituteAll(JavaType[] params, Map<String, JavaType> bindings) {
+        JavaType[] out = new JavaType[params.length];
+        for (int i = 0; i < params.length; i++) {
+            out[i] = substitute(params[i], bindings);
+        }
+        return out;
+    }
+
+    /** 类型树中是否存在"不在接收者类型实参变量集合中"的类型变量(未绑定方法级变量). */
+    private static boolean containsForeignVar(JavaType t, Set<String> recvVars) {
+        if (t == null) {
+            return false;
+        }
+        return switch (t.kind()) {
+            case TYPE_VARIABLE -> t.internalName() != null && !recvVars.contains(t.internalName());
+            case CLASS -> t.typeArguments().stream().anyMatch(a -> containsForeignVar(a, recvVars));
+            case ARRAY -> containsForeignVar(JavaType.elementOf(t), recvVars);
+            case WILDCARD -> !t.typeArguments().isEmpty()
+                    && containsForeignVar(t.typeArguments().getFirst(), recvVars);
+            default -> false;
+        };
+    }
+
+    /** 收集类型树中的类型变量名. */
+    private static void collectVarNames(JavaType t, Set<String> out) {
+        if (t == null) {
+            return;
+        }
+        switch (t.kind()) {
+            case TYPE_VARIABLE -> {
+                if (t.internalName() != null) {
+                    out.add(t.internalName());
+                }
+            }
+            case CLASS -> t.typeArguments().forEach(a -> collectVarNames(a, out));
+            case ARRAY -> collectVarNames(JavaType.elementOf(t), out);
+            case WILDCARD -> {
+                if (!t.typeArguments().isEmpty()) {
+                    collectVarNames(t.typeArguments().getFirst(), out);
+                }
+            }
+            default -> {
+            }
+        }
     }
 
     /** 反射加载方法签名(带缓存). */
