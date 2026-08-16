@@ -87,6 +87,13 @@ final class InlineAnalyzer {
                 }
                 Value source = insn.operands().get(1);
                 int useCount = varUseCount.getOrDefault(v, 0);
+                // 变量被重新赋值(同 slot 存在不同 version 的 STORE)时不能内联:
+                // 旧版本可能在循环修改后的汇合点被读取(如 boolean changed = false;
+                // for(...) changed = true; return changed 的 return 读 v1),
+                // 内联旧版本值会把变量折叠成初值(return false),静默丢循环修改.
+                if (isReassigned(v, allInsns)) {
+                    continue;
+                }
                 if (useCount == 1 && StatementUtils.isSimpleValue(source)
                         && !isIncRead(allInsns, v)) {
                     // 检查 LOAD 是否被消费,或变量是否被直接使用(如 RETURN 操作数)
@@ -110,6 +117,15 @@ final class InlineAnalyzer {
                         if (!storeDominatesLoad(insn, v, loadId, ir)) {
                             continue;
                         }
+                        // 字段源安全:source 是 FIELD_LOAD 且该字段在 STORE 与使用点
+                        // 之间被重新赋值(如 removeAll 的 originalSize = this.size,
+                        // remove() 之后 this.size 已变)时,内联会把已过期的字段值
+                        // 传播到使用点(size != size 恒 false)——必须保留变量声明.
+                        if (source instanceof InstructionRef sfRef
+                                && sfRef.instruction().opcode() == IrOpcode.FIELD_LOAD
+                                && fieldMutatedBetween(sfRef.instruction(), loadId, ir)) {
+                            continue;
+                        }
                         varStoreSource.put(v, source);
                         storesToSkip.add(insn.id());
                     }
@@ -119,6 +135,54 @@ final class InlineAnalyzer {
 
         return new InlineAnalysis(Map.copyOf(varStoreSource),
                 Set.copyOf(storesToSkip), Map.copyOf(varUseCount));
+    }
+
+    /** 变量是否在方法内被重新赋值(同 slot 存在不同 version 的 STORE).
+     *  是则旧版本读取可能位于重赋值后的汇合点,内联会把过期值传播到使用点. */
+    private static boolean isReassigned(Variable var, List<IrInstruction> allInsns) {
+        for (IrInstruction i : allInsns) {
+            if (i.opcode() == IrOpcode.STORE && i.operands().size() >= 2
+                    && i.operands().get(0) instanceof Variable sv
+                    && sv.slot() == var.slot() && sv.version() != var.version()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** FIELD_LOAD 源的值是否在字段读取与变量使用点之间被"可能改变".
+     *  同名 FIELD_STORE 直接改变;方法调用(INVOKE)可变更任意字段——字段源跨调用
+     *  内联会把过期字段值传播到使用点(如 removeAll 的 originalSize = this.size,
+     *  remove() 之后 this.size 已变,内联出 size != size 恒 false).须保留变量声明. */
+    private static boolean fieldMutatedBetween(IrInstruction fieldLoad, Integer loadId,
+                                               LinearIr ir) {
+        String field = fieldLoad.nameHint();
+        if (field == null) {
+            return false;
+        }
+        int srcOffset = fieldLoad.sourceOffset();
+        int useOffset = Integer.MAX_VALUE;
+        if (loadId != null) {
+            for (IrInstruction i : ir.instructions()) {
+                if (i.id() == loadId) {
+                    useOffset = i.sourceOffset();
+                    break;
+                }
+            }
+        }
+        for (IrInstruction i : ir.instructions()) {
+            int off = i.sourceOffset();
+            if (off <= srcOffset || off >= useOffset) {
+                continue;
+            }
+            if (i.opcode() == IrOpcode.FIELD_STORE && field.equals(i.nameHint())) {
+                return true;
+            }
+            if (i.opcode() == IrOpcode.INVOKE) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -7,6 +7,7 @@ import com.bingbaihanji.bdec.ast.TypeDeclaration;
 import com.bingbaihanji.bdec.ast.expr.AssignExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.NewExpr;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
@@ -169,6 +170,11 @@ public class InnerClassRewriter implements RewriteRule {
             }
             body = new BlockStatement(stmts);
         }
+        // 构造器体内的 this$X.field 引用同样重写(如 this.expectedModCount = this$0.modCount),
+        // 此前只重写非构造方法体,构造器残留 this$0 引用而字段已被移除 → 无法编译.
+        if (body != null) {
+            body = new OuterThisRefRewriter(thisField).transformMethodBody(body);
+        }
         return withParamsAndBody(md, newNames, newTypes, newAnns, body);
     }
 
@@ -198,6 +204,16 @@ public class InnerClassRewriter implements RewriteRule {
                 return new FieldAccessExpr(null, e.fieldName());
             }
             return super.transformFieldAccess(e);
+        }
+
+        @Override
+        protected Expression transformInvocation(InvocationExpr e) {
+            if (e.target() instanceof VarExpr tv && thisField.equals(tv.name())) {
+                // 外围方法调用:this$0.method(...) → method(...)(隐式 Outer.this.method)
+                return new InvocationExpr(null, e.methodName(),
+                        transformExprList(e.arguments()), e.returnType());
+            }
+            return super.transformInvocation(e);
         }
     }
 

@@ -269,11 +269,13 @@ public final class ExprCleanup {
         return true;
     }
 
-    /** 强转目标:类型变量→自身;通配符→边界(? extends V→V);泛型类→擦除(List&lt;V&gt;→List). */
+    /** 强转目标:类型变量→自身;通配符→边界(? extends V→V);泛型类→擦除(List&lt;V&gt;→List);
+     *  数组→自身(如 T[] → (T[]),解决 toArray 的 Object[]→T[] 返回). */
     private static JavaType castTargetFor(JavaType declaredType) {
         return switch (declaredType.kind()) {
             case TYPE_VARIABLE -> declaredType;
             case WILDCARD -> wildcardBound(declaredType);
+            case ARRAY -> declaredType;
             case CLASS -> {
                 if (declaredType.typeArguments().isEmpty()) {
                     yield declaredType;

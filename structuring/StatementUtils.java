@@ -74,6 +74,14 @@ final class StatementUtils {
             if (folded != es.expression()) {
                 return new ExpressionStatement(folded);
             }
+        } else if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement rs
+                && rs.value() != null) {
+            // 后置自增折叠进 return 值(如 return array[nextIndex++] 的
+            // nextIndex 自增若独立成句,数组访问会读到自增后的值,错位一跳).
+            Expression folded = foldPostIncInExpr(rs.value(), varName, op);
+            if (folded != rs.value()) {
+                return new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(folded);
+            }
         }
         return null;
     }
@@ -119,6 +127,22 @@ final class StatementUtils {
                 // 保留复合赋值运算符:s += j 折叠 j++ 必须得到 s += j++,
                 // 若丢弃 compoundOp 会变成 s = j++(丢失累加的左操作数,语义错误).
                 return new AssignExpr(a.target(), v2, a.compoundOp());
+            }
+        } else if (e instanceof com.bingbaihanji.bdec.ast.expr.CastExpr ce) {
+            // return (E) array[nextIndex++] 的数组下标在强转操作数内
+            Expression o = foldPostIncInExpr(ce.operand(), varName, op);
+            if (o != ce.operand()) {
+                return new com.bingbaihanji.bdec.ast.expr.CastExpr(
+                        ce.targetType(), o, ce.typeAnnotations());
+            }
+        } else if (e instanceof com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr aa) {
+            Expression arr = foldPostIncInExpr(aa.array(), varName, op);
+            if (arr != aa.array()) {
+                return new com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr(arr, aa.index());
+            }
+            Expression idx = foldPostIncInExpr(aa.index(), varName, op);
+            if (idx != aa.index()) {
+                return new com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr(aa.array(), idx);
             }
         } else if (e instanceof UnExpr u && u.operator() != UnaryOperator.POST_INC
                 && u.operator() != UnaryOperator.POST_DEC) {

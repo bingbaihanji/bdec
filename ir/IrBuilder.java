@@ -285,6 +285,15 @@ public final class IrBuilder {
                         paramType = genericParams[paramIdx];
                     }
                     Variable pv = new Variable(slot, 0, paramType, true, slot);
+                    // 泛型类参数(如 Predicate<? super E>):类型变量已替换进 type,
+                    // 完整泛型类型(Predicate<? super E>)存 genericType——调用点
+                    // 接收者类型实参绑定(参数级强转)依赖它:Predicate.test 的形参
+                    // T 按接收者实参绑为 ? super E,强转目标经 wildcardBound 得 E.
+                    if (genericParams != null && paramIdx < genericParams.length
+                            && genericParams[paramIdx].kind() != TypeKind.TYPE_VARIABLE
+                            && !genericParams[paramIdx].equals(pt)) {
+                        pv.setGenericType(genericParams[paramIdx]);
+                    }
                     // 如果有局部变量表名称则使用;
                     // 否则使用 "param"+索引 作为回退,与 AstBuilder 的
                     // buildParameterNames 保持一致——否则条件/表达式中
@@ -1306,7 +1315,17 @@ public final class IrBuilder {
                     }
                     // 记录泛型参数类型,供 ExprTranslator 对擦除为 Object 的
                     // 实参插入 (K)/(V) 强转(如 readObject 的 put(key,value)).
-                    pendingGenericParams = java.util.Arrays.asList(sig.paramTypes());
+                    // 跨类(JDK)方法形参须绑定到接收者类型实参:Predicate.test 的
+                    // T 在调用类不在作用域,直接记录会插 (T) 未定义变量;绑定为
+                    // ? super E 后经 wildcardBound 转 E.自类路径(类签名可得)
+                    // 恒等绑定保留在作用域类型变量.无法绑定(原始接收者/反射失败)
+                    // 返回 null → 不设泛型参数(避免未绑定类型变量强转).
+                    JavaType[] boundParams = GenericMethodResolver.bindParamsToReceiver(
+                            sig.paramTypes(),
+                            classTypeParams(classSig),
+                            declaringClass, recvType);
+                    pendingGenericParams = boundParams != null
+                            ? java.util.Arrays.asList(boundParams) : null;
                 }
             }
         } else {

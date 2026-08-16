@@ -136,6 +136,14 @@ public interface ReducerOps {
     /** 值是否为已折叠 PHI 替换的布尔变量. */
     boolean isBooleanPhiReplacedVariable(Value v);
 
+    /**
+     * 变量是否在布尔上下文中使用:作为 boolean 返回方法的 return 值,或作为
+     * 逻辑运算(BINARY AND/OR/XOR)操作数且另一操作数为布尔值.
+     * 用于把字节码中按 int 0/1 存储的布尔局部变量(如 {@code changed |= add()})
+     * 声明收窄为 boolean,否则 {@code int x = 0} 与 boolean |= 无法编译.
+     */
+    boolean isVarInBooleanContext(Value v);
+
     /** 当前方法是否为实例方法(用于 this 字段加载的简写判定). */
     boolean isInstanceMethod();
 
