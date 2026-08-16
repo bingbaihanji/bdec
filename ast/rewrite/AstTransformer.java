@@ -199,8 +199,22 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
 
     protected Statement transformLoop(LoopStatement s) {
         Statement body = transformStmt(s.body());
-        return (body != s.body())
-                ? new LoopStatement(s.loopKind(), s.condition(), body) : s;
+        if (body == s.body()) {
+            return s;
+        }
+        // 体变化时须按循环种类重建,保留各自的结构字段:
+        // for-each 的迭代变量与元素类型;for 的 init/incr;while/do-while 的 condition.
+        // 此前统一用 3 参构造器重建,for-each 的 forEachVar/forEachVarType 被丢弃,
+        // 发射器走 "Object element" 兜底(变量名丢失 + 类型擦成 Object).
+        if (s.loopKind() == LoopStatement.LoopKind.FOR_EACH) {
+            return new LoopStatement(s.loopKind(), s.forEachVar(), s.condition(),
+                    body, s.forEachVarType());
+        }
+        if (s.initExpr() != null || s.incrExpr() != null) {
+            return new LoopStatement(s.loopKind(), s.initExpr(), s.condition(),
+                    s.incrExpr(), body);
+        }
+        return new LoopStatement(s.loopKind(), s.condition(), body);
     }
 
     protected Statement transformSwitch(SwitchStatement s) {

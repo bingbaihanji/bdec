@@ -50,29 +50,23 @@ public final class SignatureParser {
             }
             String name = signature.substring(i, colon);
             params.add(name);
-            // 跳过类边界与接口边界描述
-            i = colon + 1;
-            // 跳过边界:L...; 或 T...; 或 [ (数组)
-            while (i < signature.length() && signature.charAt(i) != ':'
-                    && signature.charAt(i) != '>') {
-                char c = signature.charAt(i);
-                if (c == 'L' || c == 'T') {
-                    int semi = signature.indexOf(';', i);
-                    if (semi < 0) {
-                        i = signature.length();
-                        break;
+            i = colon;
+            // 跳过所有边界:类型参数为 "<名:类边界:接口边界:...>" —
+            // 类边界可能为空(K::L...; 的 K 无类边界直接接口边界),
+            // 每个边界前一个 ':' 分隔,边界间可连续多个 ':'(空边界).
+            // 边界类型为完整签名(含泛型实参,平衡 <>),如
+            // "Ljava/lang/Comparable<-TK;>;".仅对 L/T/[ 调用 skipBoundType;
+            // 其他字符(下一个参数名/结束)停止.
+            while (i < signature.length() && signature.charAt(i) == ':') {
+                i++; // 跳过 ':' 分隔符
+                while (i < signature.length()) {
+                    char bc = signature.charAt(i);
+                    if (bc == 'L' || bc == 'T' || bc == '[') {
+                        i = skipBoundType(signature, i);
+                    } else {
+                        break; // 下一个参数名/结束/另一个 ':'(由外层消费)
                     }
-                    i = semi + 1;
-                } else if (c == '[') {
-                    i++; // 跳过'[', 后续一定是 L...; 或基元类型, 由下一次迭代处理
-                } else {
-                    // 不是类型签名的一部分 → 下一个类型参数即将开始
-                    break;
                 }
-            }
-            // 跳过 ':' 分隔符
-            if (i < signature.length() && signature.charAt(i) == ':') {
-                i++;
             }
         }
         return params;
@@ -91,6 +85,114 @@ public final class SignatureParser {
      */
     public static List<String> extractMethodTypeParams(String signature) {
         return extractTypeParams(signature); // 格式相同:以 <...> 开头
+    }
+
+    /**
+     * 提取方法类型参数并附带边界(如 {@code <K extends Comparable<? super K>, V>}).
+     * 供 AstBuilder 渲染方法声明——此前只取名称导致有界类型参数(K extends ...)
+     * 的边界丢失,如 sortMapByKey 的 K 被擦为无界,Entry.comparingByKey 类型
+     * 推断失败.
+     *
+     * @return 形如 {@code ["K extends Comparable<? super K>", "V"]} 的列表
+     */
+    public static List<String> extractMethodTypeParamsWithBounds(String signature) {
+        List<String> result = new ArrayList<>();
+        if (signature == null || signature.isEmpty() || !signature.startsWith("<")) {
+            return result;
+        }
+        int i = 1;
+        while (i < signature.length() && signature.charAt(i) != '>') {
+            int colon = signature.indexOf(':', i);
+            if (colon < 0) {
+                break;
+            }
+            String name = signature.substring(i, colon);
+            i = colon;
+            // 收集边界:跳过 ':' 分隔的 class/interface bounds,
+            // 连续 ':' 表示空边界(K::L...; 的 K 无类边界直接接口边界)
+            List<String> boundSigs = new ArrayList<>();
+            while (i < signature.length() && signature.charAt(i) == ':') {
+                i++;
+                while (i < signature.length()) {
+                    char c = signature.charAt(i);
+                    if (c == 'L' || c == 'T' || c == '[') {
+                        int start = i;
+                        i = skipBoundType(signature, i);
+                        boundSigs.add(signature.substring(start, i));
+                    } else {
+                        break; // 下一个参数名/结束/另一个 ':'(由外层消费)
+                    }
+                }
+            }
+            // 渲染:name 或 name extends B1 & B2(java.lang.Object 边界省略)
+            List<String> renderedBounds = new ArrayList<>();
+            for (String b : boundSigs) {
+                try {
+                    JavaType t = parseGenericType(b);
+                    if (t != null && t.kind() != TypeKind.VOID) {
+                        String d = t.displayName();
+                        if (!"java.lang.Object".equals(d) && !"Object".equals(d)
+                                && !"java.lang.Enum".equals(d)) {
+                            renderedBounds.add(d);
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // 边界解析失败:忽略该边界
+                }
+            }
+            StringBuilder sb = new StringBuilder(name);
+            if (!renderedBounds.isEmpty()) {
+                sb.append(" extends ").append(String.join(" & ", renderedBounds));
+            }
+            result.add(sb.toString());
+        }
+        return result;
+    }
+
+    /**
+     * 跳过完整类型签名(从位置 i 起),返回下一位.
+     * 处理:L...<...>;(含泛型实参,平衡 <>),T...;(类型变量),[...(数组),
+     * 基元类型(单字符).用于 extractTypeParams 的类型参数边界跳过.
+     */
+    private static int skipBoundType(String signature, int i) {
+        if (i >= signature.length()) {
+            return i;
+        }
+        char c = signature.charAt(i);
+        // 基元类型(单字符)或通配符:跳过
+        if ("VZCBSIFJD*+-".indexOf(c) >= 0) {
+            return i + 1;
+        }
+        if (c == '[') {
+            // 数组:跳过所有 '[' 再跳过元素类型(可能再次数组/引用/基元)
+            int j = i;
+            while (j < signature.length() && signature.charAt(j) == '[') {
+                j++;
+            }
+            if (j < signature.length()) {
+                return skipBoundType(signature, j);
+            }
+            return j;
+        }
+        if (c == 'L' || c == 'T') {
+            // 类/类型变量引用:扫描至深度 0 的 ';'(泛型实参 '<...>' 平衡)
+            int depth = 0;
+            int j = i + 1;
+            while (j < signature.length()) {
+                char ch = signature.charAt(j);
+                if (ch == '<') {
+                    depth++;
+                } else if (ch == '>') {
+                    depth--;
+                } else if (ch == ';' && depth <= 0) {
+                    return j + 1;
+                }
+                j++;
+            }
+            return j;
+        }
+        // 未知字符:不消费
+        return i;
     }
 
     /** 内部名 → 简短显示名(去包名,去 java.lang. 前缀) */

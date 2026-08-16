@@ -72,10 +72,16 @@ public final class ExprTranslator {
                     }
                     yield new ReturnStatement(null);
                 } else {
-                    Expression retVal = ops.valueToExpr(insn.operands().getFirst());
+                    com.bingbaihanji.bdec.ir.Value retValue = insn.operands().getFirst();
+                    Expression retVal = ops.valueToExpr(retValue);
                     // 目标类型绑定的菱形推断(return 场景):方法返回类型带泛型实参
                     // 时置菱形标志(如 return new HashMap<>();)
                     retVal = ExprCleanup.markTargetDiamond(retVal, ops.genericMethodReturnType());
+                    // 泛型返回强转:声明返回类型携带类型变量而返回值是擦除的 Object
+                    // 时插入 (V) 强转(如 return array[...] 对 V get() → (V) array[...])
+                    retVal = ExprCleanup.applyGenericReturnCast(retVal,
+                            ops.genericMethodReturnType(),
+                            retValue != null ? retValue.type() : null);
                     // 应用语义注解中的布尔折叠
                     retVal = AstCleanup.applyBooleanAnnotation(insn, retVal);
                     // 对 boolean 返回方法,将整数字面量转为布尔值
@@ -139,8 +145,17 @@ public final class ExprTranslator {
                         // 声明须重标为 boolean,否则 "int r = a && b" 无法编译.
                         JavaType declType = v.genericType() != null
                                 ? v.genericType() : v.type();
+                        // 通配符不能作声明类型(? extends V x 非法)→ 用边界(V),
+                        // 值本身经下方 applyGenericDeclCast 强转.
+                        declType = ExprCleanup.wildcardBound(declType);
                         if (declType.kind() == TypeKind.INT && ExprCleanup.isBooleanExpression(rhs)) {
                             declType = JavaType.BOOLEAN;
+                        }
+                        // 泛型声明强转:声明类型为类型变量/泛型而被存值是通配符
+                        // 或擦除 Object 时插入 (V)(如 V newValue = function.apply(...)
+                        // 的 apply 返回 ? extends V → (V) function.apply(...))
+                        if (source != null) {
+                            rhs = ExprCleanup.applyGenericDeclCast(rhs, source.type(), declType);
                         }
                         // 局部变量上的 JSR-308 类型注解(0x40):渲染后按
                         // 类型路径分组附加到声明(如 "@A String x")
@@ -489,7 +504,17 @@ public final class ExprTranslator {
                 }
 
                 for (int i = argStart; i < insn.operands().size(); i++) {
-                    args.add(ops.valueToExpr(insn.operands().get(i)));
+                    Expression arg = ops.valueToExpr(insn.operands().get(i));
+                    // 泛型参数强转:自类方法泛型参数为类型变量而实参被擦除为
+                    // Object 时插入 (K)/(V)(如 readObject 的 put(key, value)
+                    // → put((K) key, (V) value),参照 vineflower).
+                    List<JavaType> genParams = insn.genericParamTypes();
+                    int paramIdx = i - argStart;
+                    if (genParams != null && paramIdx < genParams.size()) {
+                        arg = ExprCleanup.applyGenericDeclCast(arg,
+                                insn.operands().get(i).type(), genParams.get(paramIdx));
+                    }
+                    args.add(arg);
                 }
                 yield new InvocationExpr(target, mName, args, insn.resultType());
             }
@@ -650,19 +675,36 @@ public final class ExprTranslator {
                 }
                 Expression resolved = null;
                 if (ops.currentBranchBlocks() != null) {
+                    // 按"操作数来源块数"区分:
+                    // 单来源(全同一块或全常量/变量)→ 分支选择(如循环/if 汇合点
+                    // 的 PHI 从当前分支取值);多来源(不同块的 InstructionRef 或
+                    // 常量/变量混合)→ 嵌套三元(如 toString 的
+                    // builder.append(cond ? A : B)——外层 if 的 else 分支上下文
+                    // [2-13] 覆盖了三元的两条分支),取单个操作数会丢另一分支值,
+                    // 须走 resolvePhiAsTernary 还原.
+                    java.util.Set<Integer> sourceBlocks = new java.util.HashSet<>();
                     for (Value op : insn.operands()) {
-                        if (op instanceof InstructionRef ref
-                                && ops.currentBranchBlocks().contains(ref.instruction().blockId())) {
-                            resolved = translateExpr(ref.instruction());
-                            break;
+                        if (op instanceof InstructionRef ref) {
+                            sourceBlocks.add(ref.instruction().blockId());
+                        } else {
+                            sourceBlocks.add(-1);
+                        }
+                    }
+                    if (sourceBlocks.size() == 1) {
+                        for (Value op : insn.operands()) {
+                            if (op instanceof InstructionRef ref
+                                    && ops.currentBranchBlocks().contains(ref.instruction().blockId())) {
+                                resolved = translateExpr(ref.instruction());
+                                break;
+                            }
                         }
                     }
                 }
                 if (resolved == null) {
-                    // value 位置(无分支上下文)的三元重建:PHI 作为 CONDITION/BINARY
-                    // 等指令的操作数被消费时,按 CFG 菱形还原为 CondExpr,避免取首
-                    // 操作数静默丢 false 分支值.
-                    if (ops.currentBranchBlocks() == null && ops.currentIr() != null) {
+                    // value 位置的三元重建:PHI 作为 CONDITION/BINARY 等指令的
+                    // 操作数被消费时,按 CFG 菱形还原为 CondExpr,避免取首操作数
+                    // 静默丢 false 分支值.
+                    if (ops.currentIr() != null) {
                         resolved = IfTranslator.resolvePhiAsTernary(ops, insn, ops.currentIr());
                     }
                 }

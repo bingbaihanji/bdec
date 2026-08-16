@@ -11,6 +11,7 @@ import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
+import com.bingbaihanji.bdec.cfg.DominatorTree;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
 import com.bingbaihanji.bdec.cfg.PostDominatorTree;
 import com.bingbaihanji.bdec.ir.InstructionRef;
@@ -172,14 +173,18 @@ public final class IfTranslator {
                     }
                 }
                 // 规范化:!x ? a : b → x ? b : a(与 TernaryRewriter 一致)
-                Statement ret;
+                Expression retCond;
                 if (cond instanceof UnExpr ue && ue.operator() == UnaryOperator.NOT) {
-                    ret = new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
-                            new CondExpr(ue.operand(), falseVal, trueVal));
+                    retCond = new CondExpr(ue.operand(), falseVal, trueVal);
                 } else {
-                    ret = new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(
-                            new CondExpr(cond, trueVal, falseVal));
+                    retCond = new CondExpr(cond, trueVal, falseVal);
                 }
+                // 泛型返回强转:类型变量返回值在分支合并后是擦除的 Object/null
+                //(如 return index<0 ? null : array[...] 对 V get()),
+                // 整体插 (V) 强转(参照 vineflower).值类型未知传 null → 保守插入.
+                retCond = ExprCleanup.applyGenericReturnCast(retCond,
+                        ops.genericMethodReturnType(), null);
+                Statement ret = new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(retCond);
                 // 前置头组的非条件语句(如 Integer a = 1000; b = 1000; 位于
                 // 条件之前)——此前直接返回会丢失这些声明(引用未声明变量).
                 if (!preIfStmts.isEmpty()) {
@@ -534,14 +539,27 @@ public final class IfTranslator {
         if (nestedIf != null) {
             Expression cond = AstCleanup.simplifyCondition(ops.extractCondition(group, ir));
 
+            // 翻译头部中的前导条件语句
+            List<Statement> preIfStmts = ops.translateHeaderNonCondition(group, ir);
+
+            // 布尔短路折叠:嵌套 if 同样可能是共享目标菱形(javac 把
+            // "return !(a && b)" 编译为 "C1.false→F, C1.true→C2; C2.true→T,
+            // C2.false→F" 的共享假目标嵌套 if,见 filter 谓词
+            // !(value instanceof String && isEmpty())).顶层 reduce 已折叠,
+            // 但分支体内的嵌套 if 此前被翻译成缺少尾部 return 的嵌套 if,
+            // 布尔方法无法编译.此处与 translateIf 一致地用未取反的原始条件
+            // 调用折叠(取反在后续 negateCondition 分支处理).
+            Statement shortCircuit = foldBooleanShortCircuit(ops, nestedIf, ir, graph,
+                    allGroups, consumed, cond, preIfStmts);
+            if (shortCircuit != null) {
+                return shortCircuit;
+            }
+
             // then 体来自 false 分支时条件需取反(与 reduce() 主循环一致)
             if (nestedIf.negateCondition() && cond != null) {
                 cond = new UnExpr(UnaryOperator.NOT, cond);
                 cond = AstCleanup.simplifyCondition(cond);
             }
-
-            // 翻译头部中的前导条件语句
-            List<Statement> preIfStmts = ops.translateHeaderNonCondition(group, ir);
 
             Statement thenBody = translateBranchBody(ops, nestedIf.thenBlocks(), allGroups,
                     ir, consumed, graph, postDom);
@@ -849,13 +867,6 @@ public final class IfTranslator {
         if (phi == null || phi.operands().size() != 2) {
             return null;
         }
-        // 拒绝循环携带 PHI:两个操作数为同一局部变量(槽位相同),是循环头
-        // 汇合(init/back-edge),而非条件三元.这类 PHI 应解析为变量本身.
-        if (phi.operands().get(0) instanceof Variable v0
-                && phi.operands().get(1) instanceof Variable v1
-                && v0.slot() == v1.slot()) {
-            return null;
-        }
         ControlFlowGraph graph = ir.controlFlowGraph();
         BasicBlock merge = null;
         for (BasicBlock b : graph.blocks()) {
@@ -865,6 +876,20 @@ public final class IfTranslator {
             }
         }
         if (merge == null) {
+            return null;
+        }
+        // 拒绝非三元 PHI:
+        // 1) 循环携带:两个操作数为同一局部变量(槽位相同)且合并块是循环头(有回边);
+        // 2) 同一实例合并:两个操作数是同一 Variable 实例(如 builder 在两分支 aload
+        //    相同变量),合并值是同一变量本身,非三元.
+        // 真正的三元(如 toString 的 builder.append(cond?A:B))两操作数是不同实例
+        //(A/B 经不同 STORE),即使 slot/version 相同也须还原为 CondExpr.
+        boolean loopCarried = mergeHasBackEdge(merge, graph)
+                && phi.operands().get(0) instanceof Variable lv0
+                && phi.operands().get(1) instanceof Variable lv1
+                && lv0.slot() == lv1.slot();
+        boolean sameInstance = phi.operands().get(0) == phi.operands().get(1);
+        if (loopCarried || sameInstance) {
             return null;
         }
         // 汇合块须恰有两个非异常前驱(二元菱形)
@@ -909,6 +934,18 @@ public final class IfTranslator {
             return null;
         }
         return new CondExpr(cond, trueVal, falseVal);
+    }
+
+    /** 合并块是否循环头(有回边入边,即前驱是它的后代)——同槽 PHI 在此拒绝(循环携带). */
+    private static boolean mergeHasBackEdge(BasicBlock merge, ControlFlowGraph graph) {
+        DominatorTree dom = graph.dominatorTree();
+        for (var in : graph.incomingOf(merge)) {
+            BasicBlock src = in.source();
+            if (src != merge && dom.dominates(merge, src)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

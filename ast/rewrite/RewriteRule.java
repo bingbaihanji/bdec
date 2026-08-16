@@ -103,12 +103,13 @@ public interface RewriteRule {
                 md.compactConstructor());
     }
 
-    /** 仅替换类型成员,保留注解/父类/接口/类型参数/sealed permits 等全部元数据. */
+    /** 仅替换类型成员,保留注解/父类/接口/类型参数/record 组件/sealed permits 等全部元数据. */
     default TypeDeclaration withMembers(TypeDeclaration td, List<AstNode> newMembers) {
         return new TypeDeclaration(td.accessFlags(), td.simpleName(), td.kindName(),
                 td.superName(), td.interfaceNames(), td.typeParameters(),
                 newMembers, td.annotations(), td.superAnnotations(),
-                td.interfaceAnnotations(), td.permitsNames());
+                td.interfaceAnnotations(), td.permitsNames(),
+                td.recordComponents());
     }
 
     /** 替换类型成员并修改访问标志(用于 RecordRewriter/SealedClassRewriter 的标志位清理). */
@@ -117,7 +118,8 @@ public interface RewriteRule {
         return new TypeDeclaration(flags, td.simpleName(), td.kindName(),
                 td.superName(), td.interfaceNames(), td.typeParameters(),
                 newMembers, td.annotations(), td.superAnnotations(),
-                td.interfaceAnnotations(), td.permitsNames());
+                td.interfaceAnnotations(), td.permitsNames(),
+                td.recordComponents());
     }
 
     /** 仅替换字段初始化器,保留字段注解与类型注解等元数据. */

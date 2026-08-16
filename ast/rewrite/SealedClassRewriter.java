@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec.ast.rewrite;
 import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.ast.TypeReferenceUtil;
 import com.bingbaihanji.bdec.bytecode.model.AccessFlags;
 
 import java.util.ArrayList;
@@ -23,13 +24,14 @@ public class SealedClassRewriter implements RewriteRule {
 
     @Override
     public CompilationUnit rewrite(CompilationUnit unit, DecompileContext context) {
-        // 从 class 文件模型读取 permits 子类(JVM 内部名称,如 "com/example/Circle"),
+        // 从 class 文件模型读取 permits 子类(JVM 内部名称,如 "com/example/Outer$Circle"),
         // 转换为源码短名(如 "Circle")后交由 rewriteType 处理.
+        // 嵌套子类须剥 $ 段(nestedSimpleName),否则 permits 输出二进制名
+        // "Outer$Circle"(不可解析)而非短名.
         List<String> permits = new ArrayList<>();
         if (context.classFile() != null) {
             for (String internal : context.classFile().permittedSubclasses()) {
-                int slash = internal.lastIndexOf('/');
-                permits.add(slash >= 0 ? internal.substring(slash + 1) : internal);
+                permits.add(TypeReferenceUtil.nestedSimpleName(internal));
             }
         }
         List<TypeDeclaration> types = new ArrayList<>();

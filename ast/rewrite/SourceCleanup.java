@@ -10,9 +10,11 @@ import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.NewExpr;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
+import com.bingbaihanji.bdec.ast.stmt.BreakStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
 import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
@@ -45,6 +47,179 @@ import java.util.Set;
  * </ol>
  */
 public class SourceCleanup implements RewriteRule {
+
+    /**
+     * clone 方法修复:字节码 invokespecial Object.clone 被还原成 this.clone()
+     * (递归死循环),应改 super.clone();且原方法始终 return clone,嵌套 if
+     * 结构化后 return 被困在最内层,缺失返回语句.
+     */
+    private static Statement fixClone(Statement body) {
+        // 1. this.clone() → super.clone()
+        body = new CloneCallRewriter().transformStmt(body);
+        // 2. 方法体可能是 BlockStatement 包裹单条 try
+        Statement inner = body;
+        if (inner instanceof BlockStatement wrap && wrap.statements().size() == 1) {
+            inner = wrap.statements().getFirst();
+        }
+        // 3. try 体内嵌套 if 的 return 提升到 try 体末尾(缺失返回)
+        if (inner instanceof TryStatement t && t.tryBody() instanceof BlockStatement tb) {
+            List<Statement> stmts = new ArrayList<>(tb.statements());
+            ReturnStatement ret = extractNestedReturn(stmts);
+            if (ret != null && ret.value() != null) {
+                stmts.add(ret);
+            }
+            // 4. catch 重抛检查异常(如 CNSE)而方法未声明 throws →
+            //    throw new AssertionError(e)(clone 经典模式,免 throws 声明)
+            List<TryStatement.CatchClause> catches = new java.util.ArrayList<>();
+            for (var c : t.catchClauses()) {
+                Statement cb = c.body();
+                if (cb instanceof BlockStatement cb2 && cb2.statements().size() == 1
+                        && cb2.statements().getFirst() instanceof ThrowStatement ts
+                        && ts.expression() instanceof VarExpr v
+                        && v.name().equals(c.varName())) {
+                    Expression err = new com.bingbaihanji.bdec.ast.expr.NewExpr(
+                            JavaType.classType("java/lang/AssertionError"),
+                            List.of(), List.of(new VarExpr(c.varName())));
+                    cb = new BlockStatement(List.of(new ThrowStatement(err)));
+                }
+                catches.add(new TryStatement.CatchClause(c.exceptionType(), c.varName(), cb));
+            }
+            TryStatement newTry = new TryStatement(new BlockStatement(stmts),
+                    catches, t.finallyBody(), t.resources());
+            return inner == body ? newTry
+                    : new BlockStatement(java.util.List.of(newTry));
+        }
+        return body;
+    }
+
+    /** 从语句列表(含嵌套 if/块)中提取末尾的 return 并从原处移除. */
+    private static ReturnStatement extractNestedReturn(List<Statement> stmts) {
+        for (int i = stmts.size() - 1; i >= 0; i--) {
+            Statement s = stmts.get(i);
+            if (s instanceof ReturnStatement rs) {
+                stmts.remove(i);
+                return rs;
+            }
+            if (s instanceof IfStatement ifSt) {
+                List<Statement> inner = ifSt.thenBranch() instanceof BlockStatement b2
+                        ? new ArrayList<>(b2.statements())
+                        : new ArrayList<>(List.of(ifSt.thenBranch()));
+                ReturnStatement found = extractNestedReturn(inner);
+                if (found != null) {
+                    Statement newThen = inner.size() == 1 ? inner.get(0) : new BlockStatement(inner);
+                    stmts.set(i, new IfStatement(ifSt.condition(), newThen, ifSt.elseBranch()));
+                    return found;
+                }
+                if (ifSt.elseBranch() != null) {
+                    List<Statement> els = ifSt.elseBranch() instanceof BlockStatement b3
+                            ? new ArrayList<>(b3.statements())
+                            : new ArrayList<>(List.of(ifSt.elseBranch()));
+                    ReturnStatement efound = extractNestedReturn(els);
+                    if (efound != null) {
+                        Statement newElse = els.size() == 1 ? els.get(0) : new BlockStatement(els);
+                        stmts.set(i, new IfStatement(ifSt.condition(), ifSt.thenBranch(), newElse));
+                        return efound;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 分支是否为空(空 BlockStatement 或空块). */
+    private static boolean isEmptyBranch(Statement s) {
+        return s == null || (s instanceof BlockStatement bs && bs.statements().isEmpty());
+    }
+
+    /** 移除空 if-else(then/else 均空且条件无副作用)与空 if(无 else). */
+    private static List<Statement> removeEmptyIfs(List<Statement> stmts) {
+        List<Statement> out = new ArrayList<>();
+        for (Statement s : stmts) {
+            if (s instanceof IfStatement i
+                    && isEmptyBranch(i.thenBranch())
+                    && (i.elseBranch() == null || isEmptyBranch(i.elseBranch()))
+                    && isSideEffectFreeExpr(i.condition())) {
+                continue; // 空 if-else,丢弃
+            }
+            out.add(s);
+        }
+        return out;
+    }
+
+    /** 表达式是否无副作用(读操作/字面量/变量/比较等). */
+    private static boolean isSideEffectFreeExpr(Expression e) {
+        if (e instanceof LitExpr || e instanceof VarExpr) {
+            return true;
+        }
+        if (e instanceof BinExpr b) {
+            return isSideEffectFreeExpr(b.left()) && isSideEffectFreeExpr(b.right());
+        }
+        if (e instanceof UnExpr u) {
+            return isSideEffectFreeExpr(u.operand());
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.CastExpr ce) {
+            return isSideEffectFreeExpr(ce.operand());
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.CondExpr cn) {
+            return isSideEffectFreeExpr(cn.condition())
+                    && isSideEffectFreeExpr(cn.trueExpr())
+                    && isSideEffectFreeExpr(cn.falseExpr());
+        }
+        if (e instanceof FieldAccessExpr) {
+            return true; // 字段读
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.InstanceOfExpr io) {
+            return isSideEffectFreeExpr(io.operand());
+        }
+        if (e instanceof com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr aa) {
+            return isSideEffectFreeExpr(aa.array()) && isSideEffectFreeExpr(aa.index());
+        }
+        return false; // InvocationExpr/new 等可能有副作用
+    }
+
+    /** 语句(含嵌套块/if)中是否含 break. */
+    private static boolean containsBreak(Statement s) {
+        if (s instanceof BreakStatement) {
+            return true;
+        }
+        if (s instanceof BlockStatement bs) {
+            for (Statement c : bs.statements()) {
+                if (containsBreak(c)) {
+                    return true;
+                }
+            }
+        } else if (s instanceof IfStatement i) {
+            return containsBreak(i.thenBranch())
+                    || (i.elseBranch() != null && containsBreak(i.elseBranch()));
+        }
+        return false;
+    }
+
+    /** 把语句中的 break 替换为 {@code return value}(递归嵌套块/if/循环). */
+    private static Statement replaceBreaksWithReturn(Statement s, Expression value) {
+        if (s instanceof BreakStatement) {
+            return new ReturnStatement(value);
+        }
+        if (s instanceof BlockStatement bs) {
+            List<Statement> ns = new ArrayList<>();
+            for (Statement c : bs.statements()) {
+                ns.add(replaceBreaksWithReturn(c, value));
+            }
+            return new BlockStatement(ns);
+        }
+        if (s instanceof IfStatement i) {
+            Statement then = replaceBreaksWithReturn(i.thenBranch(), value);
+            Statement els = i.elseBranch() != null
+                    ? replaceBreaksWithReturn(i.elseBranch(), value) : null;
+            return new IfStatement(i.condition(), then, els);
+        }
+        if (s instanceof LoopStatement l) {
+            Statement newBody = replaceBreaksWithReturn(l.body(), value);
+            // 此处循环恒为 WHILE(repairBreakLoopReturn 限定),保留 condition
+            return new LoopStatement(l.loopKind(), l.condition(), newBody);
+        }
+        return s;
+    }
 
     @Override
     public String name() {return "source-cleanup";}
@@ -88,6 +263,11 @@ public class SourceCleanup implements RewriteRule {
                 // 赋值(字节码合法,源码非法),忠实还原会编译失败.
                 if (md.name() != null && md.name().equals(td.simpleName())) {
                     body = fixConstructorSuperOrder(body);
+                }
+                // clone 方法:this.clone() → super.clone()(字节码 invokespecial
+                // 还原成 this 调用,递归死循环)+ 嵌套 if 内 return 提升(缺失返回).
+                if (md.name() != null && "clone".equals(md.name())) {
+                    body = fixClone(body);
                 }
                 members.add(withBody(md, body));
             } else {
@@ -166,12 +346,23 @@ public class SourceCleanup implements RewriteRule {
                 // 会触发下方 "int y = 0" 误补(语义错误).提升为 "Type y;" 前置,
                 // 分支内声明转为赋值,使 y 成为块级声明.
                 stmts = hoistConditionalDecls(stmts);
+                // 修复 break-循环 return 错位:try 体末尾 [循环含break, return X] +
+                // try 后死代码 return Y → 循环内 break 改 return X,循环正常退出 return Y,
+                // 移除死代码(如 equals 的 while 内 break 应为 return false,正常退出 return true).
+                stmts = repairBreakLoopReturn(stmts);
+                // 移除空 if-else(两分支均为空且条件无副作用):
+                // 值三元纯菱形抑制后残留(如 toString 的 if (value != this) {} else {}).
+                stmts = removeEmptyIfs(stmts);
 
                 List<Statement> cleaned = new ArrayList<>();
                 Set<String> seen = new HashSet<>();
                 // 第一趟:收集当前块(含嵌套块)中所有已声明的变量名
                 Set<String> allDeclared = new HashSet<>();
                 collectDeclared(new BlockStatement(stmts), allDeclared);
+                // instanceof 模式变量由表达式声明(非 VariableDeclaration):
+                // 须纳入已声明集合,否则三元/表达式中的模式变量引用会被误补
+                // "int string = 0"(如 o instanceof String string ? string : null).
+                collectPatternVarsInBlock(new BlockStatement(stmts), allDeclared);
                 // 将字段名也加入已声明集合,避免自动声明时遮蔽字段
                 allDeclared.addAll(fieldNames);
                 // 将参数名也加入已声明集合,避免重复声明参数
@@ -365,6 +556,77 @@ public class SourceCleanup implements RewriteRule {
     }
 
     /**
+     * 修复 break-循环 return 错位:try 体末尾 {@code [循环(含break), return X]} 且
+     * try 后紧跟死代码 {@code return Y}(try/catch 恒返回使 Y 不可达)时,正确结构为
+     * 循环内 break → {@code return X}(退出即返回),循环正常退出 → {@code return Y}.
+     * 如 equals 的 {@code while(i<size){...break...} return false;} + {@code return true;}
+     * → 循环内 break 改 {@code return false},循环后改 {@code return true},移除死代码.</p>
+     */
+    private List<Statement> repairBreakLoopReturn(List<Statement> stmts) {
+        List<Statement> out = new ArrayList<>();
+        for (int i = 0; i < stmts.size(); i++) {
+            Statement s = stmts.get(i);
+            if (s instanceof TryStatement t
+                    && i + 1 < stmts.size()
+                    && stmts.get(i + 1) instanceof ReturnStatement deadRet
+                    && deadRet.value() != null
+                    && t.tryBody() instanceof BlockStatement tb
+                    && tb.statements().size() >= 2) {
+                List<Statement> tbStmts = tb.statements();
+                // 找 try 体中最靠后的 while 循环(可能被残留空块/重复 return 包裹)
+                int loopIdx = -1;
+                for (int j = tbStmts.size() - 1; j >= 0; j--) {
+                    if (tbStmts.get(j) instanceof LoopStatement cand
+                            && cand.loopKind() == LoopStatement.LoopKind.WHILE) {
+                        loopIdx = j;
+                        break;
+                    }
+                }
+                // 循环后的首个 return(跳过空块)——循环退出值 X
+                int retIdx = -1;
+                if (loopIdx >= 0) {
+                    for (int j = loopIdx + 1; j < tbStmts.size(); j++) {
+                        if (tbStmts.get(j) instanceof ReturnStatement r
+                                && r.value() != null) {
+                            retIdx = j;
+                            break;
+                        }
+                        if (!(tbStmts.get(j) instanceof BlockStatement b2
+                                && b2.statements().isEmpty())) {
+                            break; // 非空块中断——不是 [循环, return] 形态
+                        }
+                    }
+                }
+                if (loopIdx >= 0 && retIdx >= 0) {
+                    LoopStatement loop = (LoopStatement) tbStmts.get(loopIdx);
+                    ReturnStatement postLoopRet = (ReturnStatement) tbStmts.get(retIdx);
+                    if (containsBreak(loop.body())) {
+                        // 循环内 break → return X;循环后 return X → return Y(正常退出);移除死代码
+                        Statement newLoop = replaceBreaksWithReturn(loop, postLoopRet.value());
+                        List<Statement> newTryBody = new ArrayList<>();
+                        for (int j = 0; j < tbStmts.size(); j++) {
+                            if (j == loopIdx) {
+                                newTryBody.add(newLoop);
+                            } else if (j == retIdx) {
+                                newTryBody.add(new ReturnStatement(deadRet.value()));
+                            } else {
+                                newTryBody.add(tbStmts.get(j));
+                            }
+                        }
+                        TryStatement newTry = new TryStatement(new BlockStatement(newTryBody),
+                                t.catchClauses(), t.finallyBody(), t.resources());
+                        out.add(newTry);
+                        i++; // 跳过死代码 return
+                        continue;
+                    }
+                }
+            }
+            out.add(s);
+        }
+        return out;
+    }
+
+    /**
      * 提升 if-else 两分支共同声明的变量到 if 之前(条件赋值的菱形合并).
      *
      * <p>模式:{@code if (c) { ...; T y = a; } else { ...; T y = b; }} 后接 y 的引用.
@@ -510,7 +772,6 @@ public class SourceCleanup implements RewriteRule {
         return null;
     }
 
-    /** 将分支体中已提升变量的声明转为赋值语句(无初始化器则删除该声明). */
     /** 构造器体:把 super()/this() 调用移到首句(JLS super 必须第一).
      *  javac 对捕获局部变量的局部类在字节码里把 val$X 赋值放在 super() 之前,
      *  源码必须反之. */
@@ -532,6 +793,8 @@ public class SourceCleanup implements RewriteRule {
         }
         return new BlockStatement(stmts);
     }
+
+    /** 将分支体中已提升变量的声明转为赋值语句(无初始化器则删除该声明). */
 
     /** 语句是否为 super()/this() 构造器委托调用. */
     private boolean isCtorDelegation(Statement s) {
@@ -604,6 +867,70 @@ public class SourceCleanup implements RewriteRule {
         }
     }
 
+    /** 收集块(含嵌套)内所有 instanceof 模式变量名,纳入已声明集合. */
+    private void collectPatternVarsInBlock(Statement s, Set<String> out) {
+        if (s instanceof BlockStatement bs) {
+            for (Statement c : bs.statements()) {
+                collectPatternVarsInStmt(c, out);
+            }
+        } else {
+            collectPatternVarsInStmt(s, out);
+        }
+    }
+
+    /** 单条语句内 instanceof 模式变量(条件/返回值/初始化器等表达式). */
+    private void collectPatternVarsInStmt(Statement s, Set<String> out) {
+        if (s instanceof IfStatement i) {
+            collectPatternVars(i.condition(), out);
+            collectPatternVarsInBlock(i.thenBranch(), out);
+            if (i.elseBranch() != null) {
+                collectPatternVarsInBlock(i.elseBranch(), out);
+            }
+        } else if (s instanceof ReturnStatement rs && rs.value() != null) {
+            collectPatternVarsInExpr(rs.value(), out);
+        } else if (s instanceof ExpressionStatement es) {
+            collectPatternVarsInExpr(es.expression(), out);
+        } else if (s instanceof VariableDeclaration vd && vd.initializer() != null) {
+            collectPatternVarsInExpr(vd.initializer(), out);
+        } else if (s instanceof ThrowStatement ts && ts.expression() != null) {
+            collectPatternVarsInExpr(ts.expression(), out);
+        }
+    }
+
+    /** 递归收集表达式中的 instanceof 模式变量(仅 "Type name" 简单模式). */
+    private void collectPatternVarsInExpr(Expression e, Set<String> out) {
+        if (e instanceof BinExpr b
+                && b.operator() == com.bingbaihanji.bdec.ast.expr.BinaryOperator.INSTANCEOF
+                && b.right() instanceof VarExpr tv) {
+            String[] tokens = tv.name().trim().split("\\s+");
+            if (tokens.length >= 2) {
+                out.add(tokens[tokens.length - 1]);
+            }
+        }
+        if (e instanceof BinExpr b) {
+            collectPatternVarsInExpr(b.left(), out);
+            collectPatternVarsInExpr(b.right(), out);
+        } else if (e instanceof com.bingbaihanji.bdec.ast.expr.CondExpr cn) {
+            collectPatternVarsInExpr(cn.condition(), out);
+            collectPatternVarsInExpr(cn.trueExpr(), out);
+            collectPatternVarsInExpr(cn.falseExpr(), out);
+        } else if (e instanceof UnExpr u) {
+            collectPatternVarsInExpr(u.operand(), out);
+        } else if (e instanceof com.bingbaihanji.bdec.ast.expr.CastExpr ce) {
+            collectPatternVarsInExpr(ce.operand(), out);
+        } else if (e instanceof com.bingbaihanji.bdec.ast.expr.InvocationExpr inv) {
+            for (Expression a : inv.arguments()) {
+                collectPatternVarsInExpr(a, out);
+            }
+            if (inv.target() != null) {
+                collectPatternVarsInExpr(inv.target(), out);
+            }
+        } else if (e instanceof com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr aa) {
+            collectPatternVarsInExpr(aa.array(), out);
+            collectPatternVarsInExpr(aa.index(), out);
+        }
+    }
+
     /**
      * 递归收集语句中引用的所有变量名.
      *
@@ -664,6 +991,25 @@ public class SourceCleanup implements RewriteRule {
                 collectVarNamesInExpr(a.target(), out);
                 collectVarNamesInExpr(a.value(), out);
             }
+            case NewExpr ne -> {
+                // 对象创建实参含变量引用(如 new IllegalArgumentException("..." + v))
+                for (Expression a : ne.constructorArgs()) {
+                    collectVarNamesInExpr(a, out);
+                }
+                for (Expression d : ne.dimensions()) {
+                    collectVarNamesInExpr(d, out);
+                }
+            }
+            case com.bingbaihanji.bdec.ast.expr.CastExpr ce -> collectVarNamesInExpr(ce.operand(), out);
+            case com.bingbaihanji.bdec.ast.expr.CondExpr cn -> {
+                collectVarNamesInExpr(cn.condition(), out);
+                collectVarNamesInExpr(cn.trueExpr(), out);
+                collectVarNamesInExpr(cn.falseExpr(), out);
+            }
+            case com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr aa -> {
+                collectVarNamesInExpr(aa.array(), out);
+                collectVarNamesInExpr(aa.index(), out);
+            }
             default -> {
             }
         }
@@ -699,5 +1045,20 @@ public class SourceCleanup implements RewriteRule {
             case BOOLEAN -> new LitExpr(false, JavaType.BOOLEAN);
             default -> new VarExpr("null");
         };
+    }
+
+    /** this.clone() → super.clone() 的表达式重写. */
+    private static final class CloneCallRewriter extends com.bingbaihanji.bdec.ast.rewrite.AstTransformer {
+
+        @Override
+        protected Expression transformInvocation(InvocationExpr e) {
+            if ("clone".equals(e.methodName())
+                    && e.target() instanceof VarExpr v
+                    && "this".equals(v.name())) {
+                return new InvocationExpr(new VarExpr("super"), "clone",
+                        e.arguments(), e.returnType());
+            }
+            return super.transformInvocation(e);
+        }
     }
 }

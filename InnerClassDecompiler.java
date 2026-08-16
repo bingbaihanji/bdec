@@ -152,11 +152,17 @@ public final class InnerClassDecompiler {
                     if (outerName == null && !isAnonymous) {
                         flags |= AccessFlags.ACC_STATIC;
                     }
+                    // 保留 innerType 的完整元数据(注解/permits/record 组件):
+                    // 嵌套 record(如 sealed 内的 record Circle(double radius))经
+                    // 完整重写链后 recordComponents 已就位,6 参构造器会丢弃.
                     TypeDeclaration nestedType =
                             new TypeDeclaration(
                                     flags, innerType.simpleName(), innerType.kindName(),
                                     innerType.superName(), innerType.interfaceNames(),
-                                    innerType.typeParameters(), innerType.children());
+                                    innerType.typeParameters(), innerType.children(),
+                                    innerType.annotations(), innerType.superAnnotations(),
+                                    innerType.interfaceAnnotations(), innerType.permitsNames(),
+                                    innerType.recordComponents());
                     // 将嵌套类型添加到主类的成员列表中
                     TypeDeclaration mainType = allTypes.getFirst();
                     List<AstNode> mainMembers = new ArrayList<>(mainType.children());
@@ -164,7 +170,10 @@ public final class InnerClassDecompiler {
                     allTypes.set(0, new TypeDeclaration(
                             mainType.accessFlags(), mainType.simpleName(), mainType.kindName(),
                             mainType.superName(), mainType.interfaceNames(),
-                            mainType.typeParameters(), mainMembers));
+                            mainType.typeParameters(), mainMembers,
+                            mainType.annotations(), mainType.superAnnotations(),
+                            mainType.interfaceAnnotations(), mainType.permitsNames(),
+                            mainType.recordComponents()));
                 }
             } catch (Exception e) {
                 diagnostics.report(DecompilerDiagnostic.warning("inner",

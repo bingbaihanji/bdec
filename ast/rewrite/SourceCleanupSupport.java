@@ -55,15 +55,23 @@ final class SourceCleanupSupport {
     }
 
     /** 判断名称是否为类型名(类名以大写开头,限定名含点号,基本类型关键字).
-     *  用于字段访问目标(如 System.out 的 System)与普通变量的区分. */
+     *  用于字段访问目标(如 System.out 的 System)与普通变量的区分.
+     *  数组类型名(如 int[] 的 int[].class 目标)先剥离 "[]" 后缀再判断. */
     static boolean isTypeName(String name) {
         if (name == null || name.isEmpty()) {
             return false;
         }
-        if (Character.isUpperCase(name.charAt(0)) || name.indexOf('.') >= 0) {
+        String base = name;
+        while (base.endsWith("[]")) {
+            base = base.substring(0, base.length() - 2);
+        }
+        if (base.isEmpty()) {
+            return false;
+        }
+        if (Character.isUpperCase(base.charAt(0)) || base.indexOf('.') >= 0) {
             return true;
         }
-        return switch (name) {
+        return switch (base) {
             case "int", "long", "float", "double", "boolean", "byte", "short", "char", "void" -> true;
             default -> false;
         };

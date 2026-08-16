@@ -104,7 +104,7 @@ public final class MethodPipeline {
                                              DecompileContext context, boolean runSsa) {
         ControlFlowGraph cfg = cfgBuilder.build(method);
         LinearIr ir = irBuilder.build(cfg, method, classFile.constantPool(),
-                classFile.bootstrapMethods());
+                classFile.bootstrapMethods(), classFile, context);
         ir = semanticReconstructor.reconstruct(ir, method, cfg, classFile);
         if (runSsa) {
             ir = applySsa(method, cfg, ir, classFile.internalName());

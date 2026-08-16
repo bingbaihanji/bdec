@@ -203,6 +203,30 @@ public class AstBuilder {
         return result.isEmpty() ? java.util.List.of() : result;
     }
 
+    /** 桥接方法是否冗余:ACC_BRIDGE 且存在同名的非桥接真实实现(同擦除参数). */
+    private static boolean isRedundantBridge(MethodModel method, List<MethodModel> all) {
+        if ((method.accessFlags() & AccessFlags.ACC_BRIDGE) == 0) {
+            return false;
+        }
+        String params = erasedParams(method.descriptor());
+        for (MethodModel other : all) {
+            if (other == method || (other.accessFlags() & AccessFlags.ACC_BRIDGE) != 0) {
+                continue;
+            }
+            if (method.name().equals(other.name())
+                    && erasedParams(other.descriptor()).equals(params)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 从方法描述符提取参数部分(擦除后的参数签名). */
+    private static String erasedParams(String descriptor) {
+        int close = descriptor.indexOf(')');
+        return close < 0 ? descriptor : descriptor.substring(1, close);
+    }
+
     /**
      * 从方法体的IR指令中收集类型引用,用于生成import语句.
      * 扫描静态方法调用的DECLARING_CLASS注解,new表达式,new数组和instanceof
@@ -403,8 +427,18 @@ public class AstBuilder {
         }
 
         // 构建方法声明
+        List<MethodModel> allMethodModels = new ArrayList<>();
+        for (StructuredMethod sm : methods) {
+            allMethodModels.add(sm.method());
+        }
         for (StructuredMethod sm : methods) {
             MethodModel method = sm.method();
+            // 跳过冗余桥接方法:javac 为协变返回/泛型覆写生成桥接
+            //(如 Object clone() 桥接 ArrayMap clone()).存在同名的非桥接
+            // 真实实现时,桥接只是转发,单独输出会产生"已在类中定义 clone()".
+            if (isRedundantBridge(method, allMethodModels)) {
+                continue;
+            }
             String[] paramNames = buildParameterNames(method);
             JavaType[] paramTypes = method.parameterTypes();
             String methodName = resolveMethodName(method.name(), simpleName,
@@ -446,7 +480,8 @@ public class AstBuilder {
                     // sigTypes = [param0, param1, ..., returnType]
                     for (int si = 0; si < paramTypes.length; si++) {
                         JavaType sig = sigTypes[si];
-                        if (TypeReferenceUtil.isClassTypeParam(sig, classTypeParams)
+                        if (sig.kind() == com.bingbaihanji.bdec.type.TypeKind.TYPE_VARIABLE
+                                || TypeReferenceUtil.isClassTypeParam(sig, classTypeParams)
                                 || TypeReferenceUtil.isClassTypeParam(sig, methodTypeParams)
                                 || TypeReferenceUtil.hasGenericsOrWildcard(sig)
                                 || TypeReferenceUtil.hasTypeVariableArrayElement(sig)) {
@@ -454,7 +489,8 @@ public class AstBuilder {
                         }
                     }
                     JavaType sigRet = sigTypes[sigTypes.length - 1];
-                    if (TypeReferenceUtil.isClassTypeParam(sigRet, classTypeParams)
+                    if (sigRet.kind() == com.bingbaihanji.bdec.type.TypeKind.TYPE_VARIABLE
+                            || TypeReferenceUtil.isClassTypeParam(sigRet, classTypeParams)
                             || TypeReferenceUtil.isClassTypeParam(sigRet, methodTypeParams)
                             || TypeReferenceUtil.hasGenericsOrWildcard(sigRet)
                             || TypeReferenceUtil.hasTypeVariableArrayElement(sigRet)) {
@@ -567,6 +603,20 @@ public class AstBuilder {
                     methodTypeParams.set(idx, e.getValue() + " " + methodTypeParams.get(idx));
                 }
             }
+            // 渲染用类型参数:名称(含注解) + 边界(如 "<K extends Comparable<? super K>, V>").
+            // 名称列表 methodTypeParams 用于类型变量匹配(纯名),边界单独提取.
+            List<String> methodTypeParamsWithBounds = new ArrayList<>(
+                    SignatureParser.extractMethodTypeParamsWithBounds(method.signature()));
+            for (int bi = 0; bi < methodTypeParamsWithBounds.size(); bi++) {
+                String withBounds = methodTypeParamsWithBounds.get(bi);
+                if (bi < methodTypeParams.size()) {
+                    String annotatedName = methodTypeParams.get(bi);
+                    int sp = withBounds.indexOf(' ');
+                    withBounds = sp < 0 ? annotatedName
+                            : annotatedName + withBounds.substring(sp);
+                }
+                methodTypeParamsWithBounds.set(bi, withBounds);
+            }
 
             MethodDeclaration decl = new MethodDeclaration(
                     method.accessFlags(),
@@ -574,7 +624,7 @@ public class AstBuilder {
                     returnType,
                     paramNames,
                     paramTypes,
-                    methodTypeParams,
+                    methodTypeParamsWithBounds,
                     throwsTypes,
                     annDefault,
                     methodAnns,
@@ -741,6 +791,8 @@ public class AstBuilder {
         return new CompilationUnit(pkg, importList, List.of(td), innerNames);
     }
 
+    // ── 注解渲染 ──
+
     /**
      * 构建方法的参数名列表.
      * 优先从局部变量表(LocalVariableTable)中获取参数名,
@@ -773,8 +825,6 @@ public class AstBuilder {
         }
         return methodName;
     }
-
-    // ── 注解渲染 ──
 
     /**
      * 从内部名称中提取包名.

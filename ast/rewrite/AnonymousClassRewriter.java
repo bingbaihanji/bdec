@@ -4,8 +4,10 @@ import com.bingbaihanji.bdec.DecompileContext;
 import com.bingbaihanji.bdec.ast.AstNode;
 import com.bingbaihanji.bdec.ast.CompilationUnit;
 import com.bingbaihanji.bdec.ast.TypeDeclaration;
+import com.bingbaihanji.bdec.ast.expr.CastExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
+import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.NewExpr;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
@@ -57,6 +59,9 @@ import java.util.Map;
  */
 public class AnonymousClassRewriter implements RewriteRule {
 
+    /** 匿名类内联期间的外层类型名(渲染 this$0 → Enclosing.this 用). */
+    private String currentEnclosingName = "";
+
     /** 剥离 {@code val$} 前缀得到原局部变量名({@code val$local} → {@code local}). */
     private static String stripVal(String name) {
         return name.startsWith("val$") ? name.substring(4) : name;
@@ -66,6 +71,36 @@ public class AnonymousClassRewriter implements RewriteRule {
     private static String stripGenericArgs(String ref) {
         int lt = ref.indexOf('<');
         return lt >= 0 ? ref.substring(0, lt) : ref;
+    }
+
+    /**
+     * 解析匿名类父类引用(可能携带泛型实参,如 {@code MapCollections<K, V>}).
+     * 匿名类继承泛型父类时方法体使用继承的类型变量(如 colPut(K key)),raw
+     * 实例化 {@code new MapCollections()} 使类型变量无法解析——须保留实参
+     * 渲染为 {@code new MapCollections<K, V>()}.
+     */
+    private static JavaType parseBaseRef(String ref) {
+        int lt = ref.indexOf('<');
+        if (lt < 0) {
+            return JavaType.classType(ref);
+        }
+        String base = ref.substring(0, lt).trim();
+        String argsStr = ref.substring(lt + 1, Math.max(lt + 1, ref.lastIndexOf('>')));
+        List<JavaType> typeArgs = new ArrayList<>();
+        for (String tok : argsStr.split(",")) {
+            String t = tok.trim();
+            if (t.isEmpty()) {
+                continue;
+            }
+            // 简单类型变量名(单大写字母,如 K/V)→ TYPE_VARIABLE;否则按类名(粗粒度)
+            if (Character.isUpperCase(t.charAt(0)) && t.length() == 1) {
+                typeArgs.add(JavaType.typeVariable(t));
+            } else {
+                typeArgs.add(JavaType.classType(t));
+            }
+        }
+        return new JavaType(com.bingbaihanji.bdec.type.TypeKind.CLASS, base,
+                "L" + base + ";", typeArgs, 0);
     }
 
     @Override
@@ -90,6 +125,8 @@ public class AnonymousClassRewriter implements RewriteRule {
                 unit.innerClassNames());
     }
 
+    // ── 语句级内联(支持在实例化语句前重建捕获局部变量声明) ──
+
     /** 收集所有匿名类 TypeDeclaration(顶层或嵌套),按简单名索引. */
     private void collectAnon(List<TypeDeclaration> types, Map<String, TypeDeclaration> anonTypes) {
         for (TypeDeclaration td : types) {
@@ -104,11 +141,11 @@ public class AnonymousClassRewriter implements RewriteRule {
         }
     }
 
-    // ── 语句级内联(支持在实例化语句前重建捕获局部变量声明) ──
-
     /** 递归处理类型:移除匿名类声明,并在方法体/字段初始化器中内联实例化. */
     private TypeDeclaration rewriteType(TypeDeclaration td,
                                         Map<String, TypeDeclaration> anonTypes) {
+        // 匿名类内联期间的外层类型名:this$0(外层引用)渲染为 Enclosing.this
+        currentEnclosingName = td.simpleName();
         List<AstNode> members = new ArrayList<>();
         for (AstNode m : td.children()) {
             if (m instanceof TypeDeclaration nested) {
@@ -141,6 +178,8 @@ public class AnonymousClassRewriter implements RewriteRule {
         return stmts.size() == 1 ? stmts.getFirst() : new BlockStatement(stmts);
     }
 
+    // ── 表达式级内联 ──
+
     private List<Statement> rewriteStatements(List<Statement> stmts,
                                               Map<String, TypeDeclaration> anonTypes) {
         List<Statement> out = new ArrayList<>();
@@ -149,8 +188,6 @@ public class AnonymousClassRewriter implements RewriteRule {
         }
         return out;
     }
-
-    // ── 表达式级内联 ──
 
     /**
      * 递归重写一条语句,返回重写后的一条或多条语句(多条时首部为重建的
@@ -239,11 +276,11 @@ public class AnonymousClassRewriter implements RewriteRule {
     /** 匿名类的父类型(接口或父类). */
     private JavaType anonBaseType(TypeDeclaration anon) {
         if (!anon.interfaceNames().isEmpty()) {
-            return JavaType.classType(stripGenericArgs(anon.interfaceNames().getFirst()));
+            return parseBaseRef(anon.interfaceNames().getFirst());
         }
         if (anon.superName() != null && !anon.superName().isEmpty()
                 && !"java/lang/Object".equals(anon.superName())) {
-            return JavaType.classType(stripGenericArgs(anon.superName()));
+            return parseBaseRef(anon.superName());
         }
         return JavaType.classType("java/lang/Object");
     }
@@ -257,13 +294,24 @@ public class AnonymousClassRewriter implements RewriteRule {
         return internal.substring(internal.lastIndexOf('/') + 1);
     }
 
-    /** 类体内 this$0.field → field,val$x → x 的引用重写器. */
+    /** 类体内 this$0.field → field,this$0.method() → method(),val$x → x,
+     *  裸 this$0/(T) this$0 → Enclosing.this 的引用重写器. */
     private static final class OuterRefRewriter extends AstTransformer {
+
+        private final String enclosingName;
+
+        OuterRefRewriter(String enclosingName) {
+            this.enclosingName = enclosingName;
+        }
 
         @Override
         protected Expression transformVarExpr(VarExpr e) {
             if (e.name().startsWith("val$")) {
                 return new VarExpr(stripVal(e.name()));
+            }
+            // 裸 this$0(作为值传递/返回)→ 外层实例引用
+            if (e.name().startsWith("this$") && !enclosingName.isEmpty()) {
+                return new VarExpr(enclosingName + ".this");
             }
             return e;
         }
@@ -279,6 +327,26 @@ public class AnonymousClassRewriter implements RewriteRule {
                 return new VarExpr(stripVal(e.fieldName()));
             }
             return super.transformFieldAccess(e);
+        }
+
+        @Override
+        protected Expression transformInvocation(InvocationExpr e) {
+            // this$0.method(...) → method(...)(隐式外围方法调用)
+            if (e.target() instanceof VarExpr tv && tv.name().startsWith("this$")) {
+                return new InvocationExpr(null, e.methodName(), e.arguments(),
+                        e.returnType());
+            }
+            return super.transformInvocation(e);
+        }
+
+        @Override
+        protected Expression transformCast(CastExpr e) {
+            // (T) this$0 → 外层实例引用(非静态匿名类 this$0 即外层 ArrayMap)
+            if (e.operand() instanceof VarExpr tv && tv.name().startsWith("this$")
+                    && !enclosingName.isEmpty()) {
+                return new VarExpr(enclosingName + ".this");
+            }
+            return super.transformCast(e);
         }
     }
 
@@ -365,7 +433,7 @@ public class AnonymousClassRewriter implements RewriteRule {
                     Math.min(syntheticCount, rawArgs.size()), rawArgs.size()));
 
             // 类体:方法与字段声明(排除构造器与合成字段),并重写外围/捕获引用
-            OuterRefRewriter ref = new OuterRefRewriter();
+            OuterRefRewriter ref = new OuterRefRewriter(currentEnclosingName);
             List<AstNode> body = new ArrayList<>();
             for (AstNode m : anon.children()) {
                 if (m instanceof MethodDeclaration md && md.name() != null

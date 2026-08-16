@@ -612,10 +612,18 @@ public final class TryTranslator {
         if (a == null) {
             return b;
         }
-        if (b == null || a.equals(b)) {
+        if (b == null) {
             return a;
         }
-        return a + "|" + b;
+        // 合并并整体去重:多轮 merge 只查相邻项会产生重复类型
+        //(如 CCE|NPE 再并 CCE → CCE|NPE|CCE,multi-catch 重复类型非法).
+        java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>();
+        for (String s : (a + "|" + b).split("\\|")) {
+            if (!s.isEmpty()) {
+                types.add(s);
+            }
+        }
+        return String.join("|", types);
     }
 
     /**

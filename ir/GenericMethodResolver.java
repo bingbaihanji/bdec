@@ -1,5 +1,6 @@
 package com.bingbaihanji.bdec.ir;
 
+import com.bingbaihanji.bdec.bytecode.parser.SignatureParser;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
 
@@ -86,6 +87,40 @@ public final class GenericMethodResolver {
     }
 
     /**
+     * 反射获取方法的泛型参数类型(含类型变量,如 LinkedHashMap.put → [K, V]).
+     * 供 IrBuilder 对 JDK 方法实参插入 (K)/(V) 强转——字节码签名擦除为 Object.
+     */
+    public static JavaType[] genericParamTypes(String declaringClass, String methodName,
+                                               JavaType[] erasedParamTypes) {
+        if (declaringClass == null || methodName == null) {
+            return null;
+        }
+        try {
+            Class<?> clazz = Class.forName(declaringClass.replace('/', '.'));
+            Class<?>[] erased = toErasureClasses(erasedParamTypes);
+            Method m = clazz.getMethod(methodName, erased);
+            Type[] genericParams = m.getGenericParameterTypes();
+            JavaType[] result = new JavaType[genericParams.length];
+            for (int i = 0; i < genericParams.length; i++) {
+                Type t = genericParams[i];
+                // 方法级类型变量(如 Function.apply 的 <T> T apply(T) 的 T)未绑定,
+                // 强转 (T) 无意义且错误——用擦除类型(通常 Object)使其不触发强转.
+                // 类级类型变量(如 LinkedHashMap.put 的 K/V)保留,供 (K)/(V) 强转.
+                if (t instanceof TypeVariable<?> tv
+                        && tv.getGenericDeclaration() instanceof Method) {
+                    result[i] = erasedParamTypes != null && i < erasedParamTypes.length
+                            ? erasedParamTypes[i] : JavaType.classType("java/lang/Object");
+                } else {
+                    result[i] = reify(t);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * 类是否带类型参数(泛型类).用于菱形推断:泛型类的 {@code new} 才能发射
      * {@code <>}.反射失败(非 JDK/不可加载)返回 {@code false}.
      */
@@ -135,8 +170,65 @@ public final class GenericMethodResolver {
         }
     }
 
+    /**
+     * 从显式方法泛型签名推断返回类型(供被反编译类自身方法使用).
+     *
+     * <p>反射路径只覆盖 {@code java.*}/{@code javax.*};被反编译的用户类
+     * (如 {@code Cache<K,V>} 接口)的 {@code get} 方法字节码签名被擦除为
+     * {@code Object},但其 Signature 属性 {@code (TK;)TV;} 完整可得——
+     * 由调用方用 {@link SignatureParser#parseMethodSignature} 解析后传入.
+     * 绑定分两步:</p>
+     * <ol>
+     *   <li>类类型参数按位置对齐接收者实参({@code this} 接收者类型为
+     *       {@code Cache<K,V>} → K→K, V→V);</li>
+     *   <li>方法类型参数从调用点实参绑定(与方法返回推断同逻辑).</li>
+     * </ol>
+     *
+     * @param sigParamTypes 方法签名的参数类型(含类型变量)
+     * @param sigReturnType 方法签名的返回类型(含类型变量)
+     * @param classTypeParams 声明类的类型参数(如 K,V,以 TYPE_VARIABLE 表示)
+     * @param receiverType   接收者的泛型类型(带类型实参;无实参时类绑定为空)
+     * @param returnType     描述符原始返回类型(回退)
+     * @param args           调用点实参(可为 null)
+     * @return 推断后的返回类型,无法推断时原样返回 {@code returnType}
+     */
+    public static JavaType inferFromSignature(JavaType[] sigParamTypes,
+                                              JavaType sigReturnType,
+                                              JavaType[] classTypeParams,
+                                              JavaType receiverType,
+                                              JavaType returnType,
+                                              List<Value> args) {
+        if (sigParamTypes == null || sigReturnType == null || returnType == null) {
+            return returnType;
+        }
+        Map<String, JavaType> bindings = new HashMap<>();
+        // 类类型参数按位置对齐接收者实参(如 this 接收者 Cache<K,V>)
+        if (receiverType != null && classTypeParams != null) {
+            int n = Math.min(classTypeParams.length, receiverType.typeArguments().size());
+            for (int i = 0; i < n; i++) {
+                JavaType clsParam = classTypeParams[i];
+                if (clsParam != null && clsParam.internalName() != null) {
+                    bindings.put(clsParam.internalName(), receiverType.typeArguments().get(i));
+                }
+            }
+        }
+        // 方法类型变量从实参绑定
+        List<Value> argList = args != null ? args : List.of();
+        int na = Math.min(sigParamTypes.length, argList.size());
+        for (int i = 0; i < na; i++) {
+            Value arg = argList.get(i);
+            if (arg != null && arg.type() != null) {
+                bind(sigParamTypes[i], arg.type(), bindings);
+            }
+        }
+        if (!allVarsBound(sigReturnType, bindings)) {
+            return returnType;
+        }
+        return substitute(sigReturnType, bindings);
+    }
+
     /** 类型树中是否含类型变量(TYPE_VARIABLE 或泛型实参/数组元素/通配符边界内). */
-    private static boolean containsTypeVariable(JavaType t) {
+    public static boolean containsTypeVariable(JavaType t) {
         if (t == null) {
             return false;
         }

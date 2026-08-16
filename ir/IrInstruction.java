@@ -47,6 +47,13 @@ public class IrInstruction {
     /** 语义注解列表,由语义重建管道附加. */
     private List<SemanticAnnotation> annotations;
 
+    /**
+     * 方法调用的泛型参数类型(含类型变量,如 put(K,V) → [K, V]);非调用指令
+     * 或未解析到泛型签名为 null.供 ExprTranslator 对擦除为 Object 的实参
+     * 插入 (K)/(V) 强转(参照 vineflower 的 readObject 场景).
+     */
+    private List<JavaType> genericParamTypes;
+
     /** 该指令产生的结果值 */
     private Value resultValue;
 
@@ -83,8 +90,6 @@ public class IrInstruction {
         this(id, opcode, resultType, operands, sourceOffset, blockId, 0, null);
     }
 
-    // ── 工厂方法 ───────────────────────────────────────────────────────
-
     /**
      * 创建变量加载指令(LOAD).
      */
@@ -100,6 +105,8 @@ public class IrInstruction {
         return new IrInstruction(id, IrOpcode.STORE, var.type(), List.of(var, value),
                 offset, blockId, 0, null);
     }
+
+    // ── 工厂方法 ───────────────────────────────────────────────────────
 
     /**
      * 创建二元运算指令(含原始字节码操作码).
@@ -219,8 +226,6 @@ public class IrInstruction {
                 offset, blockId, 0, null);
     }
 
-    // ── 属性访问器 ────────────────────────────────────────────────────
-
     /**
      * 将JVM字节码操作码映射为对应的二元运算符.
      * 涵盖算术运算,位运算,位移运算,比较运算和空值比较.
@@ -287,6 +292,18 @@ public class IrInstruction {
             case 0xc7 -> BinaryOperator.NE;      // IFNONNULL (ref != null)
             default -> null;
         };
+    }
+
+    /** 设置方法调用的泛型参数类型(默认 null,仅 INVOKE 指令自类签名解析后设置). */
+    public void setGenericParamTypes(List<JavaType> types) {
+        this.genericParamTypes = types;
+    }
+
+    // ── 属性访问器 ────────────────────────────────────────────────────
+
+    /** 方法调用的泛型参数类型;非调用指令或无签名为 null. */
+    public List<JavaType> genericParamTypes() {
+        return genericParamTypes;
     }
 
     /** @return 指令ID */

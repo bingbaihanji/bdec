@@ -166,26 +166,31 @@ public class PatternMatchRewriter implements RewriteRule {
     }
 
     /**
-     * 提取变量声明:验证语句是否为 {@code Type name = (Type) obj;} 形式.
+     * 提取变量声明:验证语句是否为 {@code Type name = (Type) obj;} 形式
+     * (表达式语句赋值或 VariableDeclaration 两种表示).
      *
      * @return 若匹配成功则返回变量名,否则返回 null
      */
     private String extractVarDecl(Statement s, String typeName, Expression testedObj) {
-        if (!(s instanceof ExpressionStatement es)) {
-            return null;
+        String varName = null;
+        CastExpr cast = null;
+        if (s instanceof ExpressionStatement es
+                && es.expression() instanceof AssignExpr assign
+                && assign.target() instanceof VarExpr var) {
+            varName = var.name();
+            cast = assign.value() instanceof CastExpr c ? c : null;
+        } else if (s instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd
+                && vd.initializer() instanceof CastExpr c) {
+            // STORE → VariableDeclaration 路径(如 equals 的 Map<?,?> map = (Map) obj)
+            varName = vd.name();
+            cast = c;
         }
-        if (!(es.expression() instanceof AssignExpr assign)) {
-            return null;
-        }
-        if (!(assign.target() instanceof VarExpr var)) {
-            return null;
-        }
-        // 检查右值是否为强制类型转换:(Type) obj
-        if (!(assign.value() instanceof CastExpr cast)) {
+        if (varName == null || cast == null) {
             return null;
         }
         // 检查强制转型的目标类型是否匹配
-        String castType = cast.targetType().internalName();
+        String castType = cast.targetType() != null
+                ? cast.targetType().internalName() : null;
         if (castType == null) {
             return null;
         }
@@ -194,8 +199,7 @@ public class PatternMatchRewriter implements RewriteRule {
         if (!shortType.equals(typeName)) {
             return null;
         }
-        // 检查强制转型的表达式是否与 instanceof 的被测试对象匹配
-        return var.name();
+        return varName;
     }
 
     /** 提取语句中的子语句列表(若为块语句则展开,否则包装为单元素列表) */

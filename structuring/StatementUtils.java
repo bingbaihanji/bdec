@@ -1,5 +1,6 @@
 package com.bingbaihanji.bdec.structuring;
 
+import com.bingbaihanji.bdec.ast.expr.ArrayAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.AssignExpr;
 import com.bingbaihanji.bdec.ast.expr.BinExpr;
 import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
@@ -8,6 +9,7 @@ import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
 import com.bingbaihanji.bdec.ast.expr.LambdaExpr;
 import com.bingbaihanji.bdec.ast.expr.LitExpr;
+import com.bingbaihanji.bdec.ast.expr.NewExpr;
 import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.UnaryOperator;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
@@ -141,6 +143,16 @@ final class StatementUtils {
         }
         // 独立的字段访问(例如 GETSTATIC 用于方法引用时的 System.out)不是合法的 Java 语句
         if (e instanceof FieldAccessExpr) {
+            return true;
+        }
+        // 独立的数组访问(arr[i])——纯读,无副作用,丢弃(如 hash 方法中残存的 hashes[i];)
+        if (e instanceof ArrayAccessExpr) {
+            return true;
+        }
+        // 独立的数组分配(new int[n])——分配后即弃,无构造器副作用;对象 new 保留
+        //(构造器可能有副作用,如 new FileInputStream("x")).
+        if (e instanceof NewExpr ne && ne.instantiatedType() != null
+                && ne.instantiatedType().kind() == TypeKind.ARRAY) {
             return true;
         }
         return false;
