@@ -3,6 +3,7 @@ package com.bingbaihanji.bdec.structuring;
 import com.bingbaihanji.bdec.ast.AnnotationRenderer;
 import com.bingbaihanji.bdec.ast.expr.BinExpr;
 import com.bingbaihanji.bdec.ast.expr.BinaryOperator;
+import com.bingbaihanji.bdec.ast.expr.CondExpr;
 import com.bingbaihanji.bdec.ast.expr.Expression;
 import com.bingbaihanji.bdec.ast.expr.FieldAccessExpr;
 import com.bingbaihanji.bdec.ast.expr.InvocationExpr;
@@ -119,5 +120,169 @@ public final class ExprCleanup {
                     && vb.name().equals(fa.fieldName());
         }
         return false;
+    }
+
+    /**
+     * 泛型返回强转:方法声明返回类型携带类型变量(如 V/K/List&lt;V&gt;)时,
+     * 返回值 IR 类型是擦除后的 Object 或不匹配,插入 {@code (V)} 强转
+     * (参照 vineflower).如 {@code return array[...]} (Object) 对
+     * {@code V get()} 需 {@code (V) array[...]}.</p>
+     *
+     * @param retVal      返回值 AST 表达式
+     * @param declaredRet 方法声明返回类型(可为 null)
+     * @param valueType   返回值的 IR 类型(可为 null)
+     */
+    public static Expression applyGenericReturnCast(Expression retVal, JavaType declaredRet,
+                                                    JavaType valueType) {
+        if (retVal == null || declaredRet == null) {
+            return retVal;
+        }
+        // 字面量 null:return null 不需要 (V) null(三元整体不是 LitExpr,仍会强转)
+        if (retVal instanceof LitExpr lit && lit.value() == null) {
+            return retVal;
+        }
+        // lambda/方法引用不能作为强转操作数((V) (t) -> t 非法)——其类型由
+        // 目标类型自行推断,跳过.
+        if (retVal instanceof com.bingbaihanji.bdec.ast.expr.LambdaExpr) {
+            return retVal;
+        }
+        // 表达式已知类型已是声明返回类型(如 return this.put() 返回 V;
+        // 三元任一分支返回 V,如 existing!=null ? existing : this.put(...)):
+        // 无需强转——避免对已是 V 的值冗余加 (V).
+        if (exprHasKnownTypeOf(retVal, declaredRet)) {
+            return retVal;
+        }
+        JavaType target = castTargetIfNeeded(valueType, declaredRet);
+        return target != null ? new com.bingbaihanji.bdec.ast.expr.CastExpr(target, retVal) : retVal;
+    }
+
+    /**
+     * 表达式的已知类型是否等于目标类型(沿 CondExpr 分支递归).
+     * 只信任可确定性获得类型的节点(InvocationExpr/CastExpr/NewExpr/LitExpr);
+     * VarExpr/ArrayAccessExpr 类型未知,返回 false(保守,允许强转).
+     */
+    private static boolean exprHasKnownTypeOf(Expression e, JavaType target) {
+        if (e instanceof CondExpr ce) {
+            return exprHasKnownTypeOf(ce.trueExpr(), target)
+                    || exprHasKnownTypeOf(ce.falseExpr(), target);
+        }
+        JavaType t;
+        if (e instanceof InvocationExpr inv) {
+            t = inv.returnType();
+        } else if (e instanceof com.bingbaihanji.bdec.ast.expr.CastExpr ce) {
+            t = ce.targetType();
+        } else if (e instanceof NewExpr ne) {
+            t = ne.instantiatedType();
+        } else if (e instanceof LitExpr lit) {
+            t = lit.type();
+        } else {
+            return false;
+        }
+        return t != null && sameType(t, target);
+    }
+
+    /**
+     * 变量声明场景的泛型强转:声明类型为类型变量/泛型时,被存值类型为通配符
+     * 或擦除 Object(不可直接赋值)则插入强转.如
+     * {@code V newValue = function.apply(...)}(apply 返回 {@code ? extends V})
+     * → {@code V newValue = (V) function.apply(...)}.
+     */
+    public static Expression applyGenericDeclCast(Expression rhs, JavaType valueType,
+                                                  JavaType declType) {
+        if (rhs == null || valueType == null || declType == null) {
+            return rhs;
+        }
+        JavaType target = castTargetIfNeeded(valueType, declType);
+        return target != null ? new com.bingbaihanji.bdec.ast.expr.CastExpr(target, rhs) : rhs;
+    }
+
+    /** 通配符不能作声明类型(? extends V x 非法):返回边界(V);无边界返回 Object. */
+    public static JavaType wildcardBound(JavaType t) {
+        if (t == null || t.kind() != TypeKind.WILDCARD) {
+            return t;
+        }
+        return t.typeArguments().isEmpty()
+                ? JavaType.classType("java/lang/Object") : t.typeArguments().getFirst();
+    }
+
+    /**
+     * 值类型无法直接赋给声明/返回类型(需强转)时返回强转目标,否则 null.
+     */
+    private static JavaType castTargetIfNeeded(JavaType valueType, JavaType declaredType) {
+        if (!isTypeVarBearing(declaredType)) {
+            return null;
+        }
+        // 值类型已知且已是声明类型(如 this.put() 返回 V → 变量 V):无需强转
+        if (valueType != null) {
+            if (sameType(valueType, declaredType)) {
+                return null;
+            }
+            // 值类型即同类型变量(如 V 经变量传递 → 声明 V):无需强转
+            if (valueType.kind() == TypeKind.TYPE_VARIABLE
+                    && declaredType.kind() == TypeKind.TYPE_VARIABLE
+                    && valueType.internalName() != null
+                    && valueType.internalName().equals(declaredType.internalName())) {
+                return null;
+            }
+            // 值类型与声明类型是不同名类型变量(如 Function.apply(T) 的实参 V
+            // 对参数 T——方法类型变量未绑定):强转 (T) v 无意义且错误,跳过.
+            if (valueType.kind() == TypeKind.TYPE_VARIABLE
+                    && declaredType.kind() == TypeKind.TYPE_VARIABLE) {
+                return null;
+            }
+        }
+        // 值类型未知(null,如三元/PHI 合并):保守插入——对类型变量返回强转总是
+        // 安全,冗余时由 RedundantCastRewriter 按操作数类型清除.
+        return castTargetFor(declaredType);
+    }
+
+    /** 类型是否携带类型变量(TYPE_VARIABLE/通配符/泛型实参含类型变量). */
+    private static boolean isTypeVarBearing(JavaType t) {
+        if (t == null) {
+            return false;
+        }
+        return switch (t.kind()) {
+            case TYPE_VARIABLE, WILDCARD -> true;
+            case CLASS -> !t.typeArguments().isEmpty()
+                    && t.typeArguments().stream().anyMatch(ExprCleanup::isTypeVarBearing);
+            case ARRAY -> isTypeVarBearing(JavaType.elementOf(t));
+            default -> false;
+        };
+    }
+
+    /** 两个类型是否完全相同(逐层比较 kind/internalName/泛型实参). */
+    private static boolean sameType(JavaType a, JavaType b) {
+        if (a == null || b == null || a.kind() != b.kind()) {
+            return false;
+        }
+        if (!java.util.Objects.equals(a.internalName(), b.internalName())) {
+            return false;
+        }
+        if (a.typeArguments().size() != b.typeArguments().size()) {
+            return false;
+        }
+        for (int i = 0; i < a.typeArguments().size(); i++) {
+            if (!sameType(a.typeArguments().get(i), b.typeArguments().get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 强转目标:类型变量→自身;通配符→边界(? extends V→V);泛型类→擦除(List&lt;V&gt;→List). */
+    private static JavaType castTargetFor(JavaType declaredType) {
+        return switch (declaredType.kind()) {
+            case TYPE_VARIABLE -> declaredType;
+            case WILDCARD -> wildcardBound(declaredType);
+            case CLASS -> {
+                if (declaredType.typeArguments().isEmpty()) {
+                    yield declaredType;
+                }
+                String internal = declaredType.internalName();
+                yield new JavaType(TypeKind.CLASS, internal, "L" + internal + ";",
+                        List.of(), 0);
+            }
+            default -> null;
+        };
     }
 }

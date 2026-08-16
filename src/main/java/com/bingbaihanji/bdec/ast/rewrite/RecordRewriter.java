@@ -164,11 +164,15 @@ public class RecordRewriter implements RewriteRule {
             }
         }
 
-        // record 不显式展示 "extends Record"——将 super 名称置为 null
+        // record 不显式展示 "extends Record"——将 super 名称置为 null.
+        // typeParameters 保留原泛型参数(td 来自 AstBuilder 时已含 <L, R>),
+        // recordComponents 走独立字段——二者不再争用同一槽位,
+        // 否则输出 "record Pair(L left, R right)" 丢失泛型参数.
         return new TypeDeclaration(td.accessFlags() & ~ACC_RECORD,
                 td.simpleName(), "record", null,
-                td.interfaceNames(), recordComponents, members, td.annotations(),
-                td.superAnnotations(), td.interfaceAnnotations());
+                td.interfaceNames(), td.typeParameters(), members, td.annotations(),
+                td.superAnnotations(), td.interfaceAnnotations(),
+                td.permitsNames(), recordComponents);
     }
 
     /**

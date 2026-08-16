@@ -12,6 +12,7 @@ import com.bingbaihanji.bdec.cfg.BasicBlock;
 import com.bingbaihanji.bdec.cfg.ControlFlowGraph;
 import com.bingbaihanji.bdec.cfg.EdgeKind;
 import com.bingbaihanji.bdec.cfg.PostDominatorTree;
+import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.IrOpcode;
 import com.bingbaihanji.bdec.ir.LinearIr;
 
@@ -45,13 +46,26 @@ public final class LoopTranslator {
     }
 
 
-    /** 翻译循环体内的一个区域(从 start 出发,止于 latch 与循环出口) */
+    /** 翻译循环体内的一个区域(从 start 出发,止于 stop/latch 与循环出口) */
     static List<Statement> translateLoopRegion(ReducerOps ops, BasicBlock start, BasicBlock latch,
                                                Set<BasicBlock> body,
                                                Set<BasicBlock> exitTargets,
                                                List<BlockGroup> allGroups, LinearIr ir,
                                                Set<BlockGroup> consumed,
                                                ControlFlowGraph graph) {
+        return translateLoopRegion(ops, start, latch, body, exitTargets, allGroups, ir,
+                consumed, graph, null);
+    }
+
+    /** 翻译循环体内的一个区域(从 start 出发,止于 stop/latch 与循环出口;
+     *  stop 为额外边界,如 skip 分支汇入 true 目标时边界设为该目标). */
+    static List<Statement> translateLoopRegion(ReducerOps ops, BasicBlock start, BasicBlock latch,
+                                               Set<BasicBlock> body,
+                                               Set<BasicBlock> exitTargets,
+                                               List<BlockGroup> allGroups, LinearIr ir,
+                                               Set<BlockGroup> consumed,
+                                               ControlFlowGraph graph,
+                                               BasicBlock stop) {
         Set<BasicBlock> region = new LinkedHashSet<>();
         Deque<BasicBlock> queue = new ArrayDeque<>();
         queue.add(start);
@@ -65,8 +79,8 @@ public final class LoopTranslator {
                     continue;
                 }
                 BasicBlock t = e.target();
-                if (t == latch || !body.contains(t)) {
-                    continue; // 止于 latch 或循环出口
+                if (t == latch || t == stop || !body.contains(t)) {
+                    continue; // 止于 stop/latch 或循环出口
                 }
                 queue.add(t);
             }
@@ -179,8 +193,15 @@ public final class LoopTranslator {
                 Statement nestedBody = translateLoopBodyStructured(ops, nestedLoop, allGroups,
                         ir, consumed, graph, null);
                 if (nestedBody != null && !StatementUtils.isEmptyBlock(nestedBody)) {
-                    return wrapLoopStatement(ops, nestedLoop, nestedBody,
+                    Statement nested = wrapLoopStatement(ops, nestedLoop, nestedBody,
                             ops.extractConditionFromHeader(nestedLoop.header(), ir));
+                    // 嵌套循环正常退出 return 补发(同 reduce 路径)
+                    Statement followRet = loopFollowReturn(ops, nestedLoop, ir,
+                            allGroups, consumed, graph);
+                    if (followRet != null) {
+                        return new BlockStatement(List.of(nested, followRet));
+                    }
+                    return nested;
                 }
             }
         }
@@ -212,22 +233,23 @@ public final class LoopTranslator {
 
         List<Statement> result = new ArrayList<>(pre);
 
-        if (fLatch && !tExit) {
-            // FALSE 分支是 continue:if (!cond) continue; + TRUE 区域
+        if (fLatch && !tLatch && !tExit
+                && !leadsToPhiMerge(falseTarget, latch, body, graph, ir)) {
+            // FALSE 分支是 continue:if (!cond) continue; + TRUE 区域.
+            // 排除值路径:分支空块通向 latch 但 latch 有 PHI 合并(值三元汇入
+            // 循环尾,如 builder.append(cond?A:B) 的 value 分支被折叠成空 goto),
+            // 发射 continue 会错误跳过值消费——交给纯菱形抑制处理.
             result.add(new IfStatement(AstCleanup.negateCond(cond), StatementUtils.continueStmt(), null));
-            if (!tLatch) {
-                result.addAll(translateLoopRegion(ops, trueTarget, latch, body, exitTargets,
-                        allGroups, ir, consumed, graph));
-            }
+            result.addAll(translateLoopRegion(ops, trueTarget, latch, body, exitTargets,
+                    allGroups, ir, consumed, graph));
             return StatementUtils.blockOf(result);
         }
-        if (tLatch && !fExit) {
-            // TRUE 分支是 continue:if (cond) continue; + FALSE 区域
+        if (tLatch && !fLatch && !fExit
+                && !leadsToPhiMerge(trueTarget, latch, body, graph, ir)) {
+            // TRUE 分支是 continue:if (cond) continue; + FALSE 区域.
             result.add(new IfStatement(cond, StatementUtils.continueStmt(), null));
-            if (!fLatch) {
-                result.addAll(translateLoopRegion(ops, falseTarget, latch, body, exitTargets,
-                        allGroups, ir, consumed, graph));
-            }
+            result.addAll(translateLoopRegion(ops, falseTarget, latch, body, exitTargets,
+                    allGroups, ir, consumed, graph));
             return StatementUtils.blockOf(result);
         }
         if (fExit && !tExit) {
@@ -264,6 +286,37 @@ public final class LoopTranslator {
                 }
             }
             return StatementUtils.blockOf(result);
+        }
+        // skip 分支模式:FALSE 分支汇入 TRUE 目标(分隔符等"跳过"分支,如
+        // toString 循环体的 if(i<=0) 后接公共代码——FALSE 分支是 ", " 分隔符,
+        // 汇入 TRUE 目标的公共代码).正确结构:
+        //   if (!cond) { FALSE 分支 } + TRUE 目标区域(公共后续)
+        // 否则普通 if-else 会把公共代码塞进 then,语义错误.
+        if (!tLatch && !tExit && regionJoinsTarget(falseTarget, trueTarget, latch, body, graph)) {
+            List<Statement> falseRegion = translateLoopRegion(ops, falseTarget, latch, body,
+                    exitTargets, allGroups, ir, consumed, graph, trueTarget);
+            if (!falseRegion.isEmpty()) {
+                result.add(new IfStatement(AstCleanup.negateCond(cond),
+                        StatementUtils.blockOf(falseRegion), null));
+            }
+            result.addAll(translateLoopRegion(ops, trueTarget, latch, body, exitTargets,
+                    allGroups, ir, consumed, graph));
+            return StatementUtils.blockOf(result);
+        }
+        // 纯三元菱形:两个分支都是无副作用的纯值计算(ldc/aload 等),汇入同一
+        // 合并点,合并点的 PHI 被后续表达式消费(如 builder.append(cond ? A : B)
+        // 的实参).不结构化 if——抑制空 if 让合并点继续,PHI 经 resolvePhiAsTernary
+        // 还原为 CondExpr;否则一般 if-else 会把合并点(append 调用)吞进分支.
+        if (!tLatch && !tExit && !fLatch && !fExit) {
+            BasicBlock merge = commonMerge(trueTarget, falseTarget, latch, body, graph);
+            // 合并点可为 latch(值三元汇入循环尾,如 builder.append(cond?A:B) 的
+            // append 在 latch)——两分支都纯时抑制,真 continue(另一分支有代码)
+            // 的纯分支为单个 continue,isPureBranch 会因另一分支非纯而不命中.
+            if (merge != null
+                    && isPureBranch(trueTarget, merge, body, graph, ir)
+                    && isPureBranch(falseTarget, merge, body, graph, ir)) {
+                return StatementUtils.blockOf(result);
+            }
         }
         // 无 continue/break——体内普通 if-else,递归翻译两个分支
         Statement thenBody = StatementUtils.blockOf(translateLoopRegion(ops, trueTarget, latch, body, exitTargets,
@@ -359,6 +412,164 @@ public final class LoopTranslator {
         return any;
     }
 
+    /**
+     * FALSE 分支区域(止于 stop/latch)是否存在指向 joinTarget 的边,
+     * 即 FALSE 分支汇入 TRUE 目标(skip/分隔符模式).
+     */
+    private static boolean regionJoinsTarget(BasicBlock start, BasicBlock joinTarget,
+                                             BasicBlock latch, Set<BasicBlock> body,
+                                             ControlFlowGraph graph) {
+        if (start == joinTarget || joinTarget == null) {
+            return false;
+        }
+        Set<BasicBlock> region = new LinkedHashSet<>();
+        Deque<BasicBlock> queue = new ArrayDeque<>();
+        queue.add(start);
+        while (!queue.isEmpty()) {
+            BasicBlock cur = queue.poll();
+            if (!region.add(cur)) {
+                continue;
+            }
+            for (var e : graph.outgoingOf(cur)) {
+                if (e.kind() == EdgeKind.EXCEPTION) {
+                    continue;
+                }
+                BasicBlock t = e.target();
+                if (t == latch || !body.contains(t)) {
+                    continue;
+                }
+                if (t == joinTarget) {
+                    return true;
+                }
+                queue.add(t);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 两分支的公共合并点:从 trueTarget/falseTarget 出发(止于 latch),首个两分支
+     * 都可达的块.用于纯三元菱形检测(分支纯值汇入同一合并点).
+     */
+    private static BasicBlock commonMerge(BasicBlock a, BasicBlock b,
+                                          BasicBlock latch, Set<BasicBlock> body,
+                                          ControlFlowGraph graph) {
+        Set<BasicBlock> reachA = reachable(a, latch, body, graph);
+        Set<BasicBlock> reachB = reachable(b, latch, body, graph);
+        // 按 A 的遍历序找首个同时可达块(优先 A 直接目标)
+        Deque<BasicBlock> queue = new ArrayDeque<>();
+        Set<BasicBlock> seen = new HashSet<>();
+        queue.add(a);
+        while (!queue.isEmpty()) {
+            BasicBlock cur = queue.poll();
+            if (!seen.add(cur)) {
+                continue;
+            }
+            if (reachB.contains(cur) && cur != a) {
+                return cur;
+            }
+            for (var e : graph.outgoingOf(cur)) {
+                if (e.kind() == EdgeKind.EXCEPTION || e.target() == latch
+                        || !body.contains(e.target())) {
+                    continue;
+                }
+                queue.add(e.target());
+            }
+        }
+        // 两分支都直达 latch(latch 是合并点,如值三元汇入循环尾)
+        if (goesToLatch(a, latch, body, graph) && goesToLatch(b, latch, body, graph)) {
+            return latch;
+        }
+        return null;
+    }
+
+    /** 区域(从 start 止于 latch)是否含指向 latch 的边. */
+    private static boolean goesToLatch(BasicBlock start, BasicBlock latch,
+                                       Set<BasicBlock> body, ControlFlowGraph graph) {
+        Set<BasicBlock> region = reachable(start, latch, body, graph);
+        for (BasicBlock rb : region) {
+            for (var e : graph.outgoingOf(rb)) {
+                if (e.kind() != EdgeKind.EXCEPTION && e.target() == latch) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 从 start 出发(止于 stop),可达的循环体块集合. */
+    private static Set<BasicBlock> reachable(BasicBlock start, BasicBlock stop,
+                                             Set<BasicBlock> body,
+                                             ControlFlowGraph graph) {
+        Set<BasicBlock> result = new LinkedHashSet<>();
+        Deque<BasicBlock> queue = new ArrayDeque<>();
+        queue.add(start);
+        while (!queue.isEmpty()) {
+            BasicBlock cur = queue.poll();
+            if (cur == stop || !result.add(cur)) {
+                continue;
+            }
+            for (var e : graph.outgoingOf(cur)) {
+                if (e.kind() == EdgeKind.EXCEPTION || e.target() == stop
+                        || !body.contains(e.target())) {
+                    continue;
+                }
+                queue.add(e.target());
+            }
+        }
+        return result;
+    }
+
+    /** 分支区域(从 start 到 stop)是否全为无副作用指令(纯值计算). */
+    private static boolean isPureBranch(BasicBlock start, BasicBlock stop,
+                                        Set<BasicBlock> body,
+                                        ControlFlowGraph graph, LinearIr ir) {
+        Set<BasicBlock> region = reachable(start, stop, body, graph);
+        for (BasicBlock rb : region) {
+            for (IrInstruction i : ir.instructionsOf(rb)) {
+                if (i.opcode() == IrOpcode.STORE
+                        || i.opcode() == IrOpcode.INVOKE
+                        || i.opcode() == IrOpcode.NEW
+                        || i.opcode() == IrOpcode.NEW_ARRAY
+                        || i.opcode() == IrOpcode.FIELD_STORE
+                        || i.opcode() == IrOpcode.ARRAY_STORE
+                        || i.opcode() == IrOpcode.MONITOR_ENTER
+                        || i.opcode() == IrOpcode.MONITOR_EXIT
+                        || i.opcode() == IrOpcode.THROW
+                        || i.opcode() == IrOpcode.RETURN
+                        || i.opcode() == IrOpcode.CONDITION) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 分支(空块→latch)是否通向含 PHI 的合并块(值路径而非 continue):
+     * 值三元(如 builder.append(cond?A:B))把 A/B 推栈后空 goto 到 latch,
+     * latch 的 PHI 合并两分支值;continue 分支则无值合并.
+     */
+    private static boolean leadsToPhiMerge(BasicBlock start, BasicBlock latch,
+                                           Set<BasicBlock> body,
+                                           ControlFlowGraph graph, LinearIr ir) {
+        Set<BasicBlock> region = reachable(start, latch, body, graph);
+        for (BasicBlock rb : region) {
+            for (IrInstruction i : ir.instructionsOf(rb)) {
+                if (i.opcode() == IrOpcode.PHI) {
+                    return true;
+                }
+            }
+        }
+        // 也检查 latch 自身
+        for (IrInstruction i : ir.instructionsOf(latch)) {
+            if (i.opcode() == IrOpcode.PHI) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 块中是否含 RETURN 指令(方法出口). */
     private static boolean blockIsReturn(BasicBlock b, LinearIr ir) {
         if (b == null) {
@@ -366,6 +577,51 @@ public final class LoopTranslator {
         }
         return ir.instructionsOf(b).stream()
                 .anyMatch(i -> i.opcode() == IrOpcode.RETURN);
+    }
+
+    /**
+     * 循环正常退出的补发 return:循环头条件不成立(while 的 FALSE 分支)通向的
+     * 出口块若含 RETURN 且其组已被体内分支消费(同一出口块被体内 if 的 return
+     * 复用),循环后的 fallthrough return 会丢失(如 indexOf 的
+     * {@code while(i>=0){...}} 后缺 {@code return ~end})——此处补发.
+     * 供 reduce() 与嵌套循环路径共用.
+     *
+     * @return 循环后应补发的 ReturnStatement;不需要补发返回 null
+     */
+    static Statement loopFollowReturn(ReducerOps ops, LoopInfo loopInfo, LinearIr ir,
+                                      List<BlockGroup> groups, Set<BlockGroup> consumed,
+                                      ControlFlowGraph graph) {
+        BasicBlock header = loopInfo != null ? loopInfo.header() : null;
+        if (header == null) {
+            return null;
+        }
+        for (var e : graph.outgoingOf(header)) {
+            if (e.kind() != EdgeKind.FALSE_BRANCH) {
+                continue;
+            }
+            BasicBlock exit = e.target();
+            if (loopInfo.body().contains(exit)) {
+                continue;
+            }
+            // 仅当出口块组已被消费(否则 reduce() 会正常发射其后的 return)
+            BlockGroup g = null;
+            for (BlockGroup cg : groups) {
+                if (cg.blocks().contains(exit)) {
+                    g = cg;
+                    break;
+                }
+            }
+            if (g == null || !consumed.contains(g)) {
+                continue;
+            }
+            boolean hasReturn = ir.instructionsOf(exit).stream()
+                    .anyMatch(i -> i.opcode() == IrOpcode.RETURN);
+            if (!hasReturn) {
+                continue;
+            }
+            return ops.translateGroup(g, ir);
+        }
+        return null;
     }
 
 

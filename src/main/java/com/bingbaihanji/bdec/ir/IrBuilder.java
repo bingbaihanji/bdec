@@ -1,10 +1,13 @@
 package com.bingbaihanji.bdec.ir;
 
+import com.bingbaihanji.bdec.DecompileContext;
+import com.bingbaihanji.bdec.bytecode.model.ClassFileModel;
 import com.bingbaihanji.bdec.bytecode.model.Instruction;
 import com.bingbaihanji.bdec.bytecode.model.MethodModel;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.BootstrapMethodEntry;
 import com.bingbaihanji.bdec.bytecode.model.constantpool.ConstantPoolEntry;
 import com.bingbaihanji.bdec.bytecode.opcode.Opcode;
+import com.bingbaihanji.bdec.bytecode.parser.ClassFileReader;
 import com.bingbaihanji.bdec.bytecode.parser.ConstantPoolParser;
 import com.bingbaihanji.bdec.bytecode.parser.SignatureParser;
 import com.bingbaihanji.bdec.cfg.BasicBlock;
@@ -56,6 +59,23 @@ public final class IrBuilder {
 
     /** 来自类文件的引导方法列表,用于 invokedynamic 的解析. */
     private List<BootstrapMethodEntry> currentBootstrapMethods = java.util.Collections.emptyList();
+
+    /**
+     * 当前被反编译的类(可为 null).用于泛型返回推断:类自身方法
+     * ({@code Cache<K,V>} 接口的 {@code get}) 的字节码签名被擦除,
+     * 但 Signature 属性完整可得——据此把 {@code this.get(key)} 的返回
+     * 类型还原为 {@code V} 而非 {@code Object}.仅 build 期间有效.
+     */
+    private ClassFileModel selfClass = null;
+
+    /** handleInvoke 解析到的自类方法泛型参数(下一条 invoke 指令设置用). */
+    private List<JavaType> pendingGenericParams = null;
+
+    /**
+     * 反编译上下文(可为 null):用于解析非当前类(如匿名类的外层 ArrayMap)
+     * 的方法泛型签名,供参数强转.仅 build 期间有效.
+     */
+    private DecompileContext decompileContext = null;
 
     /**
      * 判断一个值是否为类别2类型(long或double,在JVM操作数栈中占用两个槽位).
@@ -124,6 +144,66 @@ public final class IrBuilder {
     // ── 主模拟 — 模拟一个基本块 ───────────────────────────────────────
 
     /**
+     * 类签名中的类型参数(如 {@code [K, V]}).
+     */
+    private static JavaType[] classTypeParams(String classSignature) {
+        if (classSignature == null || classSignature.isEmpty()) {
+            return new JavaType[0];
+        }
+        List<String> names = SignatureParser.extractTypeParams(classSignature);
+        JavaType[] result = new JavaType[names.size()];
+        for (int i = 0; i < names.size(); i++) {
+            result[i] = JavaType.typeVariable(names.get(i));
+        }
+        return result;
+    }
+
+    /** 方法签名中的泛型参数类型(含类型变量,如 (TK;TV;) → [K, V]);无签名返回 null. */
+    private static JavaType[] genericParamTypes(MethodModel method) {
+        String sig = method.signature();
+        if (sig == null || sig.isEmpty()) {
+            return null;
+        }
+        try {
+            JavaType[] parts = SignatureParser.parseMethodSignature(sig);
+            if (parts == null || parts.length < 1) {
+                return null;
+            }
+            return java.util.Arrays.copyOfRange(parts, 0, parts.length - 1);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** 在给定类文件模型中按 (方法名, 描述符) 查找方法泛型签名. */
+    private static SelfMethodSig findInModel(ClassFileModel model, String methodName,
+                                             String descriptor) {
+        if (model == null) {
+            return null;
+        }
+        for (MethodModel m : model.methods()) {
+            if (!methodName.equals(m.name()) || !descriptor.equals(m.descriptor())) {
+                continue;
+            }
+            String sig = m.signature();
+            if (sig == null || sig.isEmpty()) {
+                return null;
+            }
+            try {
+                JavaType[] parts = SignatureParser.parseMethodSignature(sig);
+                if (parts == null || parts.length < 1) {
+                    return null;
+                }
+                JavaType[] sigParams = java.util.Arrays.copyOfRange(parts, 0, parts.length - 1);
+                return new SelfMethodSig(sigParams, parts[parts.length - 1]);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
      * 通过对每个基本块进行符号执行,从控制流图构建线性IR.
      *
      * @param cfg              控制流图
@@ -135,6 +215,32 @@ public final class IrBuilder {
     public LinearIr build(ControlFlowGraph cfg, MethodModel method,
                           ConstantPoolEntry[] constantPool,
                           List<BootstrapMethodEntry> bootstrapMethods) {
+        return build(cfg, method, constantPool, bootstrapMethods, null, null);
+    }
+
+    /**
+     * 带自类上下文的重载. {@code selfClass} 为当前被反编译的类文件
+     * (可为 null),用于:(1) {@code this} 类型设为 {@code Cache<K,V>}
+     * 而非 {@code Object};(2) 类自身方法的泛型返回类型推断.
+     */
+    public LinearIr build(ControlFlowGraph cfg, MethodModel method,
+                          ConstantPoolEntry[] constantPool,
+                          List<BootstrapMethodEntry> bootstrapMethods,
+                          ClassFileModel selfClass) {
+        return build(cfg, method, constantPool, bootstrapMethods, selfClass, null);
+    }
+
+    /**
+     * 完整重载:{@code context} 用于解析非当前类(如匿名类外层 ArrayMap)的
+     * 方法泛型签名,供参数强转.
+     */
+    public LinearIr build(ControlFlowGraph cfg, MethodModel method,
+                          ConstantPoolEntry[] constantPool,
+                          List<BootstrapMethodEntry> bootstrapMethods,
+                          ClassFileModel selfClass,
+                          DecompileContext context) {
+        this.selfClass = selfClass;
+        this.decompileContext = context;
         this.currentBootstrapMethods = bootstrapMethods != null
                 ? bootstrapMethods : Collections.emptyList();
         List<IrInstruction> allInstructions = new ArrayList<>();
@@ -156,9 +262,10 @@ public final class IrBuilder {
         Value[] initLocals = initialFrame.locals();
         int slot = 0;
         if (!method.isStatic()) {
-            // 槽位0 = 'this'
-            JavaType thisType = JavaType.classType(
-                    "java/lang/Object");
+            // 槽位0 = 'this'.类型设为自类泛型形态(如 Cache<K,V>),而非
+            // Object——否则 this.get(key) 的接收者类型无实参,泛型返回
+            // 推断("this.get 返回 V")无法触发,get 被擦成 Object.
+            JavaType thisType = selfType();
             Variable thisVar = new Variable(slot, 0, thisType, false, slot);
             thisVar.setName("this");
             variables.add(thisVar);
@@ -166,10 +273,18 @@ public final class IrBuilder {
             slot++;
         }
         if (method.parameterTypes() != null) {
+            // 泛型签名参数(如 (TK;TV;)):参数变量用类型变量 K/V 而非擦除的 Object,
+            // 使调用点实参保持 K/V,避免冗余强转(如 put((K) key) 的 key 本就是 K).
+            JavaType[] genericParams = genericParamTypes(method);
             int paramIdx = 0;
             for (JavaType pt : method.parameterTypes()) {
                 if (slot < maxLocals) {
-                    Variable pv = new Variable(slot, 0, pt, true, slot);
+                    JavaType paramType = pt;
+                    if (genericParams != null && paramIdx < genericParams.length
+                            && genericParams[paramIdx].kind() == TypeKind.TYPE_VARIABLE) {
+                        paramType = genericParams[paramIdx];
+                    }
+                    Variable pv = new Variable(slot, 0, paramType, true, slot);
                     // 如果有局部变量表名称则使用;
                     // 否则使用 "param"+索引 作为回退,与 AstBuilder 的
                     // buildParameterNames 保持一致——否则条件/表达式中
@@ -223,11 +338,70 @@ public final class IrBuilder {
         return new LinearIr(method, cfg, allInstructions, variables);
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  按操作码类别的处理函数
-    // ═══════════════════════════════════════════════════════════════════
+    /**
+     * {@code this} 的类型:自类泛型形态(如 {@code Cache<K,V>}).
+     *
+     * <p>从类 Signature 属性提取类型参数名,构造
+     * {@code TYPE_VARIABLE(K)} 作为类型实参;无签名或解析失败时
+     * 回退 Object(保持旧行为).</p>
+     */
+    private JavaType selfType() {
+        if (selfClass != null) {
+            String sig = selfClass.signature();
+            if (sig != null && !sig.isEmpty()) {
+                try {
+                    List<String> typeParams = SignatureParser.extractTypeParams(sig);
+                    if (!typeParams.isEmpty()) {
+                        String internal = selfClass.internalName();
+                        List<JavaType> args = new ArrayList<>(typeParams.size());
+                        for (String tp : typeParams) {
+                            args.add(JavaType.typeVariable(tp));
+                        }
+                        return new JavaType(TypeKind.CLASS, internal,
+                                "L" + internal + ";", args, 0);
+                    }
+                } catch (Exception ignored) {
+                    // 签名解析失败:回退 Object
+                }
+            }
+        }
+        return JavaType.classType("java/lang/Object");
+    }
 
-    // ── 栈操作 ─────────────────────────────────────────────────────
+    /**
+     * 声明类方法签名查找:按 (声明类, 方法名, 描述符) 定位方法,取 Signature
+     * 属性(如 {@code (TK;)TV;})解析出含类型变量的参数/返回类型.先在当前类
+     * (selfClass)中查,再尝试经 {@link DecompileContext} 加载声明类字节码
+     * (覆盖匿名类调用外层类方法等跨类场景).匹配失败/无签名返回 {@code null}.
+     * 调用方分别做返回类型推断(经 {@link GenericMethodResolver#inferFromSignature})
+     * 与参数强转(记录泛型参数).
+     */
+    private SelfMethodSig findDeclaredMethodSignature(String declaringClass,
+                                                      String methodName, String descriptor) {
+        if (declaringClass == null) {
+            return null;
+        }
+        String selfName = selfClass != null ? selfClass.internalName() : null;
+        if (declaringClass.equals(selfName)) {
+            SelfMethodSig self = findInModel(selfClass, methodName, descriptor);
+            if (self != null) {
+                return self;
+            }
+        }
+        // 跨类:匿名类调用外层方法等——经 context 加载声明类字节码解析签名
+        if (decompileContext != null && !declaringClass.equals(selfName)) {
+            try {
+                byte[] bytes = decompileContext.loadClassBytes(declaringClass);
+                if (bytes != null) {
+                    ClassFileModel cfm = new ClassFileReader().read(declaringClass, bytes);
+                    return findInModel(cfm, methodName, descriptor);
+                }
+            } catch (Exception ignored) {
+                // 加载/解析失败:保持默认行为
+            }
+        }
+        return null;
+    }
 
     /**
      * 返回基本块的排序列表,使每个块的前驱尽可能在其之前处理.
@@ -299,6 +473,12 @@ public final class IrBuilder {
 
         return result;
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  按操作码类别的处理函数
+    // ═══════════════════════════════════════════════════════════════════
+
+    // ── 栈操作 ─────────────────────────────────────────────────────
 
     /**
      * 合并一个基本块所有前驱的帧状态.
@@ -589,8 +769,6 @@ public final class IrBuilder {
         return new FrameState(stack, locals);
     }
 
-    // ── 常量 ───────────────────────────────────────────────────────
-
     /**
      * 处理POP/POP2操作码,从操作数栈弹出值.
      */
@@ -603,6 +781,8 @@ public final class IrBuilder {
             stack.pop();
         }
     }
+
+    // ── 常量 ───────────────────────────────────────────────────────
 
     /**
      * 处理DUP系列操作码,复制或交换操作数栈上的值.
@@ -668,8 +848,6 @@ public final class IrBuilder {
         }
     }
 
-    // ── 加载 ──────────────────────────────────────────────────────
-
     /**
      * 处理各种iconst/lconst/fconst/dconst和bipush/sipush常量加载.
      * 发射CONST IR指令使值能跨基本块边界通过InstructionRef链引用.
@@ -716,6 +894,8 @@ public final class IrBuilder {
         }
     }
 
+    // ── 加载 ──────────────────────────────────────────────────────
+
     /**
      * 处理LDC/LDC_W/LDC2_W常量池加载指令.
      * 发射CONST IR指令使值能通过InstructionRef链引用.
@@ -743,8 +923,6 @@ public final class IrBuilder {
         constInsn.setResultValue(new InstructionRef(constInsn, value.type()));
         stack.push(new InstructionRef(constInsn, value.type()));
     }
-
-    // ── 存储 ──────────────────────────────────────────────────────
 
     /**
      * 处理局部变量加载指令(ILOAD,ALOAD等).
@@ -788,7 +966,7 @@ public final class IrBuilder {
         stack.push(v);
     }
 
-    // ── IINC ──────────────────────────────────────────────────────
+    // ── 存储 ──────────────────────────────────────────────────────
 
     /**
      * 根据加载操作码确定对应类型.
@@ -802,6 +980,8 @@ public final class IrBuilder {
             default -> JavaType.classType("java/lang/Object");
         };
     }
+
+    // ── IINC ──────────────────────────────────────────────────────
 
     /**
      * 处理局部变量存储指令(ISTORE,ASTORE等).
@@ -834,8 +1014,6 @@ public final class IrBuilder {
         locals[idx] = var;
         instructions.add(IrInstruction.store(nextId(), var, val, offset, blockId));
     }
-
-    // ── 算术 ─────────────────────────────────────────────────────
 
     /**
      * 处理IINC(整型递增)指令.
@@ -881,6 +1059,8 @@ public final class IrBuilder {
                 offset, blockId));
     }
 
+    // ── 算术 ─────────────────────────────────────────────────────
+
     /**
      * 处理算术二元运算(IADD,ISUB等).
      * 弹出右操作数和左操作数(栈顶为右),创建BINARY IR指令并压回结果.
@@ -900,8 +1080,6 @@ public final class IrBuilder {
         stack.push(new InstructionRef(bin, type));
     }
 
-    // ── 比较 ──────────────────────────────────────────────────────
-
     /**
      * 处理取负操作(INEG,LNEG等一元运算).
      */
@@ -918,7 +1096,7 @@ public final class IrBuilder {
         stack.push(new InstructionRef(un, v.type()));
     }
 
-    // ── 字段 ─────────────────────────────────────────────────────
+    // ── 比较 ──────────────────────────────────────────────────────
 
     /**
      * 处理比较操作(lcmp,fcmpl,fcmpg,dcmpl,dcmpg).
@@ -937,6 +1115,8 @@ public final class IrBuilder {
         cmp.setResultValue(new InstructionRef(cmp, JavaType.INT));
         stack.push(new InstructionRef(cmp, JavaType.INT));
     }
+
+    // ── 字段 ─────────────────────────────────────────────────────
 
     /**
      * 处理字段加载(GETFIELD/GETSTATIC).
@@ -994,8 +1174,6 @@ public final class IrBuilder {
         instructions.add(IrInstruction.fieldStore(nextId(), obj, val, offset, blockId, fieldName));
     }
 
-    // ── InvokeDynamic ─────────────────────────────────────────────
-
     /**
      * 处理常规方法调用(INVOKEVIRTUAL/INVOKESPECIAL/INVOKESTATIC/INVOKEINTERFACE).
      * 从常量池解析参数类型和返回类型,按逆序弹出实参,弹出接收者对象,
@@ -1004,11 +1182,13 @@ public final class IrBuilder {
     private void handleInvoke(Opcode op, Instruction insn, Deque<Value> stack,
                               List<IrInstruction> instructions, ConstantPoolEntry[] cp,
                               int offset, int blockId) {
+        pendingGenericParams = null;
         int cpIdx = insn.rawOperands().isEmpty() ? 0 : insn.rawOperands().get(0);
         int argCount = 0;
         JavaType returnType = JavaType.classType("java/lang/Object");
         String methodName = null;
         String declaringClass = null; // 用于构造函数委托目标
+        String methodDesc = null;     // 方法描述符(自类签名查找用)
         JavaType[] paramTypes = null; // 用于boolean折叠
 
         if (cpIdx > 0 && cpIdx < cp.length) {
@@ -1035,6 +1215,7 @@ public final class IrBuilder {
                         int nameIndex, int descriptorIndex
                 )) {
                     String desc = ConstantPoolParser.utf8(cp, descriptorIndex);
+                    methodDesc = desc;
                     methodName = ConstantPoolParser.utf8(cp, nameIndex);
                     paramTypes = TypeResolver.parseMethodParameterTypes(desc);
                     argCount = paramTypes.length;
@@ -1102,6 +1283,32 @@ public final class IrBuilder {
                     ? rv.genericType() : receiver.type();
             returnType = GenericMethodResolver.inferInstanceReturnType(declaringClass,
                     methodName, recvType, returnType, paramTypes, args);
+            // 声明类方法:被反编译的类自身方法(如 Cache<K,V> 接口的 get)或
+            // 上下文可加载的类(如匿名类的外层 ArrayMap)的泛型签名在 ClassFileModel
+            // 中可得,反射路径不覆盖用户类——据此把 this.get(key) 返回类型还原为 V
+            // (否则擦除为 Object).仅实例调用(静态方法无接收者,类类型变量不适用,
+            // 且 receiver==null 时取 receiver.type() 会 NPE 损坏方法 IR).
+            if (declaringClass != null && methodName != null && methodDesc != null) {
+                SelfMethodSig sig = findDeclaredMethodSignature(
+                        declaringClass, methodName, methodDesc);
+                if (sig != null) {
+                    // 仅当前类的方法签名含类类型参数(跨类加载的 ArrayMap 签名
+                    // 无此上下文,类类型变量不参与返回推断,参数强转不受影响)
+                    String classSig = declaringClass.equals(selfClass != null
+                            ? selfClass.internalName() : null)
+                            ? selfClass.signature() : null;
+                    JavaType sigRet = GenericMethodResolver.inferFromSignature(
+                            sig.paramTypes(), sig.returnType(),
+                            classTypeParams(classSig),
+                            recvType, returnType, args);
+                    if (sigRet != null) {
+                        returnType = sigRet;
+                    }
+                    // 记录泛型参数类型,供 ExprTranslator 对擦除为 Object 的
+                    // 实参插入 (K)/(V) 强转(如 readObject 的 put(key,value)).
+                    pendingGenericParams = java.util.Arrays.asList(sig.paramTypes());
+                }
+            }
         } else {
             returnType = GenericMethodResolver.inferGenericReturnType(declaringClass, methodName,
                     returnType, paramTypes, args);
@@ -1109,6 +1316,9 @@ public final class IrBuilder {
 
         IrInstruction inv = IrInstruction.invoke(nextId(), receiver, args, returnType,
                 offset, blockId, methodName);
+        if (pendingGenericParams != null) {
+            inv.setGenericParamTypes(pendingGenericParams);
+        }
         instructions.add(inv);
 
         // 对静态调用标记声明类(用于Arrays.fill() vs fill()的区分)
@@ -1138,7 +1348,7 @@ public final class IrBuilder {
         }
     }
 
-    // ── 对象 / 数组 ───────────────────────────────────────────────
+    // ── InvokeDynamic ─────────────────────────────────────────────
 
     /**
      * 处理INVOKEDYNAMIC指令.
@@ -1218,6 +1428,8 @@ public final class IrBuilder {
             stack.push(new InstructionRef(inv, returnType));
         }
     }
+
+    // ── 对象 / 数组 ───────────────────────────────────────────────
 
     /**
      * 处理NEW对象创建指令.
@@ -1330,8 +1542,6 @@ public final class IrBuilder {
         stack.push(new InstructionRef(na, na.resultType()));
     }
 
-    // ── 数组元素加载/存储 ────────────────────────────────────────
-
     /**
      * 处理数组元素加载(IALOAD,AALOAD等).
      * 弹出索引和数组引用,创建ARRAY_LOAD IR指令.
@@ -1360,6 +1570,8 @@ public final class IrBuilder {
         stack.push(new InstructionRef(al, effectiveElement));
     }
 
+    // ── 数组元素加载/存储 ────────────────────────────────────────
+
     /**
      * 处理数组元素存储(IASTORE,AASTORE等).
      * 弹出值,索引和数组引用,创建ARRAY_STORE IR指令.
@@ -1377,8 +1589,6 @@ public final class IrBuilder {
         instructions.add(ast);
     }
 
-    // ── 类型 / 转换 ───────────────────────────────────────────────
-
     /**
      * 处理ARRAYLENGTH数组长度获取指令.
      */
@@ -1394,6 +1604,8 @@ public final class IrBuilder {
         al.setResultValue(new InstructionRef(al, JavaType.INT));
         stack.push(new InstructionRef(al, JavaType.INT));
     }
+
+    // ── 类型 / 转换 ───────────────────────────────────────────────
 
     /**
      * 处理CHECKCAST类型检查转换指令.
@@ -1432,8 +1644,6 @@ public final class IrBuilder {
         stack.push(new InstructionRef(io, JavaType.INT));
     }
 
-    // ── 分支 ──────────────────────────────────────────────────────
-
     /**
      * 处理类型转换指令(I2L,F2I等).
      */
@@ -1449,6 +1659,8 @@ public final class IrBuilder {
         conv.setResultValue(new InstructionRef(conv, to));
         stack.push(new InstructionRef(conv, to));
     }
+
+    // ── 分支 ──────────────────────────────────────────────────────
 
     /**
      * 处理条件分支指令(if系列).
@@ -1480,10 +1692,6 @@ public final class IrBuilder {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  共享辅助方法
-    // ═══════════════════════════════════════════════════════════════════
-
     /**
      * 处理空值检查指令(IFNULL/IFNONNULL).
      */
@@ -1493,6 +1701,10 @@ public final class IrBuilder {
         instructions.add(new IrInstruction(nextId(), IrOpcode.CONDITION,
                 JavaType.INT, List.of(ref, ConstantValue.NULL), offset, blockId, op.code(), null));
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  共享辅助方法
+    // ═══════════════════════════════════════════════════════════════════
 
     /** 获取下一条指令的唯一ID. */
     private int nextId() {return nextInsnId++;}
@@ -1551,5 +1763,9 @@ public final class IrBuilder {
             case I2S -> JavaType.SHORT;
             default -> JavaType.INT;
         };
+    }
+
+    /** 自类方法的泛型签名:参数类型与返回类型(含类型变量). */
+    private record SelfMethodSig(JavaType[] paramTypes, JavaType returnType) {
     }
 }

@@ -49,6 +49,15 @@ public final class TypeDeclaration implements AstNode {
     private final List<String> permitsNames;
 
     /**
+     * record 组件列表(如 {@code ["L left", "R right"]}).
+     *
+     * <p>与 {@link #typeParameters}(泛型参数 {@code <L, R>}) 分离:record 声明
+     * 需同时输出 {@code record Pair<L, R>(L left, R right)}——类型参数与组件
+     * 是两个独立槽位,此前组件占用 typeParameters 导致泛型参数丢失.</p>
+     */
+    private final List<String> recordComponents;
+
+    /**
      * 构造一个类型声明节点(含泛型类型参数).
      *
      * @param af              访问标志
@@ -124,6 +133,22 @@ public final class TypeDeclaration implements AstNode {
                            List<String> superAnnotations,
                            List<String> interfaceAnnotations,
                            List<String> permitsNames) {
+        this(af, sn, kn, superName, interfaceNames, typeParams, m, annotations,
+                superAnnotations, interfaceAnnotations, permitsNames, List.of());
+    }
+
+    /**
+     * 完整构造器(含 record 组件).record 类由 RecordRewriter 调用:
+     * typeParams 为泛型参数({@code <L, R>}),recordComponents 为组件
+     * ({@code (L left, R right)});非 record 传空列表.
+     */
+    public TypeDeclaration(int af, String sn, String kn, String superName,
+                           List<String> interfaceNames, List<String> typeParams,
+                           List<AstNode> m, List<String> annotations,
+                           List<String> superAnnotations,
+                           List<String> interfaceAnnotations,
+                           List<String> permitsNames,
+                           List<String> recordComponents) {
         this.accessFlags = af;
         this.simpleName = sn;
         this.kindName = kn;
@@ -135,6 +160,7 @@ public final class TypeDeclaration implements AstNode {
         this.superAnnotations = List.copyOf(superAnnotations);
         this.interfaceAnnotations = List.copyOf(interfaceAnnotations);
         this.permitsNames = List.copyOf(permitsNames);
+        this.recordComponents = List.copyOf(recordComponents);
     }
 
     /**
@@ -181,6 +207,9 @@ public final class TypeDeclaration implements AstNode {
 
     /** @return 泛型类型参数列表 */
     public List<String> typeParameters() {return typeParameters;}
+
+    /** @return record 组件列表(如 {@code ["L left", "R right"]});非 record 为空 */
+    public List<String> recordComponents() {return recordComponents;}
 
     /** @return 当前类型声明是否为接口 */
     public boolean isInterface() {return (accessFlags & AccessFlags.ACC_INTERFACE) != 0;}

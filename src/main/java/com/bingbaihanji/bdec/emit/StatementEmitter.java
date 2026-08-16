@@ -373,6 +373,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         // 输出参数列表(参数级注解内联在类型之前:void m(@Ann("x") String s))
         String[] pAnns = m.parameterAnnotations();
         var paramTypeAnns = m.typeAnnotations().onParameters();
+        boolean isVarargs = (m.accessFlags() & com.bingbaihanji.bdec.bytecode.model.AccessFlags.ACC_VARARGS) != 0;
         for (int i = 0; i < m.parameterNames().length; i++) {
             if (i > 0) {
                 w.write(", ");
@@ -383,8 +384,18 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
                     java.util.List<String>> paramAnns =
                     i < paramTypeAnns.size() ? paramTypeAnns.get(i) : java.util.Map.of();
-            w.write(typeNameAnnotated(m.parameterTypes()[i], paramAnns))
-                    .space().write(m.parameterNames()[i]);
+            com.bingbaihanji.bdec.type.JavaType pt = m.parameterTypes()[i];
+            // varargs:最后一个数组参数渲染为 "T... name"(ACC_VARARGS 标志),
+            // 否则 "@SafeVarargs 方法非 varargs" 编译错误.
+            if (isVarargs && i == m.parameterNames().length - 1
+                    && pt.kind() == com.bingbaihanji.bdec.type.TypeKind.ARRAY) {
+                w.write(typeNameAnnotated(
+                                com.bingbaihanji.bdec.type.JavaType.elementOf(pt), paramAnns))
+                        .write("...").space().write(m.parameterNames()[i]);
+            } else {
+                w.write(typeNameAnnotated(pt, paramAnns))
+                        .space().write(m.parameterNames()[i]);
+            }
         }
         w.write(")");
 

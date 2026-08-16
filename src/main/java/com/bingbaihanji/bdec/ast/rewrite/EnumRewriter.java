@@ -223,7 +223,7 @@ public class EnumRewriter implements RewriteRule {
             try {
                 ControlFlowGraph cfg = cfgBuilder.build(method);
                 LinearIr ir = irBuilder.build(cfg, method,
-                        inner.constantPool(), inner.bootstrapMethods());
+                        inner.constantPool(), inner.bootstrapMethods(), inner);
                 ir = sr.reconstruct(ir, method, cfg, inner);
                 StructuredMethod sm = structurer.structure(ir, ctx);
 

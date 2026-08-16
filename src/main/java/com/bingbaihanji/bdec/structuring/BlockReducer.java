@@ -6,6 +6,7 @@ import com.bingbaihanji.bdec.ast.expr.UnExpr;
 import com.bingbaihanji.bdec.ast.expr.VarExpr;
 import com.bingbaihanji.bdec.ast.stmt.BlockStatement;
 import com.bingbaihanji.bdec.ast.stmt.ExpressionStatement;
+import com.bingbaihanji.bdec.ast.stmt.IfStatement;
 import com.bingbaihanji.bdec.ast.stmt.LoopStatement;
 import com.bingbaihanji.bdec.ast.stmt.ReturnStatement;
 import com.bingbaihanji.bdec.ast.stmt.Statement;
@@ -148,6 +149,45 @@ public final class BlockReducer implements ReducerOps {
                                      Statement s, int gi) {
         statements.add(s);
         stmtGroupIdx.add(gi);
+    }
+
+    /** 循环是否可正常退出(条件非字面量 true——否则补发 return 会不可达). */
+    private static boolean loopCanExitNormally(LoopStatement ls) {
+        Expression cond = ls.condition();
+        if (ls.loopKind() == LoopStatement.LoopKind.DO_WHILE
+                || ls.loopKind() == LoopStatement.LoopKind.FOR_EACH) {
+            return false; // do-while/for-each 不适用此补发
+        }
+        if (cond == null) {
+            return false; // for(;;) 无限循环
+        }
+        if (cond instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit
+                && Boolean.TRUE.equals(lit.value())) {
+            return false; // while(true)
+        }
+        return true;
+    }
+
+    /** 在循环体内(递归)查找首个带值的 ReturnStatement,作为正常退出的返回值. */
+    private static ReturnStatement findLoopReturnValue(Statement s) {
+        if (s instanceof ReturnStatement rs && rs.value() != null) {
+            return rs;
+        }
+        if (s instanceof BlockStatement bs) {
+            for (Statement c : bs.statements()) {
+                ReturnStatement found = findLoopReturnValue(c);
+                if (found != null) {
+                    return found;
+                }
+            }
+        } else if (s instanceof IfStatement i) {
+            ReturnStatement t = findLoopReturnValue(i.thenBranch());
+            if (t != null) {
+                return t;
+            }
+            return i.elseBranch() != null ? findLoopReturnValue(i.elseBranch()) : null;
+        }
+        return null;
     }
 
     @Override
@@ -376,6 +416,14 @@ public final class BlockReducer implements ReducerOps {
                             consumed, graph, postDom);
                     if (body != null && !StatementUtils.isEmptyBlock(body)) {
                         s = LoopTranslator.wrapLoopStatement(this, loopInfo, body, extractCondition(group, ir));
+                        // 循环正常退出(条件不成立)通向的返回块若已被体内分支消费
+                        // (复用同一出口),循环后缺 return(如 indexOf 的
+                        // while(i>=0){...} 后缺 return ~end)——补发.
+                        Statement followRet = LoopTranslator.loopFollowReturn(
+                                this, loopInfo, ir, groups, consumed, graph);
+                        if (followRet != null) {
+                            s = new BlockStatement(List.of(s, followRet));
+                        }
                     } else {
                         // 空循环体:不可归约分裂后头块含体(do-while 形态,如
                         // D: r++; if(x>0) → C' 回边,D 既含体又含条件).用头的
@@ -399,6 +447,12 @@ public final class BlockReducer implements ReducerOps {
                     s = translateGroup(group, ir);
                     if (s != null && !StatementUtils.isEmptyBlock(s) && !isHandlerLoop) {
                         s = LoopTranslator.wrapLoopStatement(this, loopInfo, s, extractCondition(group, ir));
+                        // 循环正常退出 return 补发(同 translateLoopBodyStructured 路径)
+                        Statement followRet = LoopTranslator.loopFollowReturn(
+                                this, loopInfo, ir, groups, consumed, graph);
+                        if (followRet != null) {
+                            s = new BlockStatement(List.of(s, followRet));
+                        }
                     }
                 }
             }
@@ -481,6 +535,27 @@ public final class BlockReducer implements ReducerOps {
                         continue;
                     }
                     break;
+                }
+            }
+        }
+
+        // 后处理:非 void 方法以可正常退出的循环结尾但缺 return 时补发.
+        // 循环正常退出与体内退出同值(如 indexOf 的 while(i>=0){...return ~end}
+        // 循环后缺 return ~end)——复用循环体内首个 return 值.
+        // while(true)/do-while(true) 不可正常退出,补发会造成不可达代码.
+        if (ir.method().returnType() != null
+                && ir.method().returnType().kind() != TypeKind.VOID
+                && !statements.isEmpty()) {
+            Statement tail = statements.get(statements.size() - 1);
+            while (tail instanceof BlockStatement bs && !bs.statements().isEmpty()) {
+                tail = bs.statements().get(bs.statements().size() - 1);
+            }
+            if (tail instanceof LoopStatement ls && loopCanExitNormally(ls)) {
+                ReturnStatement ret = findLoopReturnValue(ls.body());
+                if (ret != null && ret.value() != null) {
+                    List<Statement> withRet = new ArrayList<>(statements);
+                    withRet.add(new ReturnStatement(ret.value()));
+                    statements = withRet;
                 }
             }
         }

@@ -194,12 +194,19 @@ public class SourceEmitter {
 
         w.token(type.kindName()).space().write(type.simpleName());
 
-        // 输出泛型类型参数,或 record 的组件参数
+        // 输出泛型类型参数(record 也输出,如 record Pair<L, R>)
         if (!type.typeParameters().isEmpty()) {
-            boolean isRecord = "record".equals(type.kindName());
-            w.write(isRecord ? "(" : "<");
+            w.write("<");
             w.write(String.join(", ", type.typeParameters()));
-            w.write(isRecord ? ")" : ">");
+            w.write(">");
+        }
+        // record 组件(与泛型参数分离,如 (L left, R right)).
+        // 括号必须无条件输出——无组件 record 也须是 "record Square()",
+        // 缺 () 的 "record Square implements Shape" 无法编译.
+        if ("record".equals(type.kindName())) {
+            w.write("(");
+            w.write(String.join(", ", type.recordComponents()));
+            w.write(")");
         }
 
         // 输出父类(父类型 JSR-308 注解内联在 extends 之后,如 "extends @A Parent")
@@ -258,13 +265,15 @@ public class SourceEmitter {
                 }
                 continue;
             }
+            // 成员之间空行分隔(对齐 vineflower 输出风格),枚举常量除外——
+            // 常量是逗号分隔列表,空行只加在常量块之后的首个普通成员前.
+            if (!firstMember) {
+                w.newLine();
+            }
             if (member instanceof Statement s) {
                 nestedStmts.emit(s);
             } else if (member instanceof TypeDeclaration nestedType) {
                 // 输出嵌套类型(内部类,内部接口等)
-                if (!firstMember) {
-                    w.newLine();
-                }
                 emitType(nestedType, w, nestedStmts);
             } else {
                 w.write("// " + member.kind()).newLine();

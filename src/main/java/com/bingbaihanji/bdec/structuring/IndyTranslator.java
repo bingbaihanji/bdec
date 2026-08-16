@@ -151,7 +151,7 @@ public final class IndyTranslator {
         }
         int slash = internalName.lastIndexOf('/');
         if (slash >= 0) {
-            return internalName.substring(slash + 1);
+            return internalName.substring(slash + 1).replace('$', '.');
         }
         int dollar = internalName.lastIndexOf('$');
         if (dollar >= 0) {

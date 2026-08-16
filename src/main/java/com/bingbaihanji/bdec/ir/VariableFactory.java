@@ -189,10 +189,29 @@ final class VariableFactory {
         }
         try {
             JavaType declared = TypeResolver.parseFieldType(entry.typeDesc());
-            return declared != null ? declared : fallback;
+            if (declared != null) {
+                // 泛型擦除恢复:LVT 声明为 Object 但被存值携带类型变量
+                // (如泛型接口 get 返回 V),Object 只是类型变量的擦除——
+                // 采用被存值类型,还原 "V existing = this.get(key)" 的声明,
+                // 否则三元返回结果 Object 无法赋给 V(编译失败).
+                // 不误伤普通 "Object o = new ArrayList()"(值类型无类型变量,
+                // 保持 LVT 的 Object,即 P0 收窄修复的行为).
+                if (isObject(declared)
+                        && GenericMethodResolver.containsTypeVariable(fallback)) {
+                    return fallback;
+                }
+                return declared;
+            }
+            return fallback;
         } catch (Exception ignored) {
             return fallback;
         }
+    }
+
+    /** 是否为裸 {@code java.lang.Object}(类型擦除的记号). */
+    private static boolean isObject(JavaType t) {
+        return t.kind() == com.bingbaihanji.bdec.type.TypeKind.CLASS
+                && "java/lang/Object".equals(t.internalName());
     }
 
     /**

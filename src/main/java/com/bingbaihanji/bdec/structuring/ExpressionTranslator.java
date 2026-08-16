@@ -11,6 +11,7 @@ import com.bingbaihanji.bdec.ir.Value;
 import com.bingbaihanji.bdec.ir.Variable;
 import com.bingbaihanji.bdec.type.JavaType;
 import com.bingbaihanji.bdec.type.TypeKind;
+import com.bingbaihanji.bdec.type.TypeResolver;
 
 import java.util.Map;
 import java.util.function.Function;
@@ -86,6 +87,16 @@ public final class ExpressionTranslator {
                 Object v, JavaType type
         )) {
             if (v instanceof String s && isClassType(type)) {
+                // 数组类字面量:CpClass 的类名为数组描述符(如 int[].class → "[I"),
+                // 须解析为类型名再渲染,否则输出非法的 "[I.class" 且其 VarExpr
+                // 会被 SourceCleanup 误当未声明变量生成 "int [I = 0;".
+                if (s.startsWith("[")) {
+                    JavaType arrType = TypeResolver.parseFieldType(s);
+                    if (arrType != null) {
+                        return new FieldAccessExpr(new VarExpr(arrType.displayName()),
+                                "class");
+                    }
+                }
                 String simpleName = simplifyClassName(s);
                 return new FieldAccessExpr(new VarExpr(simpleName), "class");
             }

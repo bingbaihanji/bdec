@@ -92,7 +92,20 @@ public final class ForLoopRecognizer {
                 s = recognizeIf(ifStmt);
             } else if (s instanceof LoopStatement loop) {
                 if (loop.body() instanceof BlockStatement bs) {
-                    s = new LoopStatement(loop.loopKind(), loop.condition(), recognize(bs));
+                    Statement newBody = recognize(bs);
+                    // 按循环种类重建,保留各自结构字段:for-each 的迭代变量与
+                    // 元素类型,for 的 init/incr,while 的 condition.
+                    // 此前统一 3 参构造器重建,FOR_EACH 的 forEachVar/forEachVarType
+                    // 被丢弃,发射器走 "Object element" 兜底(变量名丢失+类型擦 Object).
+                    if (loop.loopKind() == LoopStatement.LoopKind.FOR_EACH) {
+                        s = new LoopStatement(loop.loopKind(), loop.forEachVar(),
+                                loop.condition(), newBody, loop.forEachVarType());
+                    } else if (loop.initExpr() != null || loop.incrExpr() != null) {
+                        s = new LoopStatement(loop.loopKind(), loop.initExpr(),
+                                loop.condition(), loop.incrExpr(), newBody);
+                    } else {
+                        s = new LoopStatement(loop.loopKind(), loop.condition(), newBody);
+                    }
                 }
             }
 

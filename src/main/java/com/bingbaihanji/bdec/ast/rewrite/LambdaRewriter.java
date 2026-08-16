@@ -93,7 +93,36 @@ public class LambdaRewriter implements RewriteRule {
         if (collapsed != null) {
             return collapsed;
         }
+        // void 方法调用 lambda(如 e -> result.put(...)):合成方法体形如
+        // { <孤儿 e;> result.put(...); return; }.剥离孤儿纯表达式与尾部
+        // return;,提取唯一表达式语句为表达式体.
+        List<Statement> filtered = new ArrayList<>();
+        for (Statement s : stmts) {
+            if (isOrphanPureExpr(s)) {
+                continue;
+            }
+            if (s instanceof ReturnStatement rs && rs.value() == null) {
+                continue; // void return
+            }
+            filtered.add(s);
+        }
+        if (filtered.size() == 1 && filtered.get(0) instanceof ExpressionStatement es
+                && es.expression() != null) {
+            return es.expression();
+        }
         return null;
+    }
+
+    /** 孤立的纯表达式语句(裸 VarExpr/字面量,如 lambda 参数 e; 的孤儿 LOAD). */
+    private static boolean isOrphanPureExpr(Statement s) {
+        if (!(s instanceof com.bingbaihanji.bdec.ast.stmt.ExpressionStatement es)) {
+            return false;
+        }
+        Expression e = es.expression();
+        return e instanceof VarExpr
+                || e instanceof com.bingbaihanji.bdec.ast.expr.LitExpr
+                || e instanceof com.bingbaihanji.bdec.ast.expr.CastExpr ce
+                && ce.operand() instanceof VarExpr;
     }
 
     /**
@@ -513,7 +542,7 @@ public class LambdaRewriter implements RewriteRule {
 
             ControlFlowGraph cfg = cfgBuilder.build(lambdaMethod);
             LinearIr ir = irBuilder.build(cfg, lambdaMethod,
-                    cfm.constantPool(), cfm.bootstrapMethods());
+                    cfm.constantPool(), cfm.bootstrapMethods(), cfm);
             ir = sr.reconstruct(ir, lambdaMethod, cfg, cfm);
             StructuredMethod sm = structurer.structure(ir, ctx);
 
