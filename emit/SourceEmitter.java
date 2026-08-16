@@ -256,6 +256,7 @@ public class SourceEmitter {
         }
 
         boolean firstMember = true;
+        boolean prevIsField = false;
         for (AstNode member : type.children()) {
             // 将枚举常量作为逗号分隔的列表输出(字段名为特殊标记 $enumConstants$)
             if (member instanceof com.bingbaihanji.bdec.ast.stmt.FieldDeclaration fd
@@ -265,9 +266,11 @@ public class SourceEmitter {
                 }
                 continue;
             }
-            // 成员之间空行分隔(对齐 vineflower 输出风格),枚举常量除外——
-            // 常量是逗号分隔列表,空行只加在常量块之后的首个普通成员前.
-            if (!firstMember) {
+            // 成员空行对齐 vineflower:连续字段之间不空行,方法与字段之间,
+            // 方法与方法之间空行分隔(枚举常量例外——逗号分隔列表,空行只加在
+            // 常量块之后的首个普通成员前).
+            boolean curIsField = member instanceof com.bingbaihanji.bdec.ast.stmt.FieldDeclaration;
+            if (!firstMember && !(prevIsField && curIsField)) {
                 w.newLine();
             }
             if (member instanceof Statement s) {
@@ -279,6 +282,7 @@ public class SourceEmitter {
                 w.write("// " + member.kind()).newLine();
             }
             firstMember = false;
+            prevIsField = curIsField;
         }
 
         w.dedent();
