@@ -160,7 +160,9 @@ public final class BdecCli {
 
         } catch (Exception e) {
             System.err.println("Error decompiling " + classFile + ": " + e.getMessage());
-            e.printStackTrace();
+            if (isDebugEnabled()) {
+                e.printStackTrace(System.err);
+            }
             System.exit(1);
         }
     }
@@ -295,5 +297,10 @@ public final class BdecCli {
             return fileName.endsWith(".class")
                     ? fileName.substring(0, fileName.length() - 6) : fileName;
         }
+    }
+
+    /** 是否输出调试堆栈信息. */
+    private static boolean isDebugEnabled() {
+        return System.getenv("BDEC_DEBUG") != null;
     }
 }

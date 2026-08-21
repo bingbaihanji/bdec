@@ -34,7 +34,7 @@ public final class InstructionDecoder {
      *
      * @param in     指向指令起始位置的数据输入流
      * @param offset 当前指令在方法字节码中的偏移量
-     * @return 解码后的指令对象,若遇到无法识别的操作码则返回 {@code null}
+     * @return 解码后的指令对象
      * @throws IOException 如果读取数据流时发生 I/O 错误
      */
     public Instruction decode(DataInputStream in, int offset) throws IOException {
@@ -43,8 +43,7 @@ public final class InstructionDecoder {
         try {
             op = Opcode.byCode(opcodeByte);
         } catch (IllegalArgumentException e) {
-            System.err.println("WARNING: unknown opcode " + opcodeByte + " at offset " + offset);
-            return null;
+            throw new IOException("unknown opcode " + opcodeByte + " at bytecode offset " + offset, e);
         }
 
         List<Integer> operands = new ArrayList<>();
@@ -217,8 +216,8 @@ public final class InstructionDecoder {
         try {
             widenedOp = Opcode.byCode(widenedOpcode);
         } catch (IllegalArgumentException e) {
-            System.err.println("WARNING: unknown widened opcode " + widenedOpcode + " at offset " + offset);
-            return null;
+            throw new IOException("unknown widened opcode " + widenedOpcode
+                    + " at bytecode offset " + offset, e);
         }
 
         int widenedIndex = in.readUnsignedShort(); // 双字节索引
@@ -266,9 +265,6 @@ public final class InstructionDecoder {
         int offset = startPc;
         while (dis.available() > 0) {
             Instruction insn = decode(dis, offset);
-            if (insn == null) {
-                break;
-            }
             instructions.add(insn);
             offset = startPc + length - dis.available();
         }

@@ -120,8 +120,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
      */
     public void emit(Statement stmt) {
         if (stmt == null) {
-            System.err.println("WARNING: StatementEmitter.emit() called with null statement, skipping");
-            new Exception("null stmt trace").printStackTrace(System.err);
+            w.write("/* unsupported null statement */").newLine();
             return;
         }
         switch (stmt.kind()) {
@@ -157,7 +156,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
         for (int i = 0; i < stmts.size(); i++) {
             Statement s = stmts.get(i);
             if (s == null) {
-                System.err.println("WARNING: null statement at index " + i + " in BlockStatement, skipping");
+                w.write("/* unsupported null statement */").newLine();
                 continue;
             }
             // 跳过 void 方法或构造器末尾多余的 "return;"
@@ -662,7 +661,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             w.dedent();
             w.write("}").newLine();
         } else {
-            // 降级处理:输出通用 switch 占位符
+            // 降级处理:输出可编译的空 switch,并保留来源提示.
             w.token("switch").space().write("(");
             if (!stmt.children().isEmpty() && stmt.children().getFirst() instanceof Expression ex) {
                 exprs.emit(ex);
@@ -671,7 +670,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             }
             w.write(")").space().write("{").newLine();
             w.indent();
-            w.write("// TODO: full switch emission").newLine();
+            w.write("/* unsupported switch shape */").newLine();
             w.dedent();
             w.write("}").newLine();
         }
