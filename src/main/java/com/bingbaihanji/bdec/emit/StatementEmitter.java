@@ -18,7 +18,9 @@ import com.bingbaihanji.bdec.ast.stmt.TryStatement;
 import com.bingbaihanji.bdec.ast.stmt.VariableDeclaration;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 语句发射器,将 AST 语句节点输出为 Java 源代码文本.
@@ -42,6 +44,12 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
 
     /** 当前封闭类型是否为注解类型(影响元素方法的输出) */
     private final boolean isAnnotationType;
+
+    /**
+     * 语句起始输出行号到字节码偏移量的映射,由 {@link SourceEmitter} 注入,
+     * 嵌套类型共用同一张表.同一输出行只保留首个语句的记录.
+     */
+    private Map<Integer, Integer> lineMapping = new HashMap<>();
 
     /**
      * 构造语句发射器.
@@ -84,6 +92,19 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
     public ExpressionEmitter exprs() {return exprs;}
 
     /**
+     * 设置语句行号映射表.发射语句时会把该语句的起始输出行号与其
+     * 字节码起始偏移(未知为 -1 时跳过)记录到表中,便于上层汇总平移.
+     *
+     * @param mapping 目标映射表;为 null 时使用内部空表
+     */
+    public void setLineMapping(Map<Integer, Integer> mapping) {
+        this.lineMapping = mapping == null ? new HashMap<>() : mapping;
+    }
+
+    /** @return 当前使用的语句行号映射表 */
+    public Map<Integer, Integer> lineMapping() {return lineMapping;}
+
+    /**
      * 委托给 ExpressionEmitter 解析类型名称为最短有效形式.
      *
      * @param t Java 类型
@@ -123,6 +144,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             w.write("/* unsupported null statement */").newLine();
             return;
         }
+        // 记录语句起始输出行号 -> 字节码偏移;同一条输出行只保留首个语句
+        // (putIfAbsent),避免后续语句覆盖.偏移未知的合成语句不记录.
+        if (stmt.sourceOffset() >= 0) {
+            lineMapping.putIfAbsent(w.currentLine(), stmt.sourceOffset());
+        }
         switch (stmt.kind()) {
             case BLOCK -> emitBlock((BlockStatement) stmt);
             case IF -> emitIf((IfStatement) stmt);
@@ -132,7 +158,7 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
             case EXPRESSION_STMT -> emitExprStmt((ExpressionStatement) stmt);
             case FIELD_DECL -> emitFieldDecl((FieldDeclaration) stmt);
             case THROW -> emitThrow(stmt);
-            case SWITCH -> emitSwitch(stmt);
+            case SWITCH -> emitSwitch((SwitchStatement) stmt);
             case VARIABLE_DECL -> emitVariableDecl(stmt);
             case BREAK -> w.token("break").write(";").newLine();
             case CONTINUE -> w.token("continue").write(";").newLine();
@@ -590,18 +616,46 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
     /**
      * 发射 switch 语句,支持传统的冒号式 switch 和箭头式 switch 表达式.
      *
-     * @param stmt switch 语句节点
+     * @param sw switch 语句节点
      */
-    private void emitSwitch(Statement stmt) {
-        if (stmt instanceof SwitchStatement sw) {
-            w.token("switch").space().write("(");
-            exprs.emit(sw.discriminant());
-            w.write(")").space().write("{").newLine();
-            w.indent();
-            String arrow = sw.isExpression() ? " -> " : ":";
-            for (SwitchStatement.CaseGroup cg : sw.cases()) {
-                if (cg.isDefault()) {
-                    w.token("default").write(arrow);
+    private void emitSwitch(SwitchStatement sw) {
+        w.token("switch").space().write("(");
+        exprs.emit(sw.discriminant());
+        w.write(")").space().write("{").newLine();
+        w.indent();
+        String arrow = sw.isExpression() ? " -> " : ":";
+        for (SwitchStatement.CaseGroup cg : sw.cases()) {
+            if (cg.isDefault()) {
+                w.token("default").write(arrow);
+                if (sw.isExpression() && !cg.body().isEmpty()) {
+                    Statement s = simplifyCaseBody(cg.body());
+                    if (s instanceof BlockStatement) {
+                        w.write("{").newLine();
+                        w.indent();
+                        for (Statement bs : ((BlockStatement) s).statements()) {
+                            emit(bs);
+                        }
+                        w.dedent();
+                        w.write("}").newLine();
+                    } else if (s instanceof ExpressionStatement es) {
+                        exprs.emit(es.expression());
+                        w.write(";").newLine();
+                    } else {
+                        emit(s);
+                    }
+                } else {
+                    w.newLine();
+                    w.indent();
+                    for (Statement s : cg.body()) {
+                        emit(s);
+                    }
+                    w.dedent();
+                }
+            } else {
+                for (Expression label : cg.labels()) {
+                    w.token("case").space();
+                    emitCaseLabel(label);
+                    w.write(arrow);
                     if (sw.isExpression() && !cg.body().isEmpty()) {
                         Statement s = simplifyCaseBody(cg.body());
                         if (s instanceof BlockStatement) {
@@ -626,54 +680,11 @@ public class StatementEmitter implements AstVisitor<Void, Void> {
                         }
                         w.dedent();
                     }
-                } else {
-                    for (Expression label : cg.labels()) {
-                        w.token("case").space();
-                        emitCaseLabel(label);
-                        w.write(arrow);
-                        if (sw.isExpression() && !cg.body().isEmpty()) {
-                            Statement s = simplifyCaseBody(cg.body());
-                            if (s instanceof BlockStatement) {
-                                w.write("{").newLine();
-                                w.indent();
-                                for (Statement bs : ((BlockStatement) s).statements()) {
-                                    emit(bs);
-                                }
-                                w.dedent();
-                                w.write("}").newLine();
-                            } else if (s instanceof ExpressionStatement es) {
-                                exprs.emit(es.expression());
-                                w.write(";").newLine();
-                            } else {
-                                emit(s);
-                            }
-                        } else {
-                            w.newLine();
-                            w.indent();
-                            for (Statement s : cg.body()) {
-                                emit(s);
-                            }
-                            w.dedent();
-                        }
-                    }
                 }
             }
-            w.dedent();
-            w.write("}").newLine();
-        } else {
-            // 降级处理:输出可编译的空 switch,并保留来源提示.
-            w.token("switch").space().write("(");
-            if (!stmt.children().isEmpty() && stmt.children().getFirst() instanceof Expression ex) {
-                exprs.emit(ex);
-            } else {
-                w.write("/* expr */");
-            }
-            w.write(")").space().write("{").newLine();
-            w.indent();
-            w.write("/* unsupported switch shape */").newLine();
-            w.dedent();
-            w.write("}").newLine();
         }
+        w.dedent();
+        w.write("}").newLine();
     }
 
     /**

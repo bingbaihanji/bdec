@@ -126,7 +126,7 @@ public final class InnerClassDecompiler {
                 // 常量匿名体(覆写抽象方法的 E$N 类)会全部丢失.
                 DecompileContext innerCtx = new DecompileContext(
                         context.config(), context::loadClassBytes,
-                        innerCfm.bootstrapMethods(), innerCfm);
+                        innerCfm.bootstrapMethods(), innerCfm, context::reportWarning);
                 CompilationUnit innerUnit = buildInnerClassUnit(innerCfm, innerCtx);
                 if (innerUnit != null && !innerUnit.types().isEmpty()) {
                     // 将内部类 TypeDeclaration 作为嵌套类型嵌入主类

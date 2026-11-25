@@ -16,7 +16,7 @@ import java.util.List;
  *
  * <p>关键:for 循环的 {@code continue} 会执行增量,而 while 形式中增量在循环体
  * 底部会被 {@code continue} 跳过——带 continue 的 for 若还原成 while 会死循环.
- * 委托 {@link ForLoopRecognizer} 处理(该识别器此前未接线,为死代码).</p>
+ * 由本规则接线,委托 {@link ForLoopRecognizer} 处理.</p>
  */
 public final class ForLoopRewrite implements RewriteRule {
 

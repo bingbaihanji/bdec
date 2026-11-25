@@ -651,7 +651,7 @@ public final class IrBuilder {
                 case NOP -> {
                 }
                 case POP, POP2 -> handlePop(op, stack);
-                case DUP, DUP_X1, DUP_X2, DUP2, SWAP -> handleDup(op, stack);
+                case DUP, DUP_X1, DUP_X2, DUP2, DUP2_X1, DUP2_X2, SWAP -> handleDup(op, stack);
 
                 // 常量
                 case ACONST_NULL, ICONST_M1, ICONST_0, ICONST_1, ICONST_2,
@@ -780,14 +780,29 @@ public final class IrBuilder {
 
     /**
      * 处理POP/POP2操作码,从操作数栈弹出值.
+     * <p>category 2 值(long/double)在 IR 模型中只用一个 {@link Value} 表示,
+     * 但在 JVM 操作数栈中占两个槽位.POP2 在栈顶为 category 2 值时只弹出一个
+     * Value 即已完成两个槽位的弹出;栈顶为 category 1 值时才弹出两个 Value
+     * (参照 CFR {@code OperationFactoryPop2}).</p>
      */
     private void handlePop(Opcode op, Deque<Value> stack) {
         if (stack.isEmpty()) {
             return;
         }
-        stack.pop();
-        if (op == Opcode.POP2 && !stack.isEmpty()) {
+        if (op == Opcode.POP) {
             stack.pop();
+            return;
+        }
+        // POP2:category 2 值占两个槽位,单个 Value 即满足;否则弹出两个 category 1 值.
+        Value v1 = stack.pop();
+        if (isCategory2(v1)) {
+            return;
+        }
+        if (!stack.isEmpty()) {
+            stack.pop();
+        } else {
+            // 栈不足(非法字节码):恢复原顺序,不静默改变栈.
+            stack.push(v1);
         }
     }
 
@@ -795,6 +810,12 @@ public final class IrBuilder {
 
     /**
      * 处理DUP系列操作码,复制或交换操作数栈上的值.
+     * <p>category 2 值(long/double)在 IR 模型中只用一个 {@link Value} 表示,
+     * 但按 JVM 规则占两个栈槽位.各 form 的判定与弹出/压入顺序参照 CFR
+     * {@code OperationFactoryDup}/{@code OperationFactoryDupX1}/
+     * {@code OperationFactoryDupX2}/{@code OperationFactoryDup2X1}/
+     * {@code OperationFactoryDup2X2}:每个 form 都先按栈顶优先弹出所需的值,
+     * 判定类型后再按"栈底优先"顺序压回(即 push 序列的最后一个值位于栈顶).</p>
      */
     private void handleDup(Opcode op, Deque<Value> stack) {
         switch (op) {
@@ -811,19 +832,199 @@ public final class IrBuilder {
                     return;
                 }
                 Value v1 = stack.pop(), v2 = stack.pop();
+                // DUP_X1 要求两个值均为 category 1;非法 form 恢复原顺序.
+                if (isCategory2(v1) || isCategory2(v2)) {
+                    stack.push(v2);
+                    stack.push(v1);
+                    return;
+                }
                 stack.push(v1);
                 stack.push(v2);
                 stack.push(v1);
             }
             case DUP_X2 -> {
-                if (stack.size() < 3) {
+                if (stack.isEmpty()) {
                     return;
                 }
-                Value v1 = stack.pop(), v2 = stack.pop(), v3 = stack.pop();
-                stack.push(v1);
-                stack.push(v3);
-                stack.push(v2);
-                stack.push(v1);
+                Value v1 = stack.pop();
+                if (stack.isEmpty()) {
+                    // 栈不足:恢复原顺序.
+                    stack.push(v1);
+                    return;
+                }
+                Value v2 = stack.pop();
+                if (isCategory2(v2)) {
+                    // form 2: v2 为 category 2,v1 必须为 category 1.
+                    // 原栈(v2, v1) → 新栈(v1, v2, v1).
+                    if (isCategory2(v1)) {
+                        // 非法 form:恢复原顺序.
+                        stack.push(v2);
+                        stack.push(v1);
+                        return;
+                    }
+                    stack.push(v1);
+                    stack.push(v2);
+                    stack.push(v1);
+                } else {
+                    // form 1: v1/v2/v3 均为 category 1 —— 需要再弹出 v3.
+                    if (stack.isEmpty()) {
+                        // 栈不足:恢复原顺序.
+                        stack.push(v2);
+                        stack.push(v1);
+                        return;
+                    }
+                    Value v3 = stack.pop();
+                    if (isCategory2(v3)) {
+                        // 非法 form:三者均须为 category 1,恢复原顺序.
+                        stack.push(v3);
+                        stack.push(v2);
+                        stack.push(v1);
+                        return;
+                    }
+                    // 原栈(v3, v2, v1) → 新栈(v1, v3, v2, v1).
+                    stack.push(v1);
+                    stack.push(v3);
+                    stack.push(v2);
+                    stack.push(v1);
+                }
+            }
+            case DUP2_X1 -> {
+                if (stack.isEmpty()) {
+                    return;
+                }
+                Value v1 = stack.pop();
+                if (isCategory2(v1)) {
+                    // form 2(top 为 category 2): v1 为 category 2,v2 必须为 category 1.
+                    // 原栈(v2, v1) → 新栈(v1, v2, v1).
+                    if (stack.isEmpty()) {
+                        stack.push(v1);
+                        return;
+                    }
+                    Value v2 = stack.pop();
+                    if (isCategory2(v2)) {
+                        // 非法 form:恢复原顺序.
+                        stack.push(v2);
+                        stack.push(v1);
+                        return;
+                    }
+                    stack.push(v1);
+                    stack.push(v2);
+                    stack.push(v1);
+                } else {
+                    // form 1(三个 category 1): v1/v2/v3 均须为 category 1.
+                    if (stack.isEmpty()) {
+                        stack.push(v1);
+                        return;
+                    }
+                    Value v2 = stack.pop();
+                    if (isCategory2(v2) || stack.isEmpty()) {
+                        // 非法 form 或栈不足:恢复原顺序.
+                        stack.push(v2);
+                        stack.push(v1);
+                        return;
+                    }
+                    Value v3 = stack.pop();
+                    if (isCategory2(v3)) {
+                        // 非法 form(第三个值也必须为 category 1):恢复原顺序.
+                        stack.push(v3);
+                        stack.push(v2);
+                        stack.push(v1);
+                        return;
+                    }
+                    // 原栈(v3, v2, v1) → 新栈(v2, v1, v3, v2, v1).
+                    stack.push(v2);
+                    stack.push(v1);
+                    stack.push(v3);
+                    stack.push(v2);
+                    stack.push(v1);
+                }
+            }
+            case DUP2_X2 -> {
+                if (stack.isEmpty()) {
+                    return;
+                }
+                Value v1 = stack.pop();
+                if (isCategory2(v1)) {
+                    if (stack.isEmpty()) {
+                        stack.push(v1);
+                        return;
+                    }
+                    Value v2 = stack.pop();
+                    if (isCategory2(v2)) {
+                        // form 4: v1/v2 均为 category 2.
+                        // 原栈(v2, v1) → 新栈(v1, v2, v1).
+                        stack.push(v1);
+                        stack.push(v2);
+                        stack.push(v1);
+                    } else if (stack.isEmpty()) {
+                        // form 2 需要 v3,栈不足:恢复原顺序.
+                        stack.push(v2);
+                        stack.push(v1);
+                    } else {
+                        // form 2: v1 为 category 2,v2/v3 为 category 1.
+                        Value v3 = stack.pop();
+                        if (isCategory2(v3)) {
+                            // 非法 form:恢复原顺序.
+                            stack.push(v3);
+                            stack.push(v2);
+                            stack.push(v1);
+                            return;
+                        }
+                        // 原栈(v3, v2, v1) → 新栈(v1, v3, v2, v1).
+                        stack.push(v1);
+                        stack.push(v3);
+                        stack.push(v2);
+                        stack.push(v1);
+                    }
+                } else {
+                    // v1 为 category 1,需要 v2/v3.
+                    if (stack.isEmpty()) {
+                        stack.push(v1);
+                        return;
+                    }
+                    Value v2 = stack.pop();
+                    if (isCategory2(v2) || stack.isEmpty()) {
+                        // 非法 form(v2 必须为 category 1)或栈不足:恢复原顺序.
+                        stack.push(v2);
+                        stack.push(v1);
+                        return;
+                    }
+                    Value v3 = stack.pop();
+                    if (isCategory2(v3)) {
+                        // form 3: v1/v2 为 category 1,v3 为 category 2.
+                        // 原栈(v3, v2, v1) → 新栈(v2, v1, v3, v2, v1).
+                        stack.push(v2);
+                        stack.push(v1);
+                        stack.push(v3);
+                        stack.push(v2);
+                        stack.push(v1);
+                    } else {
+                        // form 1: v1/v2/v3 均为 category 1,需要再弹出 v4.
+                        if (stack.isEmpty()) {
+                            // 栈不足:恢复原顺序.
+                            stack.push(v3);
+                            stack.push(v2);
+                            stack.push(v1);
+                            return;
+                        }
+                        Value v4 = stack.pop();
+                        if (isCategory2(v4)) {
+                            // 非法 form:恢复原顺序.
+                            stack.push(v4);
+                            stack.push(v3);
+                            stack.push(v2);
+                            stack.push(v1);
+                            return;
+                        }
+                        // 原栈(v4, v3, v2, v1) → 新栈(v2, v1, v4, v3, v2, v1).
+                        stack.push(v2);
+                        stack.push(v1);
+                        stack.push(v4);
+                        stack.push(v3);
+                        stack.push(v2);
+                        stack.push(v1);
+                    }
+                }
             }
             case DUP2 -> {
                 if (stack.isEmpty()) {
@@ -837,6 +1038,12 @@ public final class IrBuilder {
                 } else if (!stack.isEmpty()) {
                     // 栈顶两个值均为类别1——复制两个
                     Value v2 = stack.pop();
+                    // DUP2 form1 要求两个值均为 category 1;非法 form 恢复原顺序.
+                    if (isCategory2(v2)) {
+                        stack.push(v2);
+                        stack.push(v1);
+                        return;
+                    }
                     stack.push(v2);
                     stack.push(v1);
                     stack.push(v2);

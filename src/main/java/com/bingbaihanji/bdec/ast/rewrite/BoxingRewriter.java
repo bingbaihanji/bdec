@@ -94,21 +94,25 @@ public class BoxingRewriter implements RewriteRule {
             return null; // 抽象方法或 native 方法无方法体
         }
         return switch (s) {
-            case BlockStatement bs -> new BlockStatement(bs.statements().stream()
-                    .map(this::rewriteStatement).toList());
-            case IfStatement i -> new IfStatement(
+            case BlockStatement bs -> Statement.inheritSourceOffset(bs,
+                    new BlockStatement(bs.statements().stream()
+                            .map(this::rewriteStatement).toList()));
+            case IfStatement i -> Statement.inheritSourceOffset(i, new IfStatement(
                     rewriteExpr(i.condition()),
                     rewriteStatement(i.thenBranch()),
-                    i.elseBranch() != null ? rewriteStatement(i.elseBranch()) : null);
-            case ExpressionStatement es -> new ExpressionStatement(rewriteExpr(es.expression()));
-            case ReturnStatement rs -> new ReturnStatement(
-                    rs.value() != null ? rewriteExpr(rs.value()) : null);
-            case ThrowStatement ts -> new ThrowStatement(rewriteExpr(ts.expression()));
+                    i.elseBranch() != null ? rewriteStatement(i.elseBranch()) : null));
+            case ExpressionStatement es -> Statement.inheritSourceOffset(es,
+                    new ExpressionStatement(rewriteExpr(es.expression())));
+            case ReturnStatement rs -> Statement.inheritSourceOffset(rs, new ReturnStatement(
+                    rs.value() != null ? rewriteExpr(rs.value()) : null));
+            case ThrowStatement ts -> Statement.inheritSourceOffset(ts,
+                    new ThrowStatement(rewriteExpr(ts.expression())));
             case VariableDeclaration vd -> {
                 // 重写变量声明中的初始化表达式(如 Integer.valueOf(x) → x)
                 Expression init = vd.initializer() != null
                         ? rewriteExpr(vd.initializer()) : null;
-                yield new VariableDeclaration(vd.type(), vd.name(), init, vd.typeAnnotations());
+                yield Statement.inheritSourceOffset(vd,
+                        new VariableDeclaration(vd.type(), vd.name(), init, vd.typeAnnotations()));
             }
             default -> s; // 其他语句类型暂不处理(装箱模式不常见)
         };

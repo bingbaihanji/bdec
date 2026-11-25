@@ -11,7 +11,7 @@
   python tools/diff-test/diff_test.py [--samples DIR] [--keep]
 环境变量:
   CFR_JAR    CFR jar 路径(默认 maven 本地仓库的 cfr-0.152.jar)
-  BDEC_JAR   BDEC jar 路径(默认 target/bdec.jar)
+  BDEC_JAR   BDEC jar 路径(默认优先 bin/bdec-1.0.0-shaded.jar,不存在时回退 target/bdec.jar)
 退出码:存在 BDEC 反编译失败或 BDEC 输出不可重编译时非零(CFR 仅作参照).
 """
 import argparse
@@ -40,6 +40,12 @@ def maven_local_repo() -> Path:
 
 
 DEFAULT_CFR_JAR = maven_local_repo() / "org/benf/cfr/0.152/cfr-0.152.jar"
+
+# 优先使用 shade 插件输出到 bin/ 的可执行 jar,兼容旧的 target/bdec.jar.
+DEFAULT_BDEC_JARS = (
+    REPO_ROOT / "bin/bdec-1.0.0-shaded.jar",
+    REPO_ROOT / "target/bdec.jar",
+)
 
 
 def run(cmd, **kw):
@@ -88,12 +94,19 @@ def main():
     args = ap.parse_args()
 
     cfr_jar = Path(os.environ.get("CFR_JAR", str(DEFAULT_CFR_JAR)))
-    bdec_jar = Path(os.environ.get("BDEC_JAR", str(REPO_ROOT / "target/bdec.jar")))
+    bdec_jar_env = os.environ.get("BDEC_JAR")
+    if bdec_jar_env:
+        bdec_jar = Path(bdec_jar_env)
+    else:
+        bdec_jar = next((p for p in DEFAULT_BDEC_JARS if p.exists()),
+                        DEFAULT_BDEC_JARS[0])
     if not cfr_jar.exists():
         print(f"错误:CFR jar 不存在: {cfr_jar}\n请设置环境变量 CFR_JAR 或先下载 cfr。")
         sys.exit(2)
     if not bdec_jar.exists():
-        print(f"错误:BDEC jar 不存在: {bdec_jar}\n请先执行 mvn package。")
+        print(f"错误:BDEC jar 不存在: {bdec_jar}\n"
+              "请先执行 mvn package(shade 产物默认在 bin/bdec-1.0.0-shaded.jar),"
+              "或设置 BDEC_JAR。")
         sys.exit(2)
 
     sample_dir = Path(args.samples)

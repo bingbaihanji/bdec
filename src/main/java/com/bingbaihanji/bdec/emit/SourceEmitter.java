@@ -63,14 +63,16 @@ public class SourceEmitter {
 
         // module-info.class:输出模块声明(无包声明/导入/类型声明)
         if (unit.module() != null) {
-            IndentWriter w = new IndentWriter(config.indentSize());
+            IndentWriter w = new IndentWriter(config.indentSize(), config.lineSeparator());
             emitModule(unit.module(), w);
             return new SourceFile("module-info", w.toString(), lineMapping);
         }
 
         // 两遍发射:先渲染类型体,据此裁剪未使用的 import
         // (如 for-each 重建消除 Iterator 用法后残留的 import java.util.Iterator;)
-        IndentWriter bodyW = new IndentWriter(config.indentSize());
+        IndentWriter bodyW = new IndentWriter(config.indentSize(), config.lineSeparator());
+        // 类型体内部的行号(从 1 开始),写入头部后整体平移为最终源文件行号
+        Map<Integer, Integer> bodyLineMapping = new HashMap<>();
         ExpressionEmitter exprs = new ExpressionEmitter(bodyW, unit.packageName(), unit.imports());
         exprs.setInnerClassNames(unit.innerClassNames());
 
@@ -83,6 +85,9 @@ public class SourceEmitter {
                 ? "Unknown" : unit.types().getFirst().simpleName(), isInterface,
                 isAnnotation);
 
+        // 语句行号映射汇总到 bodyLineMapping,嵌套类型发射器共用同一张表
+        stmts.setLineMapping(bodyLineMapping);
+
         // 将语句发射器注入表达式发射器,用于 lambda 块体等需要语句级别输出的场景
         exprs.setStmtEmitter(stmts);
 
@@ -92,15 +97,17 @@ public class SourceEmitter {
         }
         String bodyText = bodyW.toString();
 
-        // 正式输出:包声明 + 裁剪后的导入 + 类型体
-        IndentWriter w = new IndentWriter(config.indentSize());
+        // 正式输出:包声明 + 导入 + 类型体
+        IndentWriter w = new IndentWriter(config.indentSize(), config.lineSeparator());
 
         if (unit.packageName() != null && !unit.packageName().isEmpty()) {
             w.token("package").space().write(unit.packageName()).write(';');
             w.newLine().newLine();
         }
 
-        List<String> imports = pruneUnusedImports(unit.imports(), bodyText);
+        // collapseImports = true:裁剪未使用的 import;false:原样保留 AstBuilder 产出的排序 import 列表
+        List<String> imports = config.collapseImports() ? pruneUnusedImports(unit.imports(), bodyText)
+                : unit.imports();
         if (!imports.isEmpty()) {
             for (String imp : imports) {
                 w.token("import").space().write(imp).write(';').newLine();
@@ -108,7 +115,16 @@ public class SourceEmitter {
             w.newLine();
         }
 
+        // bodyW 的局部行号从 1 开始,正式输出中 body 首行位于第 headerLines+1 行,
+        // 因此整体平移 headerLines.必须在写入 bodyText 前读取 w 的行号,
+        // 写入后 w.currentLine() 已被 body 内容推进,不能再用作 header 行数.
+        int headerLines = w.currentLine() - 1;
         w.write(bodyText);
+
+        // 将类型体局部行号平移为最终源文件行号;为空时保持空映射
+        for (Map.Entry<Integer, Integer> entry : bodyLineMapping.entrySet()) {
+            lineMapping.put(entry.getKey() + headerLines, entry.getValue());
+        }
 
         // 构建完整类名(包名 + 简单类名)
         String className = unit.types().isEmpty() ? "Unknown"
@@ -253,6 +269,8 @@ public class SourceEmitter {
             nestedStmts = new StatementEmitter(w, stmts.exprs(),
                     type.simpleName(), type.isInterface(),
                     "@interface".equals(type.kindName()));
+            // 嵌套类型与顶层类型共用同一张语句行号映射表
+            nestedStmts.setLineMapping(stmts.lineMapping());
         }
 
         boolean firstMember = true;

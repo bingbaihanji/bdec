@@ -20,17 +20,17 @@ public class MethodRefReceiverAnnotationRoundTripTest {
                                          import java.lang.annotation.Target;
                                          import java.util.function.Function;
                                          import java.util.function.Supplier;
-                                         
+
                                          @Retention(RetentionPolicy.RUNTIME)
                                          @Target(ElementType.TYPE_USE)
                                          @interface A {
                                          }
-                                         
+
                                          class C {
                                              static <T> T id(T t) {
                                                  return t;
                                              }
-                                         
+
                                              void m() {
                                                  Function<String, String> f = @A C::id;
                                                  Supplier<C> s = @A C::new;

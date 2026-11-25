@@ -151,6 +151,14 @@ public final class BlockReducer implements ReducerOps {
         stmtGroupIdx.add(gi);
     }
 
+    /** 为尚无偏移的复合语句回填组首块起始偏移(行号映射用). */
+    private static void applyGroupOffset(Statement s, BlockGroup group) {
+        if (s != null && s.sourceOffset() < 0
+                && group != null && group.first() != null) {
+            s.setSourceOffset(group.first().startOffset());
+        }
+    }
+
     /** 循环是否可正常退出(条件非字面量 true——否则补发 return 会不可达). */
     private static boolean loopCanExitNormally(LoopStatement ls) {
         Expression cond = ls.condition();
@@ -412,6 +420,7 @@ public final class BlockReducer implements ReducerOps {
             if (ifInfo != null) {
                 s = IfTranslator.translateIf(this, ifInfo, group, ir, groups, consumed, graph, postDom);
                 if (s != null) {
+                    applyGroupOffset(s, group);
                     addStatement(statements, stmtGroupIdx, s, gi);
                 }
                 continue;
@@ -473,6 +482,7 @@ public final class BlockReducer implements ReducerOps {
             // switch
             else if (switchInfo != null) {
                 s = SwitchTranslator.buildSwitch(this, switchInfo, group, ir, groups, consumed, graph);
+                applyGroupOffset(s, group);
             }
             // synchronized:优先级高于 try-catch.
             // synchronized 块的异常处理器(monitorexit + athrow)是 JVM 实现细节——
@@ -505,6 +515,7 @@ public final class BlockReducer implements ReducerOps {
             }
 
             if (s != null) {
+                applyGroupOffset(s, group);
                 addStatement(statements, stmtGroupIdx, s, gi);
             }
         }
@@ -527,7 +538,8 @@ public final class BlockReducer implements ReducerOps {
                             && !StatementUtils.isIgnorableExpr(es.expression())
                             && !StatementUtils.isVoidExpr(es.expression())
                             && !StatementUtils.isAssignExpr(es.expression())) {
-                        statements.set(i, new ReturnStatement(es.expression()));
+                        statements.set(i, Statement.inheritSourceOffset(es,
+                                new ReturnStatement(es.expression())));
                         break;
                     }
                     if (s instanceof BlockStatement bs && !bs.statements().isEmpty()) {
@@ -539,7 +551,8 @@ public final class BlockReducer implements ReducerOps {
                                 && !StatementUtils.isAssignExpr(es.expression())) {
                             List<Statement> newStmts = new ArrayList<>(bs.statements());
                             newStmts.set(newStmts.size() - 1,
-                                    new ReturnStatement(es.expression()));
+                                    Statement.inheritSourceOffset(es,
+                                            new ReturnStatement(es.expression())));
                             statements.set(i, new BlockStatement(newStmts));
                             // 不 break——前面可能还有需要包装的孤立表达式
                         }
@@ -1092,6 +1105,10 @@ public final class BlockReducer implements ReducerOps {
             // 仅输出有副作用的指令作为语句
             if (StatementUtils.isStatementRoot(insn)) {
                 Statement s = exprTranslator.translateStmt(insn);
+                if (s != null) {
+                    // 记录该语句起始字节码偏移(后续行号映射使用).
+                    s.setSourceOffset(insn.sourceOffset());
+                }
 
                 if (s != null) {
                     // 后置自增折叠: println(v); v++; → println(v++),
@@ -1102,24 +1119,17 @@ public final class BlockReducer implements ReducerOps {
                     if (s instanceof ExpressionStatement es
                             && StatementUtils.isPostIncDec(es.expression())) {
                         UnExpr inc = (UnExpr) es.expression();
-                        // 局部变量或实例字段自增均可参与折叠(字段自增
-                        // this.nextIndex++ 在 return array[nextIndex++] 中应
-                        // 折进数组下标,否则数组读到自增后的值错位一跳);
-                        // 静态字段/复杂目标直接独立输出.
-                        String incName = null;
-                        if (inc.operand() instanceof VarExpr target) {
-                            incName = target.name();
-                        } else if (inc.operand() instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
-                                && fa.target() instanceof VarExpr tv
-                                && "this".equals(tv.name())) {
-                            incName = fa.fieldName();
-                        }
-                        if (incName == null) {
+                        // 局部变量/字段/数组元素的自增均可参与折叠,目标按
+                        // 表达式结构匹配(如 this.nextIndex++ 折进
+                        // return array[nextIndex++],arr[i]++ 折进 return arr[i]);
+                        // 目标为空时直接独立输出.
+                        Expression incTarget = inc.operand();
+                        if (incTarget == null) {
                             stmts.add(s);
                             continue;
                         }
-                        // 先挂 pending,优先向前折叠进后续引用该变量的语句——
-                        // 向后折叠(自增折进前一句)只在自增是该变量最后一次引用时
+                        // 先挂 pending,优先向前折叠进后续引用该目标的语句——
+                        // 向后折叠(自增折进前一句)只在自增是该目标最后一次引用时
                         // 才安全.字节码 "lastIndex = nextIndex; return
                         // array[nextIndex++]" 的 iinc 紧邻 return 的数组下标,
                         // 向后折进 lastIndex 会错成 "lastIndex = nextIndex++"
@@ -1134,15 +1144,8 @@ public final class BlockReducer implements ReducerOps {
                     }
                     if (pendingPostInc != null) {
                         UnExpr inc = (UnExpr) ((ExpressionStatement) pendingPostInc).expression();
-                        String pName = null;
-                        if (inc.operand() instanceof VarExpr target) {
-                            pName = target.name();
-                        } else if (inc.operand() instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
-                                && fa.target() instanceof VarExpr tv
-                                && "this".equals(tv.name())) {
-                            pName = fa.fieldName();
-                        }
-                        if (pName == null) {
+                        Expression pTarget = inc.operand();
+                        if (pTarget == null) {
                             stmts.add(pendingPostInc);
                             pendingPostInc = null;
                             stmts.add(s);
@@ -1150,18 +1153,18 @@ public final class BlockReducer implements ReducerOps {
                         }
                         // 优先向前折叠进当前语句(如 return array[nextIndex++] 的
                         // 数组下标引用自增前的值,iinc 紧邻其后)
-                        Statement folded = StatementUtils.foldPostInc(s, pName, inc.operator());
+                        Statement folded = StatementUtils.foldPostInc(s, pTarget, inc.operator());
                         if (folded != null) {
                             stmts.add(folded);
                             pendingPostInc = null;
                             continue;
                         }
-                        // 向前失败(当前语句不引用该变量)→ 向后折叠进前一条语句
+                        // 向前失败(当前语句不引用该目标)→ 向后折叠进前一条语句
                         //(如 println(v); v++ 的 v++ 是尾部,折进 println(v)).
                         if (!stmts.isEmpty()) {
                             Statement back = StatementUtils.foldPostInc(
                                     stmts.get(stmts.size() - 1),
-                                    pName, inc.operator());
+                                    pTarget, inc.operator());
                             if (back != null) {
                                 stmts.set(stmts.size() - 1, back);
                                 pendingPostInc = null;
@@ -1198,17 +1201,10 @@ public final class BlockReducer implements ReducerOps {
         // 自增是块尾时向后折叠进前一条语句(println(v); v++ → println(v++)).
         if (pendingPostInc != null) {
             UnExpr inc = (UnExpr) ((ExpressionStatement) pendingPostInc).expression();
-            String pName = null;
-            if (inc.operand() instanceof VarExpr tv) {
-                pName = tv.name();
-            } else if (inc.operand() instanceof com.bingbaihanji.bdec.ast.expr.FieldAccessExpr fa
-                    && fa.target() instanceof VarExpr tv2
-                    && "this".equals(tv2.name())) {
-                pName = fa.fieldName();
-            }
-            if (pName != null && !stmts.isEmpty()) {
+            Expression pTarget = inc.operand();
+            if (pTarget != null && !stmts.isEmpty()) {
                 Statement back = StatementUtils.foldPostInc(
-                        stmts.get(stmts.size() - 1), pName, inc.operator());
+                        stmts.get(stmts.size() - 1), pTarget, inc.operator());
                 if (back != null) {
                     stmts.set(stmts.size() - 1, back);
                     pendingPostInc = null;
@@ -1231,8 +1227,9 @@ public final class BlockReducer implements ReducerOps {
             if (stmts.get(i) instanceof com.bingbaihanji.bdec.ast.stmt.VariableDeclaration vd) {
                 if (!seenDecls.add(vd.name()) && vd.initializer() != null) {
                     // 重复声明 → 转为普通赋值
-                    stmts.set(i, new ExpressionStatement(
-                            new AssignExpr(new VarExpr(vd.name()), vd.initializer())));
+                    stmts.set(i, Statement.inheritSourceOffset(vd,
+                            new ExpressionStatement(
+                                    new AssignExpr(new VarExpr(vd.name()), vd.initializer()))));
                 }
             }
         }
@@ -1263,6 +1260,23 @@ public final class BlockReducer implements ReducerOps {
                                 || i.hasTag(com.bingbaihanji.bdec.semantic.SemanticTag.SUPER_CONSTRUCTOR)));
                 if (hasCtorDeleg) {
                     stmts.remove(stmts.size() - 1);
+                }
+            }
+        }
+
+        // 回填本组内生成的语句偏移:未能从具体指令取得偏移的合成语句,
+        // 使用组内首个有效字节码偏移作为近似值,供源码行号映射使用.
+        int groupOffset = -1;
+        for (IrInstruction insn : allInsns) {
+            if (insn.sourceOffset() >= 0) {
+                groupOffset = insn.sourceOffset();
+                break;
+            }
+        }
+        if (groupOffset >= 0) {
+            for (Statement s : stmts) {
+                if (s.sourceOffset() < 0) {
+                    s.setSourceOffset(groupOffset);
                 }
             }
         }

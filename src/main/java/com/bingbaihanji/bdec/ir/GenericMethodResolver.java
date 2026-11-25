@@ -17,6 +17,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 泛型方法返回类型推断(轻量反射方案,替代点对点硬编码).
@@ -40,8 +41,18 @@ import java.util.Set;
  */
 public final class GenericMethodResolver {
 
-    /** 方法泛型签名缓存:键 = declaringClass:methodName:eraseDesc */
-    private static final Map<String, MethodSig> CACHE = new HashMap<>();
+    /**
+     * 方法泛型签名缓存:键 = declaringClass:methodName:eraseDesc.
+     * 并发共享——同一 key 只反射解析一次,跨线程只读复用.
+     */
+    private static final Map<String, MethodSig> CACHE = new ConcurrentHashMap<>();
+
+    /**
+     * 反射失败(类/方法在运行时不可定位)的负缓存标记.
+     * {@link ConcurrentHashMap} 不允许 null 值,故用此哨兵表示"查过但失败",
+     * 对外仍由 {@link #load} 转回 {@code null}.
+     */
+    private static final MethodSig NOT_FOUND = new MethodSig(null, null);
 
     private GenericMethodResolver() {
     }
@@ -425,14 +436,24 @@ public final class GenericMethodResolver {
         }
     }
 
-    /** 反射加载方法签名(带缓存). */
+    /**
+     * 反射加载方法签名(线程安全缓存).
+     *
+     * <p>{@link ConcurrentHashMap#computeIfAbsent} 保证同一 key 只反射解析一次;
+     * 反射失败也缓存负结果(哨兵),避免每次调用重复尝试.返回值语义与旧实现一致:
+     * 失败返回 {@code null}.</p>
+     */
     private static MethodSig load(String declaringClass, String methodName,
                                   JavaType[] erasedParamTypes) {
         String key = declaringClass + ":" + methodName + ":" + eraseDesc(erasedParamTypes);
-        MethodSig cached = CACHE.get(key);
-        if (cached != null || CACHE.containsKey(key)) {
-            return cached;
-        }
+        MethodSig sig = CACHE.computeIfAbsent(key, k ->
+                reflectSignature(declaringClass, methodName, erasedParamTypes));
+        return sig == NOT_FOUND ? null : sig;
+    }
+
+    /** 通过反射解析方法泛型签名;失败返回 {@link #NOT_FOUND}(不抛出异常). */
+    private static MethodSig reflectSignature(String declaringClass, String methodName,
+                                              JavaType[] erasedParamTypes) {
         try {
             Class<?> clazz = Class.forName(declaringClass.replace('/', '.'));
             Class<?>[] erased = toErasureClasses(erasedParamTypes);
@@ -442,12 +463,9 @@ public final class GenericMethodResolver {
             for (int i = 0; i < genericParams.length; i++) {
                 paramTypes[i] = reify(genericParams[i]);
             }
-            MethodSig sig = new MethodSig(paramTypes, reify(m.getGenericReturnType()));
-            CACHE.put(key, sig);
-            return sig;
+            return new MethodSig(paramTypes, reify(m.getGenericReturnType()));
         } catch (Exception e) {
-            CACHE.put(key, null);
-            return null;
+            return NOT_FOUND;
         }
     }
 
@@ -700,7 +718,12 @@ public final class GenericMethodResolver {
         };
     }
 
-    /** 方法签名模板:参数类型与返回类型(含类型变量). */
+    /**
+     * 方法签名模板:参数类型与返回类型(含类型变量).
+     *
+     * <p>不可变值对象:record 组件均为 final,构造后数组只读、不再被本类修改,
+     * 故可安全地在多线程间共享缓存.({@link JavaType} 自身也是 record.)</p>
+     */
     private record MethodSig(JavaType[] paramTypes, JavaType returnType) {
     }
 }

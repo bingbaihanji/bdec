@@ -15,10 +15,10 @@ public final class BdecConfig {
     /** 换行符 */
     private final String lineSeparator;
 
-    /** 是否显示行号 */
+    /** 是否显示行号(预留未实现) */
     private final boolean showLineNumbers;
 
-    /** 是否显示字节码偏移量 */
+    /** 是否显示字节码偏移量(预留未实现) */
     private final boolean showBytecodeOffsets;
 
     // ======================== 结构化反编译开关 ========================
@@ -44,7 +44,10 @@ public final class BdecConfig {
     /** 是否解码字符串 switch */
     private final boolean decodeStringSwitch;
 
-    /** 是否合并导入语句 */
+    /**
+     * 导入裁剪开关:true 表示裁剪未使用的 import;
+     * false 表示保留 AstBuilder 产出的完整排序 import 列表.
+     */
     private final boolean collapseImports;
 
     // ======================== SSA 优化配置 ========================
@@ -100,10 +103,22 @@ public final class BdecConfig {
     /** 获取换行符 */
     public String lineSeparator() {return lineSeparator;}
 
-    /** 是否显示行号 */
+    /**
+     * 是否显示行号.
+     *
+     * @return 当前配置值
+     * @deprecated 预留未实现:该选项目前不影响发射输出,仅为 API 兼容保留.
+     */
+    @Deprecated
     public boolean showLineNumbers() {return showLineNumbers;}
 
-    /** 是否显示字节码偏移量 */
+    /**
+     * 是否显示字节码偏移量.
+     *
+     * @return 当前配置值
+     * @deprecated 预留未实现:该选项目前不影响发射输出,仅为 API 兼容保留.
+     */
+    @Deprecated
     public boolean showBytecodeOffsets() {return showBytecodeOffsets;}
 
     /** 是否解码枚举类型 */
@@ -127,7 +142,14 @@ public final class BdecConfig {
     /** 是否解码字符串 switch */
     public boolean decodeStringSwitch() {return decodeStringSwitch;}
 
-    /** 是否合并导入语句 */
+    /**
+     * 获取导入裁剪开关.
+     *
+     * <p>true(默认):裁剪类型体中未使用的 import;false:保留 AstBuilder 产出的
+     * 完整排序 import 列表.</p>
+     *
+     * @return 当前配置值
+     */
     public boolean collapseImports() {return collapseImports;}
 
     /** 获取 SSA 优化指令数阈值 */
@@ -150,10 +172,10 @@ public final class BdecConfig {
         /** 换行符,默认为 "\n" */
         private String lineSeparator = "\n";
 
-        /** 是否显示行号,默认关闭 */
+        /** 是否显示行号(预留未实现),默认关闭 */
         private boolean showLineNumbers = false;
 
-        /** 是否显示字节码偏移量,默认关闭 */
+        /** 是否显示字节码偏移量(预留未实现),默认关闭 */
         private boolean showBytecodeOffsets = false;
 
         /** 是否解码枚举类型,默认开启 */
@@ -177,7 +199,7 @@ public final class BdecConfig {
         /** 是否解码字符串 switch,默认开启 */
         private boolean decodeStringSwitch = true;
 
-        /** 是否合并导入语句,默认开启 */
+        /** 是否裁剪未使用的 import,默认开启;关闭时保留完整排序 import 列表 */
         private boolean collapseImports = true;
 
         /** SSA 优化指令数阈值,默认 5 */
@@ -216,7 +238,9 @@ public final class BdecConfig {
          *
          * @param v true 表示显示行号
          * @return 当前构建器实例
+         * @deprecated 预留未实现:该选项目前不影响发射输出,仅为 API 兼容保留.
          */
+        @Deprecated
         public Builder showLineNumbers(boolean v) {
             this.showLineNumbers = v;
             return this;
@@ -227,7 +251,9 @@ public final class BdecConfig {
          *
          * @param v true 表示显示字节码偏移量
          * @return 当前构建器实例
+         * @deprecated 预留未实现:该选项目前不影响发射输出,仅为 API 兼容保留.
          */
+        @Deprecated
         public Builder showBytecodeOffsets(boolean v) {
             this.showBytecodeOffsets = v;
             return this;
@@ -311,9 +337,12 @@ public final class BdecConfig {
         }
 
         /**
-         * 设置是否合并导入语句.
+         * 设置导入裁剪开关.
          *
-         * @param v true 表示开启导入合并
+         * <p>true(默认):裁剪类型体中未使用的 import;false:保留 AstBuilder 产出的
+         * 完整排序 import 列表.</p>
+         *
+         * @param v true 表示裁剪未使用的 import,false 表示保留完整 import 列表
          * @return 当前构建器实例
          */
         public Builder collapseImports(boolean v) {

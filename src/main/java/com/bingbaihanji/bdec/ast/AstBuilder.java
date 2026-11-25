@@ -680,6 +680,11 @@ public class AstBuilder {
         List<String> interfaceAnns = new ArrayList<>();
         int rawInterfaceIdx = 0;
         int sigInterfaceIdx = 0;
+        // 类签名格式恒为 [父类][接口...](JVMS 4.7.9.1),接口类型同样以
+        // Ljava/lang/Object; 父类签名为第 0 项,故接口从 index 1 起.
+        // 仅当非标准接口签名省略父类占位时,接口才从 index 0 起.
+        int sigBase = superAndInterfaces != null && superAndInterfaces.length > 0
+                && (!isInterfaceType || isJavaLangObject(superAndInterfaces[0])) ? 1 : 0;
         for (String ifName : classFile.interfaceInternalNames()) {
             String ifAnn = interfaceAnnsByIndex.get(rawInterfaceIdx);
             java.util.Map<java.util.List<com.bingbaihanji.bdec.bytecode.model.TypePathElement>,
@@ -689,12 +694,15 @@ public class AstBuilder {
             if (isAnnotationType && "java/lang/annotation/Annotation".equals(ifName)) {
                 continue;
             }
-            // 类签名中接口紧跟父类之后(类:父类占 index 0;接口:无父类,接口从 0 起).
-            // 父类若为隐式 java/lang/Object,javac 仍会在签名中占位 Ljava/lang/Object;,
-            // 因此偏移量取决于是否为接口,而非显式父类是否存在.
-            int sigPos = (isInterfaceType ? 0 : 1) + sigInterfaceIdx;
+            // 优先按内部名称在签名接口区段定位,避免签名与原始接口表顺序错位;
+            // 定位失败时按 sigBase 偏移回退,再无签名则用原始接口简单名.
+            int sigPos = sigBase + sigInterfaceIdx;
+            JavaType sigInterface = findSignatureInterface(superAndInterfaces, sigBase, ifName);
             String simple;
-            if (superAndInterfaces != null && sigPos < superAndInterfaces.length) {
+            if (sigInterface != null) {
+                simple = TypeReferenceUtil.renderClassRef(
+                        sigInterface, ifTypeArgAnns, imports, simpleName);
+            } else if (superAndInterfaces != null && sigPos < superAndInterfaces.length) {
                 simple = TypeReferenceUtil.renderClassRef(
                         superAndInterfaces[sigPos], ifTypeArgAnns, imports, simpleName);
             } else {
@@ -835,6 +843,26 @@ public class AstBuilder {
     private String packageName(String internalName) {
         int idx = internalName.lastIndexOf('/');
         return idx > 0 ? internalName.substring(0, idx).replace('/', '.') : "";
+    }
+
+    // 判断签名类型是否为隐式父类 java/lang/Object
+    private static boolean isJavaLangObject(JavaType type) {
+        return type != null && "java/lang/Object".equals(type.internalName());
+    }
+
+    // 在类签名的接口区段按内部名称定位接口类型,保留其泛型实参
+    private static JavaType findSignatureInterface(JavaType[] signatures, int from,
+                                                   String internalName) {
+        if (signatures == null || internalName == null) {
+            return null;
+        }
+        for (int i = Math.max(from, 0); i < signatures.length; i++) {
+            JavaType candidate = signatures[i];
+            if (candidate != null && internalName.equals(candidate.internalName())) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /**

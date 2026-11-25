@@ -224,8 +224,7 @@ public final class ExprTranslator {
                     assignRhs = bin.right(); // 剥离重复的左操作数
                 }
                 // x += 1 → x++  /  x -= 1 → x--
-                if (compoundOp != null && assignRhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
-                        && lr.value() instanceof Integer i && i == 1) {
+                if (compoundOp != null && StatementUtils.isOneLiteral(assignRhs)) {
                     if (compoundOp == BinaryOperator.ADD) {
                         yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
                                 com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, lhs);
@@ -307,8 +306,7 @@ public final class ExprTranslator {
                     assignRhs = bin.right();
                 }
                 // += 1 → ++, -= 1 → --
-                if (compoundOp != null && assignRhs instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
-                        && lr.value() instanceof Integer i && i == 1) {
+                if (compoundOp != null && StatementUtils.isOneLiteral(assignRhs)) {
                     if (compoundOp == BinaryOperator.ADD) {
                         yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
                                 com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, lhs);
@@ -635,7 +633,24 @@ public final class ExprTranslator {
                         ? ops.valueToExpr(insn.operands().get(1)) : new VarExpr("i");
                 Expression val = insn.operands().size() > 2
                         ? ops.valueToExpr(insn.operands().get(2)) : new VarExpr("varUnresolved");
-                yield new AssignExpr(new ArrayAccessExpr(arr, idx), val);
+                Expression lhs = new ArrayAccessExpr(arr, idx);
+                // 数组元素复合赋值/自增检测:a[i] = a[i] + y → a[i] += y,
+                // 数值 1 的加减转 a[i]++/a[i]--.需 ArrayAccess 结构相等匹配.
+                BinaryOperator compoundOp = ExprCleanup.detectCompoundOp(lhs, val);
+                Expression assignRhs = val;
+                if (compoundOp != null && val instanceof BinExpr bin) {
+                    assignRhs = bin.right();
+                }
+                if (compoundOp != null && StatementUtils.isOneLiteral(assignRhs)) {
+                    if (compoundOp == BinaryOperator.ADD) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_INC, lhs);
+                    } else if (compoundOp == BinaryOperator.SUB) {
+                        yield new com.bingbaihanji.bdec.ast.expr.UnExpr(
+                                com.bingbaihanji.bdec.ast.expr.UnaryOperator.POST_DEC, lhs);
+                    }
+                }
+                yield new AssignExpr(lhs, assignRhs, compoundOp);
             }
 
             // 数组长度

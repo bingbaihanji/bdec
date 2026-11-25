@@ -18,21 +18,21 @@ public class MethodRefAnnotationRoundTripTest {
                                          import java.lang.annotation.Target;
                                          import java.util.function.Function;
                                          import java.util.function.Supplier;
-                                         
+
                                          @Retention(RetentionPolicy.RUNTIME)
                                          @Target(ElementType.TYPE_USE)
                                          @interface A {
                                          }
-                                         
+
                                          class C {
                                              static <T> T id(T t) {
                                                  return t;
                                              }
-                                         
+
                                              static <A2, B2> A2 m2(B2 b) {
                                                  return null;
                                              }
-                                         
+
                                              void m() {
                                                  Function<String, String> f = C::<@A String>id;
                                                  Function<Integer, String> g = C::<String, @A Integer>m2;

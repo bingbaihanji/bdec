@@ -350,10 +350,11 @@ public class LambdaRewriter implements RewriteRule {
                                        ClassFileModel cfm,
                                        DecompileContext ctx) {
         if (s instanceof BlockStatement bs) {
-            return new BlockStatement(bs.statements().stream()
-                    .map(st -> rewriteStatement(st, bootstrapMethods, cfm, ctx))
-                    .filter(st -> st != null)
-                    .toList());
+            return Statement.inheritSourceOffset(bs,
+                    new BlockStatement(bs.statements().stream()
+                            .map(st -> rewriteStatement(st, bootstrapMethods, cfm, ctx))
+                            .filter(st -> st != null)
+                            .toList()));
         }
         if (s instanceof ExpressionStatement es) {
             // 过滤孤立的 LambdaExpr 占位符
@@ -361,24 +362,27 @@ public class LambdaRewriter implements RewriteRule {
             if (isOrphanLambda(rewritten)) {
                 return null;
             }
-            return new ExpressionStatement(rewritten);
+            return Statement.inheritSourceOffset(es, new ExpressionStatement(rewritten));
         }
         if (s instanceof ReturnStatement rs) {
-            return new ReturnStatement(rs.value() != null
-                    ? rewriteExpr(rs.value(), bootstrapMethods, cfm, ctx) : null);
+            return Statement.inheritSourceOffset(rs,
+                    new ReturnStatement(rs.value() != null
+                            ? rewriteExpr(rs.value(), bootstrapMethods, cfm, ctx) : null));
         }
         if (s instanceof IfStatement i) {
-            return new IfStatement(
-                    rewriteExpr(i.condition(), bootstrapMethods, cfm, ctx),
-                    rewriteStatement(i.thenBranch(), bootstrapMethods, cfm, ctx),
-                    i.elseBranch() != null
-                            ? rewriteStatement(i.elseBranch(), bootstrapMethods, cfm, ctx)
-                            : null);
+            return Statement.inheritSourceOffset(i,
+                    new IfStatement(
+                            rewriteExpr(i.condition(), bootstrapMethods, cfm, ctx),
+                            rewriteStatement(i.thenBranch(), bootstrapMethods, cfm, ctx),
+                            i.elseBranch() != null
+                                    ? rewriteStatement(i.elseBranch(), bootstrapMethods, cfm, ctx)
+                                    : null));
         }
         if (s instanceof VariableDeclaration vd && vd.initializer() != null) {
             Expression newInit = rewriteExpr(vd.initializer(), bootstrapMethods, cfm, ctx);
             if (newInit != vd.initializer()) {
-                return new VariableDeclaration(vd.type(), vd.name(), newInit, vd.typeAnnotations());
+                return Statement.inheritSourceOffset(vd,
+                        new VariableDeclaration(vd.type(), vd.name(), newInit, vd.typeAnnotations()));
             }
         }
         return s;

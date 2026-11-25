@@ -13,22 +13,19 @@ import com.bingbaihanji.bdec.ir.IrInstruction;
 import com.bingbaihanji.bdec.ir.LinearIr;
 import com.bingbaihanji.bdec.ir.SsaBuilder;
 import com.bingbaihanji.bdec.ir.SsaForm;
-import com.bingbaihanji.bdec.ir.TypeInference;
 import com.bingbaihanji.bdec.semantic.SemanticReconstructor;
 import com.bingbaihanji.bdec.structuring.ControlFlowStructurer;
 import com.bingbaihanji.bdec.structuring.StructuredMethod;
-import com.bingbaihanji.bdec.type.JavaType;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 逐方法反编译管线(里程碑 Phase 3).
  *
  * <p>将单个方法从字节码提升为 {@link StructuredMethod}:CFG → LinearIr → 语义重建 →
- * (可选)SSA 优化 → 结构化控制流.供 {@link BdecEngine} 主循环与内部类反编译复用,
- * 消除两份逐方法循环的重复.</p>
+ * (可选)SSA 构建 + 复制传播 + 死代码消除 → 结构化控制流.供 {@link BdecEngine} 主循环与
+ * 内部类反编译复用,消除两份逐方法循环的重复.</p>
  */
 public final class MethodPipeline {
 
@@ -43,8 +40,6 @@ public final class MethodPipeline {
     private final SemanticReconstructor semanticReconstructor = new SemanticReconstructor();
 
     private final SsaBuilder ssaBuilder = new SsaBuilder();
-
-    private final TypeInference typeInference = new TypeInference();
 
     private final CopyPropagation copyPropagation = new CopyPropagation();
 
@@ -112,7 +107,7 @@ public final class MethodPipeline {
         return structurer.structure(ir, context);
     }
 
-    /** SSA 构建 + 类型推断 + 优化(死代码消除与复制传播). */
+    /** SSA 构建 + 复制传播 + 死代码消除优化. */
     private LinearIr applySsa(MethodModel method, ControlFlowGraph cfg, LinearIr ir,
                               String internalName) {
         if (config.ssaThreshold() <= 0 || ir.instructions().size() < config.ssaThreshold()) {
@@ -120,7 +115,6 @@ public final class MethodPipeline {
         }
         try {
             SsaForm ssa = ssaBuilder.build(ir);
-            Map<Integer, JavaType> inferred = typeInference.infer(ssa);
             // 对 SSA 指令执行死代码消除和复制传播优化
             List<IrInstruction> optimized =
                     dce.eliminate(copyPropagation.propagate(ssa.instructions()));

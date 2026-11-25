@@ -425,7 +425,8 @@ public class EnumRewriter implements RewriteRule {
                 unit.packageName(), unit.imports(), List.of(synthetic),
                 unit.innerClassNames());
         DecompileContext innerCtx = new DecompileContext(
-                ctx.config(), ctx::loadClassBytes, inner.bootstrapMethods(), inner);
+                ctx.config(), ctx::loadClassBytes, inner.bootstrapMethods(), inner,
+                ctx::reportWarning);
         try {
             CompilationUnit rewritten =
                     ENUM_BODY_REWRITER.rewrite(syntheticUnit, ctx.config(), innerCtx);

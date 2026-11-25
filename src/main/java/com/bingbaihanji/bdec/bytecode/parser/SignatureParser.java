@@ -209,9 +209,10 @@ public final class SignatureParser {
     /**
      * 将类签名解析为父类型与接口类型数组.
      *
-     * <p>类签名格式:{@code [<类型参数>]父类[接口]*}.
-     * 对于类,返回数组 {@code [父类, 接口1, 接口2, ...]};
-     * 对于接口(无父类),返回数组 {@code [接口1, 接口2, ...]}.
+     * <p>类签名格式:{@code [<类型参数>]父类[接口]*}(JVMS 4.7.9.1).
+     * 返回数组恒为 {@code [父类, 接口1, 接口2, ...]};接口的父类签名为
+     * {@code Ljava/lang/Object;} 占位,同样位于 index 0,调用方需从
+     * index 1 起读取接口.
      * 每个元素都是含类型参数的 {@link JavaType}(如 {@code Base<String>}),
      * 调用方据此重建 {@code extends Base<String>} / {@code implements List<Integer>}.</p>
      *

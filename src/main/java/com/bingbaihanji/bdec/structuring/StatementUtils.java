@@ -72,7 +72,7 @@ final class StatementUtils {
         if (s instanceof ExpressionStatement es) {
             Expression folded = foldPostIncInExpr(es.expression(), varName, op);
             if (folded != es.expression()) {
-                return new ExpressionStatement(folded);
+                return Statement.inheritSourceOffset(es, new ExpressionStatement(folded));
             }
         } else if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement rs
                 && rs.value() != null) {
@@ -80,10 +80,95 @@ final class StatementUtils {
             // nextIndex 自增若独立成句,数组访问会读到自增后的值,错位一跳).
             Expression folded = foldPostIncInExpr(rs.value(), varName, op);
             if (folded != rs.value()) {
-                return new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(folded);
+                return Statement.inheritSourceOffset(rs,
+                        new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(folded));
             }
         }
         return null;
+    }
+
+    /** 将后置自增/自减折叠进语句中与目标表达式结构相等的首个引用.
+     *  支持字段/数组元素等复合目标(如 arr[i]++ 折进 return arr[i]). */
+    static Statement foldPostInc(Statement s, Expression target, UnaryOperator op) {
+        if (s instanceof ExpressionStatement es) {
+            Expression folded = foldPostIncInExpr(es.expression(), target, op);
+            if (folded != es.expression()) {
+                return Statement.inheritSourceOffset(es, new ExpressionStatement(folded));
+            }
+        } else if (s instanceof com.bingbaihanji.bdec.ast.stmt.ReturnStatement rs
+                && rs.value() != null) {
+            Expression folded = foldPostIncInExpr(rs.value(), target, op);
+            if (folded != rs.value()) {
+                return Statement.inheritSourceOffset(rs,
+                        new com.bingbaihanji.bdec.ast.stmt.ReturnStatement(folded));
+            }
+        }
+        return null;
+    }
+
+    /** 递归把与 target 结构相等的位置替换为后置自增/自减表达式. */
+    static Expression foldPostIncInExpr(Expression e, Expression target, UnaryOperator op) {
+        if (e == null || target == null) {
+            return e;
+        }
+        if (ExprCleanup.expressionsMatch(e, target)) {
+            return new UnExpr(op, e);
+        }
+        if (e instanceof BinExpr b) {
+            Expression l = foldPostIncInExpr(b.left(), target, op);
+            if (l != b.left()) {
+                return new BinExpr(b.operator(), l, b.right());
+            }
+            Expression r = foldPostIncInExpr(b.right(), target, op);
+            if (r != b.right()) {
+                return new BinExpr(b.operator(), b.left(), r);
+            }
+        } else if (e instanceof InvocationExpr inv) {
+            List<Expression> newArgs = new ArrayList<>();
+            boolean changed = false;
+            for (Expression a : inv.arguments()) {
+                Expression fa = foldPostIncInExpr(a, target, op);
+                if (fa != a) {
+                    changed = true;
+                }
+                newArgs.add(fa != null ? fa : a);
+            }
+            if (changed) {
+                return new InvocationExpr(inv.target(), inv.methodName(), newArgs, inv.returnType());
+            }
+        } else if (e instanceof FieldAccessExpr fa && fa.target() != null) {
+            Expression t = foldPostIncInExpr(fa.target(), target, op);
+            if (t != fa.target()) {
+                return new FieldAccessExpr(t, fa.fieldName());
+            }
+        } else if (e instanceof AssignExpr a) {
+            Expression v2 = foldPostIncInExpr(a.value(), target, op);
+            if (v2 != a.value()) {
+                return new AssignExpr(a.target(), v2, a.compoundOp());
+            }
+        } else if (e instanceof com.bingbaihanji.bdec.ast.expr.CastExpr ce) {
+            Expression o = foldPostIncInExpr(ce.operand(), target, op);
+            if (o != ce.operand()) {
+                return new com.bingbaihanji.bdec.ast.expr.CastExpr(
+                        ce.targetType(), o, ce.typeAnnotations());
+            }
+        } else if (e instanceof ArrayAccessExpr aa) {
+            Expression arr = foldPostIncInExpr(aa.array(), target, op);
+            if (arr != aa.array()) {
+                return new ArrayAccessExpr(arr, aa.index());
+            }
+            Expression idx = foldPostIncInExpr(aa.index(), target, op);
+            if (idx != aa.index()) {
+                return new ArrayAccessExpr(aa.array(), idx);
+            }
+        } else if (e instanceof UnExpr u && u.operator() != UnaryOperator.POST_INC
+                && u.operator() != UnaryOperator.POST_DEC) {
+            Expression o = foldPostIncInExpr(u.operand(), target, op);
+            if (o != u.operand()) {
+                return new UnExpr(u.operator(), o);
+            }
+        }
+        return e;
     }
 
     /** 递归在表达式中查找变量引用并替换为后置自增/自减表达式 */
@@ -284,11 +369,24 @@ final class StatementUtils {
         return false;
     }
 
-    /** 检测自增/自减模式:x = x + 1 → x++, x = x - 1 → x-- */
+    /** 判断表达式是否为数值字面量 1(含 int/long/float/double). */
+    static boolean isOneLiteral(Expression e) {
+        if (!(e instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lit)
+                || !(lit.value() instanceof Number n)) {
+            return false;
+        }
+        if (n instanceof Double d) {
+            return d == 1.0d;
+        }
+        if (n instanceof Float f) {
+            return f == 1.0f;
+        }
+        return n.longValue() == 1L;
+    }
+
+    /** 检测自增/自减模式:x = x + 1 → x++, x = x - 1 → x--(含 long/float/double). */
     static UnaryOperator detectIncrement(BinExpr bin) {
-        boolean isOne = bin.right() instanceof com.bingbaihanji.bdec.ast.expr.LitExpr lr
-                && lr.value() instanceof Integer i && i == 1;
-        if (!isOne) {
+        if (!isOneLiteral(bin.right())) {
             return null;
         }
         if (bin.operator() == BinaryOperator.ADD) {

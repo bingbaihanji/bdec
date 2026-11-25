@@ -237,7 +237,7 @@ public class SourceCleanup implements RewriteRule {
         }
         List<TypeDeclaration> types = new ArrayList<>();
         for (TypeDeclaration td : unit.types()) {
-            types.add(cleanupType(td, extraFields));
+            types.add(cleanupType(td, extraFields, ctx));
         }
         return new CompilationUnit(unit.packageName(), unit.imports(), types, unit.innerClassNames());
     }
@@ -245,10 +245,13 @@ public class SourceCleanup implements RewriteRule {
     /**
      * 清理单个类型声明中的所有方法体,修复常见的编译错误模式.
      *
-     * @param td 待清理的类型声明
+     * @param td          待清理的类型声明
+     * @param extraFields 需视为已声明的额外字段名(如 record 组件名)
+     * @param ctx         反编译上下文,用于上报兜底警告,可为 null
      * @return 清理后的类型声明
      */
-    private TypeDeclaration cleanupType(TypeDeclaration td, Set<String> extraFields) {
+    private TypeDeclaration cleanupType(TypeDeclaration td, Set<String> extraFields,
+                                        DecompileContext ctx) {
         Set<String> fieldNames = SourceCleanupSupport.collectFieldNames(td);
         fieldNames.addAll(extraFields); // 添加 record 组件名
         List<AstNode> members = new ArrayList<>();
@@ -257,7 +260,8 @@ public class SourceCleanup implements RewriteRule {
                 boolean nonVoid = md.returnType() != null
                         && md.returnType().kind() != TypeKind.VOID;
                 Set<String> paramNames = new HashSet<>(java.util.Arrays.asList(md.parameterNames()));
-                Statement body = fix(md.body(), nonVoid, md.returnType(), fieldNames, paramNames);
+                Statement body = fix(md.body(), nonVoid, md.returnType(), fieldNames, paramNames,
+                        ctx, md.name());
                 // 构造器:super()/this() 必须为首句(JLS 8.8.7.1).
                 // javac 对捕获局部变量的局部类会在 super() 之前发射 val$X
                 // 赋值(字节码合法,源码非法),忠实还原会编译失败.
@@ -285,10 +289,13 @@ public class SourceCleanup implements RewriteRule {
      * @param retType   方法的返回类型
      * @param fieldNames 当前类的字段名集合,用于避免字段遮蔽
      * @param paramNames 方法参数名集合,用于避免重复声明
+     * @param ctx        反编译上下文,用于上报兜底警告,可为 null
+     * @param methodName 当前方法名,用于警告消息定位,可为 null
      * @return 修复后的语句
      */
     private Statement fix(Statement s, boolean nonVoid, JavaType retType,
-                          Set<String> fieldNames, Set<String> paramNames) {
+                          Set<String> fieldNames, Set<String> paramNames,
+                          DecompileContext ctx, String methodName) {
         if (s == null) {
             return null;
         }
@@ -305,6 +312,7 @@ public class SourceCleanup implements RewriteRule {
                         && !isBuiltin(u) && !SourceCleanupSupport.looksLikeClassName(u)) {
                     pre.add(new VariableDeclaration(JavaType.INT, u,
                             new LitExpr(0, JavaType.INT)));
+                    reportUndeclared(ctx, methodName, u);
                 }
             }
             if (!pre.isEmpty()) {
@@ -388,13 +396,15 @@ public class SourceCleanup implements RewriteRule {
                                     new LitExpr(0, JavaType.INT)));
                             seen.add(u);
                             allDeclared.add(u);
+                            reportUndeclared(ctx, methodName, u);
                         }
                     }
                     // 将已声明变量合并到字段集合,防止 fix 内部重复声明
                     Set<String> effectiveFields = new HashSet<>(fieldNames);
                     effectiveFields.addAll(seen);
                     effectiveFields.addAll(allDeclared);
-                    cleaned.add(fix(c, nonVoid, retType, effectiveFields, paramNames));
+                    cleaned.add(fix(c, nonVoid, retType, effectiveFields, paramNames,
+                            ctx, methodName));
                 }
                 return new BlockStatement(foldSyntheticTemps(cleaned));
             }
@@ -408,9 +418,11 @@ public class SourceCleanup implements RewriteRule {
                 Set<String> branchDeclared = new HashSet<>(fieldNames);
                 branchDeclared.addAll(patternVars);
                 return new IfStatement(i.condition(),
-                        fix(i.thenBranch(), nonVoid, retType, branchDeclared, paramNames),
+                        fix(i.thenBranch(), nonVoid, retType, branchDeclared, paramNames,
+                                ctx, methodName),
                         i.elseBranch() != null
-                                ? fix(i.elseBranch(), nonVoid, retType, branchDeclared, paramNames) : null);
+                                ? fix(i.elseBranch(), nonVoid, retType, branchDeclared, paramNames,
+                                ctx, methodName) : null);
             }
             case LoopStatement l -> {
                 // 检查循环条件中的未声明变量(仅 WHILE/DO_WHILE;
@@ -437,7 +449,8 @@ public class SourceCleanup implements RewriteRule {
                     loopDeclared = new HashSet<>(fieldNames);
                     loopDeclared.add(fv.name());
                 }
-                Statement fixedBody = fix(l.body(), nonVoid, retType, loopDeclared, paramNames);
+                Statement fixedBody = fix(l.body(), nonVoid, retType, loopDeclared, paramNames,
+                        ctx, methodName);
                 LoopStatement newLoop = withLoopBody(l, fixedBody);
                 if (preStmts.isEmpty()) {
                     return newLoop;
@@ -460,17 +473,39 @@ public class SourceCleanup implements RewriteRule {
                     Set<String> extParams = new HashSet<>(resourceParams);
                     extParams.add(c.varName());
                     cc.add(new TryStatement.CatchClause(c.exceptionType(), c.varName(),
-                            fix(c.body(), nonVoid, retType, fieldNames, extParams)));
+                            fix(c.body(), nonVoid, retType, fieldNames, extParams,
+                                    ctx, methodName)));
                 }
-                return new TryStatement(fix(t.tryBody(), nonVoid, retType, fieldNames, resourceParams), cc,
+                return new TryStatement(
+                        fix(t.tryBody(), nonVoid, retType, fieldNames, resourceParams,
+                                ctx, methodName), cc,
                         t.finallyBody() != null
-                                ? fix(t.finallyBody(), nonVoid, retType, fieldNames, resourceParams) : null,
+                                ? fix(t.finallyBody(), nonVoid, retType, fieldNames, resourceParams,
+                                ctx, methodName) : null,
                         t.resources());
             }
             default -> {
             }
         }
         return s;
+    }
+
+    /**
+     * 上报未声明变量的自动补声明兜底.
+     *
+     * <p>仅产生诊断,不改变兜底输出(仍声明为 {@code int 0}).</p>
+     *
+     * @param ctx        反编译上下文,可为 null
+     * @param methodName 当前方法名,可为 null
+     * @param variable   被自动补声明的变量名
+     */
+    private void reportUndeclared(DecompileContext ctx, String methodName, String variable) {
+        if (ctx == null) {
+            return;
+        }
+        String location = methodName != null ? " (method " + methodName + ")" : "";
+        ctx.reportWarning("undeclared variable auto-declared as int 0"
+                + location + ": " + variable);
     }
 
     /**

@@ -89,7 +89,14 @@ public abstract class AstTransformer implements AstVisitor<AstNode, Void> {
 
     protected Statement transformStmt(Statement s) {
         AstNode r = visitStatement(s, null);
-        return r instanceof Statement stmt ? stmt : s;
+        if (r instanceof Statement stmt) {
+            // 不可变重建时继承语句起始字节码偏移,供发射层建立行号映射.
+            if (stmt != s && stmt.sourceOffset() < 0 && s.sourceOffset() >= 0) {
+                stmt.setSourceOffset(s.sourceOffset());
+            }
+            return stmt;
+        }
+        return s;
     }
 
     // ==================== 表达式变换(默认递归) ====================

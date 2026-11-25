@@ -89,10 +89,11 @@ public class StringConcatRewriter implements RewriteRule {
      */
     private Statement rewriteStatement(Statement s) {
         if (s instanceof BlockStatement bs) {
-            return new BlockStatement(bs.statements().stream()
-                    .map(this::rewriteStatement)
-                    .filter(st -> st != null)
-                    .toList());
+            return Statement.inheritSourceOffset(bs,
+                    new BlockStatement(bs.statements().stream()
+                            .map(this::rewriteStatement)
+                            .filter(st -> st != null)
+                            .toList()));
         }
         if (s instanceof ExpressionStatement es) {
             Expression orig = es.expression();
@@ -104,23 +105,27 @@ public class StringConcatRewriter implements RewriteRule {
                     && isFromIndyConcat(orig)) {
                 return null;
             }
-            return new ExpressionStatement(rewritten);
+            return Statement.inheritSourceOffset(es, new ExpressionStatement(rewritten));
         }
         if (s instanceof ReturnStatement rs) {
-            return new ReturnStatement(rs.value() != null ? rewriteExpr(rs.value()) : null);
+            return Statement.inheritSourceOffset(rs,
+                    new ReturnStatement(rs.value() != null ? rewriteExpr(rs.value()) : null));
         }
         if (s instanceof IfStatement i) {
-            return new IfStatement(rewriteExpr(i.condition()),
-                    rewriteStatement(i.thenBranch()),
-                    i.elseBranch() != null ? rewriteStatement(i.elseBranch()) : null);
+            return Statement.inheritSourceOffset(i,
+                    new IfStatement(rewriteExpr(i.condition()),
+                            rewriteStatement(i.thenBranch()),
+                            i.elseBranch() != null ? rewriteStatement(i.elseBranch()) : null));
         }
         if (s instanceof ThrowStatement ts) {
-            return new ThrowStatement(rewriteExpr(ts.expression()));
+            return Statement.inheritSourceOffset(ts,
+                    new ThrowStatement(rewriteExpr(ts.expression())));
         }
         if (s instanceof VariableDeclaration vd) {
-            return new VariableDeclaration(vd.type(), vd.name(),
-                    vd.initializer() != null ? rewriteExpr(vd.initializer()) : null,
-                    vd.typeAnnotations());
+            return Statement.inheritSourceOffset(vd,
+                    new VariableDeclaration(vd.type(), vd.name(),
+                            vd.initializer() != null ? rewriteExpr(vd.initializer()) : null,
+                            vd.typeAnnotations()));
         }
         return s;
     }

@@ -43,6 +43,13 @@ public interface AstNode {
      * 默认返回空,子类可覆盖以提供具体的源码位置信息.
      *
      * @return 包含源码范围的 {@link Optional}
+     * @deprecated 默认实现恒返回 {@link Optional#empty()},且原始 Java 源码的
+     *             行号与字符偏移仅凭 class 文件无法恢复,因此该接口方法的返回值
+     *             不包含有效位置信息;此方法仅为兼容性保留.
+     *             如需生成源码行号到字节码偏移的映射,请使用
+     *             {@link com.bingbaihanji.bdec.BdecResult#sourceLineToBytecodeOffset()}
+     *             (该映射仍在规划中,当前尚未填充).
      */
+    @Deprecated
     default Optional<SourceRange> sourceRange() {return Optional.empty();}
 }

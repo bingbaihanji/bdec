@@ -7,10 +7,11 @@ import java.util.Map;
 /**
  * 反编译结果记录类,封装反编译操作的成功/失败状态及其产出数据.
  *
- * @param success                     反编译是否成功
+ * @param success                     反编译流程是否完成;仅表示流程走通,不保证输出可重编译
  * @param decompiledCode              反编译生成的 Java 源代码,失败时为 null
  * @param cause                       失败时的异常原因,成功时为 null
- * @param warnings                    反编译过程中产生的警告信息列表
+ * @param warnings                    反编译过程中收集的非致命警告,来源于逐方法管线,SSA,
+ *                                    不可归约 CFG 回退与 SourceCleanup 兜底等
  * @param sourceLineToBytecodeOffset  源代码行号到字节码偏移量的映射
  */
 public record BdecResult(

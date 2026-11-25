@@ -40,9 +40,6 @@ public class ControlFlowStructurer {
     /** try-catch 分析器 */
     private final TryCatchAnalyzer tryCatchAnalyzer = new TryCatchAnalyzer();
 
-    /** 不可归约图处理器(回退方案) */
-    private final IrreducibleHandler irreducibleHandler = new IrreducibleHandler();
-
     /** finally 块识别与合并器 */
     private final FinallyRecognizer finallyRecognizer = new FinallyRecognizer();
 
@@ -172,12 +169,7 @@ public class ControlFlowStructurer {
             }
         }
 
-        // 5. 不可归约图回退处理(当前为透传,检测见 IrreducibleHandler.isReducible)
-        if (graph.blockCount() > 3) {
-            graph = irreducibleHandler.handle(graph);
-        }
-
-        // 5b. 在最终折叠图上重新分析 if/else 和循环模式.
+        // 5. 在最终折叠图上重新分析 if/else 和循环模式.
         // 预折叠分析结果可能在 CFG 折叠修改图后持有过时的块引用,
         // 因此需要从最终状态刷新.
         DominatorTree finalDom = DominatorTree.compute(graph);
@@ -188,7 +180,7 @@ public class ControlFlowStructurer {
             finalIfAnns.put(ifInfo.header(), ifInfo);
         }
 
-        // 5c. 在最终折叠图上重新分析 switch.
+        // 5b. 在最终折叠图上重新分析 switch.
         // 循环折叠可能替换了 switch 头块,使预折叠的 switchAnns 键失效.
         // 模式匹配 switch(typeSwitch) 特别容易受此影响——其 when 守卫
         // 会生成回边,导致 switch 头被 LoopAnalyzer 折叠.
@@ -198,7 +190,7 @@ public class ControlFlowStructurer {
             finalSwitchAnns.put(si.header(), si);
         }
 
-        // 5d. 在最终折叠图上重新分析 try-catch(折叠可能替换了块,
+        // 5c. 在最终折叠图上重新分析 try-catch(折叠可能替换了块,
         // 导致预折叠的 tryCatchAnns 引用失效).
         // 使用列表:同一 try 区域可有多个处理器(catch + finally),
         // 以任意块为键的映射都会互相覆盖丢失处理器.
@@ -218,6 +210,10 @@ public class ControlFlowStructurer {
         } else {
             // 不可归约 CFG:结构化为 if/loop 会丢失语义或产出错误结构.
             // 以扁平 + 标签 + goto 输出(参照 Procyon),保证语义正确.
+            if (ctx != null) {
+                ctx.reportWarning("irreducible cfg: " + ir.method().name()
+                        + ir.method().descriptor());
+            }
             body = flatIrreducibleFallback(ir, graph);
         }
 

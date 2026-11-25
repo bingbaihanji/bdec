@@ -103,8 +103,12 @@ public final class IrreducibleHandler {
      *
      * @param graph 原始 CFG
      * @return 处理后的 CFG
+     * @deprecated 该方法为透传占位,当前不再被任何代码调用;不可归约 CFG
+     *             的降级输出由 {@code ControlFlowStructurer} 的扁平
+     *             labeled-goto 回退实现.
      */
+    @Deprecated
     public ControlFlowGraph handle(ControlFlowGraph graph) {
-        return graph; // 透传占位:不可归约降级待后续(检测见 {@link #isReducible})
+        return graph;
     }
 }
